@@ -1,0 +1,86 @@
+const BOOL = Cuint
+
+const INT64 = Clonglong
+
+const __int64 = Clonglong
+
+const INT32 = Cint
+
+const UINT32 = Cuint
+
+const UINT64 = Culonglong
+
+const TRUE = Cuint(1)
+
+const FALSE = Cuint(0)
+
+const PI_BIT_WGO_START_DEFAULT = Cuint(0x00000001)
+
+const PI_BIT_WGO_START_EXTERN_TRIGGER = Cuint(0x00000002)
+
+const PI_BIT_WGO_WITH_DDL_INITIALISATION = Cuint(0x00000040)
+
+const PI_BIT_WGO_WITH_DDL = Cuint(0x00000080)
+
+const PI_BIT_WGO_START_AT_ENDPOSITION = Cuint(0x00000100)
+
+const PI_BIT_WGO_SINGLE_RUN_DDL_TEST = Cuint(0x00000200)
+
+const PI_BIT_WGO_EXTERN_WAVE_GENERATOR = Cuint(0x00000400)
+
+const PI_BIT_WGO_SAVE_BIT_1 = Cuint(0x00100000)
+
+const PI_BIT_WGO_SAVE_BIT_2 = Cuint(0x00200000)
+
+const PI_BIT_WGO_SAVE_BIT_3 = Cuint(0x00400000)
+
+const PI_BIT_TRG_LINE_1 = Cuint(0x0001)
+
+const PI_BIT_TRG_LINE_2 = Cuint(0x0002)
+
+const PI_BIT_TRG_LINE_3 = Cuint(0x0003)
+
+const PI_BIT_TRG_LINE_4 = Cuint(0x0008)
+
+const PI_BIT_TRG_ALL_CURVE_POINTS = Cuint(0x0100)
+
+const PI_DRC_DEFAULT = Cuint(0)
+
+const PI_DRC_AXIS_TARGET_POS = Cuint(1)
+
+const PI_DRC_AXIS_ACTUAL_POS = Cuint(2)
+
+const PI_DRC_AXIS_POS_ERROR = Cuint(3)
+
+const PI_DRC_AXIS_DDL_DATA = Cuint(4)
+
+const PI_DRC_AXIS_DRIVING_VOL = Cuint(5)
+
+const PI_DRC_PIEZO_MODEL_VOL = Cuint(6)
+
+const PI_DRC_PIEZO_VOL = Cuint(7)
+
+const PI_DRC_SENSOR_POS = Cuint(8)
+
+const PI_PIF_MT_RAM = Cuint(0x00000001)
+
+const PI_PIF_MT_EPROM = Cuint(0x00000002)
+
+const PI_PIF_MT_ALL = PI_PIF_MT_RAM | PI_PIF_MT_EPROM
+
+const PI_PIF_DT_INT = Cuint(1)
+
+const PI_PIF_DT_FLOAT = Cuint(2)
+
+const PI_PIF_DT_CHAR = Cuint(3)
+
+const PI_CONFIGURATION_TYPE_ALL = Cuint(0xffffffff)
+
+const PI_CONFIGURATION_TYPE_USER = Cuint(0x00000001)
+
+const PI_CONFIGURATION_TYPE_STANDARD = Cuint(0x00000002)
+
+const PI_CONFIGURATION_TYPE_CUSTOM = Cuint(0x00000004)
+
+const PI_ASYNC_ERROR_READ_STILL_IN_PROGRESS = -1
+
