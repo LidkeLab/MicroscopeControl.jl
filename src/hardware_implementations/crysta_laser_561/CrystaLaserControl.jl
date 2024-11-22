@@ -8,11 +8,11 @@ module CrystaLaserControl
 
 using NIDAQ
 
-using MicroscopeAdapt.HardwareInterfaces.LightSourceInterface
-using MicroscopeAdapt.HardwareImplementations.NIDAQcard
+using MicroscopeControl.HardwareInterfaces.LightSourceInterface
+using MicroscopeControl.HardwareImplementations.NIDAQcard
 
-import MicroscopeAdapt.HardwareInterfaces.LightSourceInterface: gui as laser_561_gui
-import MicroscopeAdapt.HardwareImplementations.NIDAQcard: gui as nidaq_gui
+import MicroscopeControl.HardwareInterfaces.LightSourceInterface: gui as laser_561_gui
+import MicroscopeControl.HardwareImplementations.NIDAQcard: gui as nidaq_gui
 
 export CrystaLaser, laser_561_gui, nidaq_gui, initialize, light_on, light_off, setpower
 

@@ -8,10 +8,10 @@ This is because the coupling efficiency might vary over time and it is not relia
 """
 module TCubeLaserControl
 
-using MicroscopeAdapt.HardwareInterfaces.LightSourceInterface
-using MicroscopeAdapt.HardwareImplementations.NIDAQcard
+using MicroscopeControl.HardwareInterfaces.LightSourceInterface
+using .HardwareImplementations.NIDAQcard
 
-import MicroscopeAdapt.HardwareInterfaces.LightSourceInterface: gui as red_laser_gui
+import .HardwareInterfaces.LightSourceInterface: gui as red_laser_gui
 
 const Thorlabs_Tcube_laser = "C:\\Program Files\\Thorlabs\\Kinesis\\Thorlabs.MotionControl.TCube.LaserDiode.dll"
 

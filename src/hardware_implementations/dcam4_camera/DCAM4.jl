@@ -8,7 +8,7 @@ microscopy applications.
 """
 module DCAM4
 
-using MicroscopeAdapt.HardwareInterfaces.CameraInterface
+using MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
 
 export DCAM4Camera, gui, initialize, shutdown, start_sequence, start_live
