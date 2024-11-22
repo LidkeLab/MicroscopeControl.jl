@@ -48,23 +48,6 @@ function LightSourceInterface.shutdown(light::TCubeLaser)
     println("$(light.laser_color)" * "_laser is shutdown") 
 end
 
-function LightSourceInterface.export_state(light::TCubeLaser)
-
-    attributes = Dict(
-                     "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,
-                     "min_current" => light.min_current, "max_current" => light.max_current,
-                     "max_setcurrent" => light.max_setcurrent, "max_setpoint" => light.max_setpoint,
-                     "power_unit" => light.properties.power_unit, "power" => light.properties.power, "is_on" => light.properties.is_on,
-                     "min_power" => light.properties.min_power, "max_power" => light.properties.max_power
-                     )
-    data = nothing
-    children = Dict(
-        "daq" => DAQInterface.export_state(light.daq)
-        )
-
-    return attributes, data, children
-end
-
 function tcube_get_current(light::TCubeLaser)
     serialNo = light.serialNo
     err = LD_RequestReadings(serialNo)
@@ -111,4 +94,21 @@ function tcube_get_power(light::TCubeLaser)
     current = Float64(out)/light.max_setpoint*light.max_setcurrent
     power = current*light.properties.max_power/light.max_current
     return power
+end
+
+function LightSourceInterface.export_state(light::TCubeLaser)
+
+    attributes = Dict(
+                     "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,
+                     "min_current" => light.min_current, "max_current" => light.max_current,
+                     "max_setcurrent" => light.max_setcurrent, "max_setpoint" => light.max_setpoint,
+                     "power_unit" => light.properties.power_unit, "power" => light.properties.power, "is_on" => light.properties.is_on,
+                     "min_power" => light.properties.min_power, "max_power" => light.properties.max_power
+                     )
+    data = nothing
+    children = Dict(
+        "daq" => DAQInterface.export_state(light.daq)
+        )
+
+    return attributes, data, children
 end

@@ -22,5 +22,7 @@ include("interface_methods.jl")
 
 export TCubeLaser
 export red_laser_gui
+export light_on, light_off, setpower, shutdown, tcube_get_current, tcube_refresh, setupIO
+export export_state
 
 end
