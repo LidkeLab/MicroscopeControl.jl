@@ -1,5 +1,5 @@
 module OK_XEM
-    using MicroscopeAdapt.HardwareImplementations.NIDAQcard
+    using MicroscopeControl.HardwareImplementations.NIDAQcard
     const okFP = "C:\\Program Files\\Opal Kelly\\FrontPanelUSB\\API\\lib\\x64\\okFrontPanel.dll"
 
     include("constants_okFP.jl")

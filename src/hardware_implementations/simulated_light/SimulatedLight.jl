@@ -1,6 +1,6 @@
 module SimulatedLight
 
-using MicroscopeAdapt.HardwareInterfaces.LightSourceInterface
+using MicroscopeControl.HardwareInterfaces.LightSourceInterface
 
 export SimLight, gui
 

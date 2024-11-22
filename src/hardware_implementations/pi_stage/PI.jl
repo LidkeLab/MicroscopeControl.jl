@@ -1,5 +1,5 @@
 module PI
-    using MicroscopeAdapt.HardwareInterfaces.StageInterface
+    using MicroscopeControl.HardwareInterfaces.StageInterface
 
     global const gcs2path = "C:\\Program Files (x86)\\Physik Instrumente (PI)\\Software Suite\\Development\\C++\\API\\PI_GCS2_DLL_x64.dll"
 

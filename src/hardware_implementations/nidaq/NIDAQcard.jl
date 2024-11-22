@@ -4,7 +4,7 @@
 module NIDAQcard
 
 using NIDAQ
-using MicroscopeAdapt.HardwareInterfaces.DAQInterface
+using MicroscopeControl.HardwareInterfaces.DAQInterface
 
 export NIdaq, gui, export_state, showdevices, showchannels, createtask, setvoltage, readvoltage, deletetask
 

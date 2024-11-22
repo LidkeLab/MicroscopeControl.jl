@@ -1,5 +1,5 @@
 module SimulatedStage
-    using MicroscopeAdapt.HardwareInterfaces.StageInterface
+    using MicroscopeControl.HardwareInterfaces.StageInterface
     using GLMakie
 
     include("types.jl")

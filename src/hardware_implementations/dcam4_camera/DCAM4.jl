@@ -11,6 +11,8 @@ module DCAM4
 using MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
 
+import MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
+
 export DCAM4Camera, gui, initialize, shutdown, start_sequence, start_live
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime, settriggermode, setroi!, setexposuretime!

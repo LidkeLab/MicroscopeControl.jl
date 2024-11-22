@@ -7,7 +7,7 @@ handle_methods.jl, standard_device_movement.jl, waveform_aquisition.jl, and devi
 =#
 
 module MadCityLabs
-    using MicroscopeAdapt.HardwareInterfaces.StageInterface
+    using MicroscopeControl.HardwareInterfaces.StageInterface
     madlibpath = "C:\\Program Files\\Mad City Labs\\NanoDrive\\Madlib.dll"
 
     include("types.jl")

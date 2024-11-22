@@ -2,7 +2,7 @@
 
 module ThorCamCSC
 
-using MicroscopeAdapt.HardwareInterfaces.CameraInterface
+using MicroscopeControl.HardwareInterfaces.CameraInterface
 
 export ThorCamCSC, gui, shutdown
 export getlastframe, capture, live, sequence, abort, getdata
