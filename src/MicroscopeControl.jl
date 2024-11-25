@@ -1,5 +1,6 @@
 module MicroscopeControl
 
+include("instrument.jl")
 include("hardware_interfaces/HardwareInterfaces.jl")
 include("hardware_implementations/HardwareImplementations.jl")
 
@@ -43,5 +44,8 @@ export initialize, setexposure, enable, setupIO
 
 # Re-export common GUI methods
 export gui
+
+# For all instruments:
+export export_state
 
 end

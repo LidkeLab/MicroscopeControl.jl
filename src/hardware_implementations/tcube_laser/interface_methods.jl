@@ -96,7 +96,7 @@ function tcube_get_power(light::TCubeLaser)
     return power
 end
 
-function LightSourceInterface.export_state(light::TCubeLaser)
+function export_state(light::TCubeLaser)
 
     attributes = Dict(
                      "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,

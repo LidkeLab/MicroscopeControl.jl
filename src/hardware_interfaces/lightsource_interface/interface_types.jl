@@ -1,7 +1,7 @@
 """
 `LightSource` an abstract type that defines the interface for a light source.
 """
-abstract type LightSource end
+abstract type LightSource <: AbstractInstrument end
 
 """
     LightSourceProperties
