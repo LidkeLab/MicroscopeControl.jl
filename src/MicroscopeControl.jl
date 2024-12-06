@@ -46,6 +46,6 @@ export initialize, setexposure, enable, setupIO
 export gui
 
 # For all instruments:
-export export_state
+export export_state, initialize, shutdown
 
 end
