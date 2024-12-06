@@ -1,6 +1,7 @@
 module MicroscopeControl
 
 include("instrument.jl")
+include("h5_file_saving.jl")
 include("hardware_interfaces/HardwareInterfaces.jl")
 include("hardware_implementations/HardwareImplementations.jl")
 
@@ -46,6 +47,6 @@ export initialize, setexposure, enable, setupIO
 export gui
 
 # For all instruments:
-export export_state, initialize, shutdown
+export export_state, initialize, shutdown, save_h5
 
 end
