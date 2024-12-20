@@ -56,11 +56,13 @@ end
 # # Run the test function
 
 function save_h5(filename::String, state_data::Tuple{Dict, any, Dict})
-    group = "/Main"
-    attributes, data, children = state_data
+    @async begin
+        group = "/Main"
+        attributes, data, children = state_data
 
-    save_attributes_and_data(filename, group, attributes, data, children)
-    println("Data and attributes successfully saved to $filename")
+        save_attributes_and_data(filename, group, attributes, data, children)
+        println("Data and attributes successfully saved to $filename")
+    end
 end
 
 
