@@ -1,6 +1,3 @@
-using HDF5
-
-
 # save attributes and data
 function save_attributes_and_data(filename::String, group::String, attributes::Dict, data, children::Dict{String, Any})
     h5open(file, "w") do h5file
@@ -11,8 +8,8 @@ function save_attributes_and_data(filename::String, group::String, attributes::D
 
         # Saving attributes to the group
         for (name, value) in attributes
-            attr_value = (eltype(value) == Bool) ? float.(value) : value
-            attr(h5group, name, attr_value)
+            attr_value = (eltype(value) == Bool) ? float.(value) : value # This line of code checks if the value is a boolean and converts it to a float and if it is not a boolean, it leaves it as it is.
+            attr(h5group, name, attr_value) # This line of code writes the attribute to the group
         end
 
         # Recursive scheme to save children
@@ -57,10 +54,13 @@ end
 
 function save_h5(filename::String, state_data::Tuple{Dict, any, Dict})
     @async begin
-        group = "/Main"
+        # Name the startigng group as "Main"
+        group = "Main"
+        # Extract the attributes, data and children from each instrument using the export_state function
         attributes, data, children = state_data
-
+        # Save the attributes and data to the hdf5 file
         save_attributes_and_data(filename, group, attributes, data, children)
+        # Declare that the data and attributes have been saved to the file
         println("Data and attributes successfully saved to $filename")
     end
 end
@@ -68,7 +68,7 @@ end
 
 # Test the saving function of Red Laser
 function test_save_to_hdf5(x, file::String)
-    group = "/MainGroup"
+    group = "MainGroup"
     attributes, data, children = export_state(x)
 
     save_attributes_and_data(file, group, attributes, data, children)

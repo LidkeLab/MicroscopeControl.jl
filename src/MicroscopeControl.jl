@@ -1,5 +1,7 @@
 module MicroscopeControl
 
+using HDF5
+
 include("instrument.jl")
 include("h5_file_saving.jl")
 include("hardware_interfaces/HardwareInterfaces.jl")
@@ -19,6 +21,8 @@ using .HardwareImplementations.TransmissionDaqControl
 using .HardwareImplementations.CrystaLaserControl
 using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
+
+
 
 # Re-export camera implementations
 export SimCamera, DCAM4Camera, ThorCamCSC
