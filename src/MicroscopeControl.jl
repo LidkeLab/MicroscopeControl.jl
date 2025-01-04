@@ -22,7 +22,12 @@ using .HardwareImplementations.CrystaLaserControl
 using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
 
+# Export abstract types and methods for all instrument
+export AbstractInstrument
+export export_state, initialize, shutdown
 
+# Export h5 file saving methods
+export save_h5, save_attributes_and_data
 
 # Re-export camera implementations
 export SimCamera, DCAM4Camera, ThorCamCSC
@@ -49,8 +54,5 @@ export initialize, setexposure, enable, setupIO
 
 # Re-export common GUI methods
 export gui
-
-# For all instruments:
-export export_state, initialize, shutdown, save_h5
 
 end
