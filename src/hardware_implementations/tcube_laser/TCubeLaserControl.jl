@@ -9,7 +9,7 @@ This is because the coupling efficiency might vary over time and it is not relia
 module TCubeLaserControl
 
 using MicroscopeControl
-import MicroscopeControl: export_state
+# import MicroscopeControl: export_state
 
 using MicroscopeControl.HardwareInterfaces.LightSourceInterface
 using MicroscopeControl.HardwareImplementations.NIDAQcard
