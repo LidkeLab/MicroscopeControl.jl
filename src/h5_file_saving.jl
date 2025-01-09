@@ -83,15 +83,16 @@ end
 
 
 # Test the saving function of Red Laser
-function test_save_to_hdf5(x, file::String)
-    group = "MainGroup"
-    attributes, data, children = export_state(x)
+using MicroscopeControl
+using MicroscopeControl.HardwareImplementations.TCubeLaserControl
+using MicroscopeControl.HardwareImplementations.NIDAQcard
 
-    save_attributes_and_data(file, group, attributes, data, children)
-    println("Data and attributes successfully saved to $file")
+function test_save_to_hdf5(tcube_light::TCubeLaser, file_name::String)
+    # Extract the attributes, data and children from the instrument using the export_state function
+    attributes, data, children = export_state(tcube_light)
+    # Save the attributes and data to the hdf5 file
+    save_h5(file_name, (attributes, data, children))
 end
-
-
 
 ### TCube Laser Control ###
 file_name = "Y:/Personal Folders/Ali.test_output.h5"
