@@ -1,22 +1,38 @@
-# save attributes and data
-function save_attributes_and_data(filename::String, group::String, attributes::Dict, data, children::Dict{String, Any})
-    h5open(file, "w") do h5file
-        h5group = create_group(h5file, group)
+"""
+    save_attributes_and_data(filename::String, group::String, attributes::Dict, data::Any, children::Dict{String,Any})
 
-        # Saving data to the group
-        write(h5group, data)
+Saves hierarchical data to an HDF5 file.
 
-        # Saving attributes to the group
-        for (name, value) in attributes
-            attr_value = (eltype(value) == Bool) ? float.(value) : value # This line of code checks if the value is a boolean and converts it to a float and if it is not a boolean, it leaves it as it is.
-            attr(h5group, name, attr_value) # This line of code writes the attribute to the group
+# Arguments
+- `filename::String`: Path to the HDF5 file
+- `group::String`: Name of the HDF5 group
+- `attributes::Dict`: Dictionary of attributes to save
+- `data::Any`: Data to save in the group
+- `children::Dict{String,Any}`: Dictionary of child groups
+"""
+function save_attributes_and_data(filename::String, group::String, attributes::Dict, data::Any, children::Dict{String, Any})
+    try
+        h5open(filename, "w") do h5file
+            h5group = create_group(h5file, group)
+
+            # Saving data to the group
+            write(h5group, "data", data)
+
+            # Saving attributes to the group
+            for (name, value) in attributes
+                attr_value = (eltype(value) == Bool) ? float.(value) : value
+                attr(h5group, name, attr_value)
+            end
+
+            # Recursive scheme to save children
+            for (child_name, child) in children
+                child_group = joinpath(group, child_name)
+                save_attributes_and_data(filename, child_group, child["Attributes"], child["Data"], child["Children"])
+            end
         end
-
-        # Recursive scheme to save children
-        for (child_name, child) in children
-            child_group = joinpath(group, child_name)
-            save_attributes_and_data(file, child_group, child["Attributes"], child["Data"], child["Children"])
-        end
+    catch e # Catch any exceptions (errors) that occur during the saving process
+        @error "Failed to save to HDF5 file" exception=e # Log the error message
+        rethrow(e) # Rethrow the exception to the caller function.
     end
 end
 
