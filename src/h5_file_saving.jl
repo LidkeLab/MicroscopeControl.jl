@@ -88,3 +88,28 @@ test_save_to_hdf5(tcube_light, file_name)
 
 MicroscopeControl.TCubeLaserControl.light_off(tcube_light)
 MicroscopeControl.TCubeLaserControl.shutdown(tcube_light)
+
+
+# Example
+# function export_state(instrument::SomeInstrument)
+#     # Metadata about the instrument
+#     attributes = Dict(
+#         "model" => "XYZ-123",
+#         "serial" => "ABC456",
+#         "is_active" => true
+#     )
+    
+#     # Actual measurement data
+#     data = [1.0, 2.0, 3.0]  # or any other data type
+    
+#     # Nested components (e.g., DAQ, stage, etc.)
+#     children = Dict(
+#         "daq" => Dict(
+#             "Attributes" => Dict("port" => "COM1"),
+#             "Data" => [4.0, 5.0],
+#             "Children" => Dict()
+#         )
+#     )
+    
+#     return attributes, data, children
+# end

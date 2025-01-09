@@ -1,4 +1,3 @@
-
 function LightSourceInterface.initialize(light::TCubeLaser)
     err = TLI_BuildDeviceList()
     numdev = TLI_GetDeviceListSize()
@@ -14,8 +13,6 @@ function LightSourceInterface.initialize(light::TCubeLaser)
     println("Laser initialized")
     @info "Max current: $(light.max_current) mA"
 end
-
-
 
 function LightSourceInterface.light_on(light::TCubeLaser)
     light.properties.is_on = true
@@ -107,7 +104,7 @@ function export_state(light::TCubeLaser)
     )
     data = nothing
     children = Dict(
-        "daq" => DAQInterface.export_state(light.daq)
+        "daq" => export_state(light.daq) # export_state function from NIDAQcard module
     )
 
     return attributes, data, children

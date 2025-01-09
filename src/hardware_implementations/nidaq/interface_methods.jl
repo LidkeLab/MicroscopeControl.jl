@@ -154,8 +154,8 @@ Export the state of the daq.
 - `data`: The data of the daq.
 - `children::Dict`: A dictionary of children.
 """
-function DAQInterface.export_state(daq::NIdaq)
-    attributes = Dict("device" => daq.device)
+function export_state(daq::NIdaq)
+    attributes = Dict("unique_id" => daq.unique_id)
     data = nothing
     children = Dict()
     return attributes, data, children
