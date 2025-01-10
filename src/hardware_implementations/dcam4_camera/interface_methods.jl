@@ -105,7 +105,7 @@ function CameraInterface.sequence(camera::DCAM4Camera, nframes::Real)
     camera.sequence_length = Int32(nframes)
     abort(camera)
     setexposuretime!(camera)
-    
+
     settriggermode!(camera)
     setroi!(camera)
 
@@ -124,8 +124,8 @@ function CameraInterface.sequence(camera::DCAM4Camera, nframes::Real)
         return
     end
     camera.is_running = 1
-    err, frameinterval = DCAM4.dcamprop_getvalue(camera.camera_handle, DCAM4.DCAM_IDPROP_INTERNAL_FRAMEINTERVAL) 
-    
+    err, frameinterval = DCAM4.dcamprop_getvalue(camera.camera_handle, DCAM4.DCAM_IDPROP_INTERNAL_FRAMEINTERVAL)
+
     err, status = DCAM4.dcamcap_status(camera.camera_handle)
     #println("Starting sequence")
     @async begin
@@ -140,9 +140,9 @@ function CameraInterface.sequence(camera::DCAM4Camera, nframes::Real)
         println("Sequence done")
     end
 
-    
 
-    return 
+
+    return
 end
 
 """
@@ -204,11 +204,11 @@ function CameraInterface.getdata(camera::DCAM4Camera)
         return data
     end
 end
-    
-"""
-    CameraInterface.export_state(camera::DCAM4Camera)
 
-Export the state of the camera.
+"""
+    export_state(camera::DCAM4Camera)
+
+Export the state of the camera to a dictionary.
 
 # Arguments
 - `camera::DCAM4Camera`: A DCAM4Camera type.
@@ -218,10 +218,13 @@ Export the state of the camera.
 - `data`: The data of the camera.
 - `children::Dict`: A dictionary of children.
 """
-# function CameraInterface.export_state(camera::DCAM4Camera)
-#     attributes = Dict("unique_id" => camera.unique_id, "camera_format_x_pixels" => camera.camera_format.x_pixels,
-#      "camera_format_y_pixels" => camera.camera_format.y_pixels, "camera_format_pixelsize" => camera.camera_format.pixelsize, "camera_format_gain" => camera.camera_format.gain)
-#     data = nothing
-#     children = Dict()
-#     return attributes, data, children
-# end
+function export_state(camera::DCAM4Camera)
+    attributes = Dict(
+        "unique_id" => camera.unique_id, "camera_format_x_pixels" => camera.camera_format.x_pixels,
+        "camera_format_y_pixels" => camera.camera_format.y_pixels, "camera_format_pixelsize" => camera.camera_format.pixelsize,
+        "camera_format_gain" => camera.camera_format.gain
+    )
+    data = nothing
+    children = Dict()
+    return attributes, data, children
+end

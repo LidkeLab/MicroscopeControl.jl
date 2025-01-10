@@ -16,6 +16,7 @@ import MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
 export DCAM4Camera, gui, initialize, shutdown, start_sequence, start_live
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime, settriggermode, setroi!, setexposuretime!
+export export_state
 
 include("dcamerr.jl")
 include("dcam_idprop.jl")
