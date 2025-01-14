@@ -205,8 +205,19 @@ function CameraInterface.getdata(camera::DCAM4Camera)
     end
 end
 
+"
+    extract_properties(camera::DCAM4Camera)
+
+Extract the properties of the camera.
+
+# Arguments
+- `camera::DCAM4Camera`: A DCAM4Camera type.
+
+# Returns
+- `properties::Dict`: A dictionary of properties.
+"
 function extract_properties(camera::DCAM4Camera)
-    # Initialize dictionary to store properties
+    
     properties = Dict{String, Any}()
     
     # Get first property ID
