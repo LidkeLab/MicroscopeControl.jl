@@ -205,6 +205,52 @@ function CameraInterface.getdata(camera::DCAM4Camera)
     end
 end
 
+function extract_properties(camera::DCAM4Camera)
+    # Initialize dictionary to store properties
+    properties = Dict{String, Any}()
+    
+    # Get first property ID
+    err, idprop = dcamprop_getnextid(camera.camera_handle, Int32(0), DCAMPROP_OPTION_SUPPORT)
+    
+    # Iterate through all properties
+    while (idprop != 0)
+        try
+            # Get property information
+            prop = dcam_get_propinfo(camera.camera_handle, idprop)
+            
+            # Get current value
+            err, value = dcamprop_getvalue(camera.camera_handle, idprop)
+            
+            # Store property information
+            properties[prop.name] = Dict(
+                "value" => value,
+                "type" => prop.type,
+                "unit" => prop.unit,
+                "range" => prop.range,
+                "writable" => prop.writable == 1,
+                "readable" => prop.readable == 1
+            )
+            
+            # For Mode type, also store options
+            if prop.type == "Mode"
+                properties[prop.name]["options"] = prop.options
+            end
+            
+        catch e
+            @warn "Failed to get property info for ID: $idprop" exception=e
+        end
+        
+        # Get next property ID
+        err, idprop = dcamprop_getnextid(camera.camera_handle, idprop, DCAMPROP_OPTION_SUPPORT)
+        if DCAM4.is_failed(err)
+            @error "Failed to get next property ID" exception=err
+            break
+        end
+    end
+    
+    return properties
+end
+
 """
     export_state(camera::DCAM4Camera)
 
@@ -220,10 +266,31 @@ Export the state of the camera to a dictionary.
 """
 function export_state(camera::DCAM4Camera)
     attributes = Dict(
-        "unique_id" => camera.unique_id, "camera_format_x_pixels" => camera.camera_format.x_pixels,
-        "camera_format_y_pixels" => camera.camera_format.y_pixels, "camera_format_pixelsize" => camera.camera_format.pixelsize,
-        "camera_format_gain" => camera.camera_format.gain
+        "device_id" => camera.dev_id, 
+        "unique_id" => camera.unique_id,  
+        "camera_format_x_pixels" => camera.camera_format.x_pixels,
+        "camera_format_y_pixels" => camera.camera_format.y_pixels, 
+        "camera_format_pixelsize" => camera.camera_format.pixelsize,
+        "camera_format_gain" => camera.camera_format.gain, 
+        "camera_handle" => camera.camera_handle, 
+        "exposure_time" => camera.exposure_time,
+        "frame_rate" => camera.frame_rate, 
+        "roi_x" => camera.roi.x, 
+        "roi_y" => camera.roi.y, 
+        "roi_width" => camera.roi.width,
+        "roi_height" => camera.roi.height, 
+        "capture_mode" => camera.capture_mode, 
+        "trigger_mode" => camera.trigger_mode,
+        "sequence_length" => camera.sequence_length, 
+        "last_error" => camera.last_error, 
+        "is_running" => camera.is_running,
+        "camerastate" => camera.camerastate
     )
+
+    # Get camera properties and merge with base attributes
+    camera_properties = extract_properties(camera)
+    merge!(attributes, Dict("camera_extracted_properties" => camera_properties))
+
     data = nothing
     children = Dict()
     return attributes, data, children

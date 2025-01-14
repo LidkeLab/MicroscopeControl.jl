@@ -21,7 +21,7 @@ function initialize(stage::PIStage) #TODO: Error handling
     else
         @error "No devices connected"
         stage.connectionstatus = false
-        return 
+        return
     end
     #Connect to usb device
     stage.id = @ccall gcs2path.PI_ConnectUSB(bufferstring::Ptr{UInt8})::Cint
