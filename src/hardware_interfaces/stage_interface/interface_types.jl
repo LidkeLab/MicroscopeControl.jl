@@ -1,4 +1,4 @@
-abstract type Stage end
+abstract type Stage <: AbstractInstrument end
 
 mutable struct StageFormat <: Stage
     label::String

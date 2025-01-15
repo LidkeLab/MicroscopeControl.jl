@@ -1,6 +1,6 @@
 
 
-abstract type SLM end
+abstract type SLM <: AbstractInstrument end
 
 mutable struct Pupil
     x_center::Float64

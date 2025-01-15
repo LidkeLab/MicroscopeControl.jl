@@ -101,4 +101,7 @@ function abort(camera::Camera)
     @error "abort not implemented"
 end
 
-
+function export_state(camera::Camera)
+    # Export the state of the camera
+    @error "export_state not implemented"
+end

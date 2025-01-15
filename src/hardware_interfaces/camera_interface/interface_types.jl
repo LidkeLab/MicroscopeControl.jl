@@ -16,7 +16,7 @@
 # end
 
 
-abstract type Camera end
+abstract type Camera <: AbstractInstrument end
 
 mutable struct CameraROI
     x_start::Int

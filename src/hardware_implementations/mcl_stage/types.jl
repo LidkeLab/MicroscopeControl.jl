@@ -18,5 +18,5 @@ Base.@kwdef mutable struct MCLStage <: Stage
     targ_z::Float64 = 0.0
     range_x::Tuple{Float64,Float64} = (0, 300)
     range_y::Tuple{Float64,Float64} = (0, 300)
-    range_z::Tuple{Float64,Float64} = (0, 300) 
+    range_z::Tuple{Float64,Float64} = (0, 300)
 end
