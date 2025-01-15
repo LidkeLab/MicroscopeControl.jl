@@ -205,6 +205,7 @@ function CameraInterface.getdata(camera::DCAM4Camera)
     end
 end
 
+### After this line is under development ###
 "
     extract_properties(camera::DCAM4Camera)
 
