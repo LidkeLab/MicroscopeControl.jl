@@ -167,4 +167,7 @@ function driftcorrection(stage::Stage, xtoggle::Bool, ytoggle::Bool, ztoggle::Bo
     @error "driftcorrection not implemented"
 end
 
-
+function export_state(stage::Stage)
+    #function to export stage state
+    @error "export_state not implemented"
+end
