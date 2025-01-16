@@ -109,6 +109,9 @@ Export the state of the DAQ.
 
 # Arguments
 - `daq::DAQ`: A DAQ type.
+
+# Returns
+
 """
 function export_state(daq::DAQ)
     @error "export_state not implemented"

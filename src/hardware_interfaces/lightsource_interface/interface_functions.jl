@@ -75,16 +75,16 @@ end
     # Arguments
     - `properties::LightSourceProperties`: The properties of the lightsource.
 
-    # Returns
-    - `attributes::Dict{String,Any}`: The attributes of the lightsource.
-    - `data::Any`: The data of the lightsource.
-    - `children::Dict{String,Any}`: The children of the lightsource.
+    # # Returns
+    # - `attributes::Dict{String,Any}`: The attributes of the lightsource.
+    # - `data::Any`: The data of the lightsource.
+    # - `children::Dict{String,Any}`: The children of the lightsource.
     """
 function export_state(properties::LightSourceProperties)
-    attributes = Dict("power_unit" => properties.power_unit, "power" => properties.power, "is_on" => properties.is_on, "min_power" => properties.min_power, "max_power" => properties.max_power)
-    data = nothing
-    children = Dict()
-    return attributes, data, children
+    # attributes = Dict("power_unit" => properties.power_unit, "power" => properties.power, "is_on" => properties.is_on, "min_power" => properties.min_power, "max_power" => properties.max_power)
+    # data = nothing
+    # children = Dict()
+    # return attributes, data, children
     # export the state of the lightsource
     @error "export_state not implemented"
 end

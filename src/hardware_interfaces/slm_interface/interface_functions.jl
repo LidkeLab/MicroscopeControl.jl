@@ -26,6 +26,11 @@ function blaze_to_phase(slm::SLM, angle::Float64, period::Float64; blaze_start::
 end
 
 
+function export_state(slm::SLM)
+    #function to export stage state
+    @error "export_state not implemented"
+end
+
 
 
 
