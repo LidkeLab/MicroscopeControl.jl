@@ -3,9 +3,10 @@ module MicroscopeControl
 using HDF5
 
 include("instrument.jl")
-include("h5_file_saving.jl")
+
 include("hardware_interfaces/HardwareInterfaces.jl")
 include("hardware_implementations/HardwareImplementations.jl")
+include("h5_file_saving.jl")
 
 using .HardwareImplementations.SimulatedCamera
 using .HardwareImplementations.DCAM4
