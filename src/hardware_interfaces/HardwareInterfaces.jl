@@ -1,6 +1,11 @@
 
 module HardwareInterfaces
 
+using ..MicroscopeControl
+export AbstractInstrument 
+export export_state, initialize, shutdown
+
+
 include("camera_interface/CameraInterface.jl")
 include("slm_interface/SLMInterface.jl")
 include("stage_interface/StageInterface.jl")

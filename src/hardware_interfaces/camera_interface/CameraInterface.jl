@@ -5,14 +5,13 @@ module CameraInterface
 
 using GLMakie
 using Images
-#using MicroscopeControl
+using ...MicroscopeControl
 
 
 export Camera, CameraFormat, CameraROI
 export gui, start_sequence, start_live
 export abort, capture, getdata, getlastframe, live, sequence, shutdown 
 
-include("../../instrument.jl")
 include("interface_types.jl")
 include("interface_functions.jl")
 include("gui.jl")

@@ -5,7 +5,7 @@ module LightSourceInterface
 
 using GLMakie
 using Images
-
+using ...MicroscopeControl
 
 export LightSource, LightSourceProperties
 export setpower, light_on, light_off, shutdown, initialize, export_state

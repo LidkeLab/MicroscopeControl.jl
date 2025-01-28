@@ -3,6 +3,10 @@ module MicroscopeControl
 using HDF5
 
 include("instrument.jl")
+export AbstractInstrument
+export export_state, initialize, shutdown
+
+
 include("hardware_interfaces/HardwareInterfaces.jl")
 include("hardware_implementations/HardwareImplementations.jl")
 include("h5_file_saving.jl")
@@ -23,8 +27,6 @@ using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
 
 # Export abstract types and methods for all instrument
-export AbstractInstrument
-export export_state, initialize, shutdown
 
 # Export h5 file saving methods
 export save_h5, save_attributes_and_data

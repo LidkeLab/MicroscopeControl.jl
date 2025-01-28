@@ -3,7 +3,8 @@ Interface for controlling a translation stage
 """
 module StageInterface
     using GLMakie
-
+    using ...MicroscopeControl
+    
     include("interface_types.jl")
     include("interface_functions.jl")
     include("gui.jl")

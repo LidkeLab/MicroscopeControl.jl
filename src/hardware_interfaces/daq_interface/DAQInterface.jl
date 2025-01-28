@@ -5,6 +5,7 @@ module DAQInterface
 
 using GLMakie
 using Images
+using ...MicroscopeControl
 
 export DAQ
 export showdevices, showchannels, createtask, setvoltage, readvoltage, deletetask, addchannel!, export_state
