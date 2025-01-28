@@ -95,9 +95,6 @@ end
 
 """
     export_state(light::TCubeLaser)
-
-# Arguments
-- `light::TCubeLaser`: The TCubeLaser to export the state of.
 """
 function export_state(light::TCubeLaser)
 

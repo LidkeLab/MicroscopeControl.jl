@@ -3,7 +3,6 @@ module MicroscopeControl
 using HDF5
 
 include("instrument.jl")
-
 include("hardware_interfaces/HardwareInterfaces.jl")
 include("hardware_implementations/HardwareImplementations.jl")
 include("h5_file_saving.jl")

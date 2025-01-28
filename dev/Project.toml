@@ -1,0 +1,3 @@
+[deps]
+MicroscopeControl = "aa70d9ae-4a1e-49fd-870a-8ccfd99f4c3e"
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
