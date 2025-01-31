@@ -7,8 +7,10 @@ using GLMakie
 using Images
 using ...MicroscopeControl
 
+import ...MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
+
 export DAQ
-export showdevices, showchannels, createtask, setvoltage, readvoltage, deletetask, addchannel!, export_state
+export showdevices, showchannels, createtask, setvoltage, readvoltage, deletetask, addchannel!
 export gui
 
 include("interface_types.jl")

@@ -6,14 +6,17 @@ A Module for controlling a laser through a NIDAQ card.
 module VortranLaserControl
 
 using NIDAQ
+using ...MicroscopeControl
 
-using MicroscopeControl.HardwareInterfaces.LightSourceInterface
-using MicroscopeControl.HardwareImplementations.NIDAQcard
+import ...MicroscopeControl: export_state, initialize, shutdown
 
-import MicroscopeControl.HardwareInterfaces.LightSourceInterface: gui as laser_488_gui
-import MicroscopeControl.HardwareImplementations.NIDAQcard: gui as nidaq_gui
+using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface
+using ...MicroscopeControl.HardwareImplementations.NIDAQcard
 
-export VortranLaser, laser_488_gui, nidaq_gui, initialize, light_on, light_off, setpower
+import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: gui as laser_488_gui
+import ...MicroscopeControl.HardwareImplementations.NIDAQcard: gui as nidaq_gui
+
+export VortranLaser, laser_488_gui, nidaq_gui, light_on, light_off, setpower
 
 include("types.jl")
 include("interface_methods.jl")

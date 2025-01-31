@@ -83,9 +83,9 @@ end
 
 
 # Test the saving function of Red Laser
-using MicroscopeControl
-using MicroscopeControl.HardwareImplementations.TCubeLaserControl
-using MicroscopeControl.HardwareImplementations.NIDAQcard
+using .MicroscopeControl
+using .MicroscopeControl.HardwareImplementations.TCubeLaserControl
+using .MicroscopeControl.HardwareImplementations.NIDAQcard
 
 function test_save_to_hdf5(tcube_light::TCubeLaser, file_name::String)
     # Extract the attributes, data and children from the instrument using the export_state function

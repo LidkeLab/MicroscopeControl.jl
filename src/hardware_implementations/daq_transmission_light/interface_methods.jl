@@ -1,4 +1,4 @@
-function LightSourceInterface.initialize(light::DaqTrLight)
+function initialize(light::DaqTrLight)
     return nothing
 end
 
@@ -42,7 +42,7 @@ function LightSourceInterface.light_off(light::DaqTrLight)
     NIDAQcard.deletetask(daq,t)
 end
 
-function LightSourceInterface.shutdown(light::DaqTrLight)
+function shutdown(light::DaqTrLight)
     light.properties.is_on = false
     daq = light.daq
     channelsAO = light.channelsAO

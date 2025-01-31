@@ -1,5 +1,7 @@
 module PI
-    using MicroscopeControl.HardwareInterfaces.StageInterface
+    using ...MicroscopeControl.HardwareInterfaces.StageInterface
+
+    import ...MicroscopeControl: export_state, initialize, shutdown
 
     global const gcs2path = "C:\\Program Files (x86)\\Physik Instrumente (PI)\\Software Suite\\Development\\C++\\API\\PI_GCS2_DLL_x64.dll"
 
@@ -10,7 +12,7 @@ module PI
     include("interface_methods.jl")
 
     export PIStage
-    export initialize, shutdown
+    # export initialize, shutdown
     export servoxy, servox, servoy, driftcorrection
     export immediatestop, referencemove, stopmotion
     export movexy, movex, movey, getposition, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait

@@ -9,7 +9,7 @@ MicroscopeControl.jl is a Julia package designed to streamline the control of op
 
 MicroscopeControl.jl utilizes three layers of code: high-level, low-level, and user-level. High-level code is generic, providing interfaces for stages, light sources, cameras, etc. Low-level code handles hardware-specific implementations, defining functions for individual microscope components. This design heavily leverages Julia’s multiple dispatch, enabling different behaviors for the same function based on argument types. The user-level code integrates these layers to control the microscope system.
  
-## Class Structure Overview
+## Module Structure Overview
 
  The structure of MicroscopeControl is designed to ensure scalability and easy integration of new hardware.
 

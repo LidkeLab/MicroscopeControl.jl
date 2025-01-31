@@ -1,5 +1,5 @@
 
-function StageInterface.initialize(stage::N472)
+function initialize(stage::N472)
     if stage.connectionstatus == true
         @error "Stage already initialized"
         return
@@ -59,7 +59,7 @@ function StageInterface.initialize(stage::N472)
     return
 end
 
-function StageInterface.shutdown(stage::N472)
+function shutdown(stage::N472)
     isconnected = PI_IsConnected(stage.id)
     if isconnected == TRUE
         PI_CloseConnection(stage.id)

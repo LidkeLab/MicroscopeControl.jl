@@ -33,7 +33,7 @@ export save_h5, save_attributes_and_data
 
 # Re-export camera implementations
 export SimCamera, DCAM4Camera, ThorCamCSC
-export initialize, shutdown, start_sequence, start_live
+export start_sequence, start_live
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime, settriggermode, setroi!, setexposuretime!
 
@@ -52,7 +52,7 @@ export showdevices, showchannels, createtask, setvoltage, readvoltage, deletetas
 
 # Re-export FPGA implementations
 export XEM
-export initialize, setexposure, enable, setupIO
+export setexposure, enable, setupIO
 
 # Re-export common GUI methods
 export gui

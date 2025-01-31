@@ -1,4 +1,4 @@
-function LightSourceInterface.initialize(light::VortranLaser)
+function initialize(light::VortranLaser)
     light.properties.is_on = false
     daq = light.daq
     channelsAO = light.channelsAO
@@ -55,7 +55,7 @@ function LightSourceInterface.light_off(light::VortranLaser)
     # NIDAQcard.deletetask(daq,t)
 end
 
-function LightSourceInterface.shutdown(light::VortranLaser)
+function shutdown(light::VortranLaser)
     light.properties.is_on = false
     daq = light.daq
     channelsAO = light.channelsAO
@@ -69,7 +69,7 @@ function LightSourceInterface.shutdown(light::VortranLaser)
     NIDAQcard.deletetask(daq,t)
 end
 
-function LightSourceInterface.export_state(light::VortranLaser)
+function export_state(light::VortranLaser)
 
     attributes = Dict(
                      "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,

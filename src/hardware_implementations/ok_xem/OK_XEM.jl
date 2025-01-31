@@ -1,5 +1,8 @@
 module OK_XEM
-    using MicroscopeControl.HardwareImplementations.NIDAQcard
+    using ...MicroscopeControl.HardwareImplementations.NIDAQcard
+
+    import ...MicroscopeControl: export_state, initialize, shutdown
+
     const okFP = "C:\\Program Files\\Opal Kelly\\FrontPanelUSB\\API\\lib\\x64\\okFrontPanel.dll"
 
     include("constants_okFP.jl")
@@ -8,6 +11,6 @@ module OK_XEM
     include("interface_methods.jl")
 
     export XEM
-    export initialize,setexposure, enable,setupIO
+    export setexposure, enable,setupIO #, initialize
 
 end

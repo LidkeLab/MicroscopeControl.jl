@@ -4,10 +4,11 @@
 module NIDAQcard
 
 using NIDAQ
-using MicroscopeControl.HardwareInterfaces.DAQInterface
+using ...MicroscopeControl.HardwareInterfaces.DAQInterface
 
-export NIdaq, gui, export_state, showdevices, showchannels, createtask, setvoltage, readvoltage, deletetask
-export export_state
+import ...MicroscopeControl: export_state, initialize, shutdown
+
+export NIdaq, gui, showdevices, showchannels, createtask, setvoltage, readvoltage, deletetask #, export_state
 
 
 include("types.jl")

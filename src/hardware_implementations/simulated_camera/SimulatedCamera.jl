@@ -1,6 +1,6 @@
 module SimulatedCamera
 
-using MicroscopeControl.HardwareInterfaces.CameraInterface
+using ...MicroscopeControl.HardwareInterfaces.CameraInterface
 
 export SimCamera, gui
 

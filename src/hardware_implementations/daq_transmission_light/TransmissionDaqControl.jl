@@ -8,13 +8,14 @@ module TransmissionDaqControl
 
 using NIDAQ
 
-using MicroscopeControl.HardwareInterfaces.LightSourceInterface
-using MicroscopeControl.HardwareImplementations.NIDAQcard
+using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface
+using ...MicroscopeControl.HardwareImplementations.NIDAQcard
 
-import MicroscopeControl.HardwareInterfaces.LightSourceInterface: gui as tr_light_gui
-import MicroscopeControl.HardwareImplementations.NIDAQcard: gui as nidaq_gui
+import ...MicroscopeControl: export_state, initialize, shutdown
+import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: gui as tr_light_gui
+import ...MicroscopeControl.HardwareImplementations.NIDAQcard: gui as nidaq_gui
 
-export DaqTrLight, tr_light_gui, nidaq_gui, initialize, light_on, light_off, setpower
+export DaqTrLight, tr_light_gui, nidaq_gui, light_on, light_off, setpower #, initialize
 
 include("types.jl")
 include("interface_methods.jl")

@@ -1,4 +1,4 @@
-function LightSourceInterface.initialize(light::CrystaLaser)
+function initialize(light::CrystaLaser)
     light.properties.is_on = false
     daq = light.daq
     channelsAO = light.channelsAO
@@ -46,7 +46,7 @@ function LightSourceInterface.light_off(light::CrystaLaser)
     NIDAQcard.deletetask(daq,t)
 end
 
-function LightSourceInterface.shutdown(light::CrystaLaser)
+function shutdown(light::CrystaLaser)
     light.properties.is_on = false
     daq = light.daq
     channelsAO = light.channelsAO

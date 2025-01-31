@@ -1,4 +1,4 @@
-function StageInterface.initialize(stage::MCLStage)
+function initialize(stage::MCLStage)
     @info "Initializing stage"
     # Initialize stage
     handle = inithandle(stage)
@@ -13,7 +13,7 @@ function StageInterface.initialize(stage::MCLStage)
     return handle
 end
 
-function StageInterface.shutdown(stage::MCLStage)
+function shutdown(stage::MCLStage)
     @info "Shutting down stage"
     # Shutdown stage
     releasehandle(stage)

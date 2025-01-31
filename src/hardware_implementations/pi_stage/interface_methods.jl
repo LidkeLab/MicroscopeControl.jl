@@ -1,11 +1,11 @@
 """
 Function to initialize PI Stage, right now this requires calibration using PiMikroMove to work correctly, no documentation on how to calibrate using the PI_GCS2 library
 """
-function StageInterface.initialize(stage::PIStage) #TODO: Error handling
+function initialize(stage::PIStage) #TODO: Error handling
     initialize(stage)
 end
 
-function StageInterface.shutdown(stage::PIStage)
+function shutdown(stage::PIStage)
     shutdown(stage)
 end
 

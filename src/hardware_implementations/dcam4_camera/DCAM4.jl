@@ -8,15 +8,16 @@ microscopy applications.
 """
 module DCAM4
 
-using MicroscopeControl.HardwareInterfaces.CameraInterface
+using ...MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
 
-import MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
+import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
+import ...MicroscopeControl: export_state, initialize, shutdown
 
-export DCAM4Camera, gui, initialize, shutdown, start_sequence, start_live
+export DCAM4Camera, gui, start_sequence, start_live #, initialize, shutdown
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime, settriggermode, setroi!, setexposuretime!
-export export_state
+# export export_state
 
 include("dcamerr.jl")
 include("dcam_idprop.jl")

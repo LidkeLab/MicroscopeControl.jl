@@ -10,6 +10,6 @@ function LightSourceInterface.light_off(light::SimLight)
     light.properties.is_on = false
 end
 
-function LightSourceInterface.shutdown(light::SimLight)
+function shutdown(light::SimLight)
     light.properties.is_on = false
 end

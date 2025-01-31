@@ -1,10 +1,10 @@
-function StageInterface.initialize(stage::SimStage3d)
+function initialize(stage::SimStage3d)
     #function to initialize stage
     println("Initializing stage...")
     stage.connectionstatus = true
 end
 
-function StageInterface.shutdown(stage::SimStage3d)
+function shutdown(stage::SimStage3d)
     #function to shutdown stage
     println("Shutting down stage...")
     stage.connectionstatus = false

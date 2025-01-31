@@ -7,7 +7,10 @@ handle_methods.jl, standard_device_movement.jl, waveform_aquisition.jl, and devi
 =#
 
 module MadCityLabs
-    using MicroscopeControl.HardwareInterfaces.StageInterface
+    using ...MicroscopeControl.HardwareInterfaces.StageInterface
+
+    import ...MicroscopeControl: export_state, initialize, shutdown
+
     madlibpath = "C:\\Program Files\\Mad City Labs\\NanoDrive\\Madlib.dll"
 
     include("types.jl")
@@ -17,7 +20,7 @@ module MadCityLabs
     include("standard_device_movement.jl")
 
     export MCLStage                                                                 #This is the type definition for the MCLStage
-    export initialize, shutdown, move, getposition, stopmotion, gui, getrange                 #These are Interface Specific
+    export move, getposition, stopmotion, gui, getrange #, initialize, shutdown     #These are Interface Specific
     export inithandle, releasehandle, releaseallhandles                             #Handle handle_management
     export isdeviceattached, printdeviceinfo, getserialnumber, getcommandedposition, getcalibration #Device Information
     export singleread, singlewrite                                                  #Standard Device Movement

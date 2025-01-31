@@ -1,4 +1,4 @@
-function LightSourceInterface.initialize(light::TCubeLaser)
+function initialize(light::TCubeLaser)
     err = TLI_BuildDeviceList()
     numdev = TLI_GetDeviceListSize()
 
@@ -37,7 +37,7 @@ function LightSourceInterface.light_off(light::TCubeLaser)
     println("$(light.laser_color)" * "_laser is off")
 end
 
-function LightSourceInterface.shutdown(light::TCubeLaser)
+function shutdown(light::TCubeLaser)
     light.properties.is_on = false
     serialNo = light.serialNo
     err = LD_DisableOutput(serialNo)

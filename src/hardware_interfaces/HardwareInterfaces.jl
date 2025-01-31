@@ -2,8 +2,9 @@
 module HardwareInterfaces
 
 using ..MicroscopeControl
-export AbstractInstrument 
-export export_state, initialize, shutdown
+# import ..MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
+# export AbstractInstrument 
+# export export_state, initialize, shutdown
 
 
 include("camera_interface/CameraInterface.jl")

@@ -1,6 +1,8 @@
 module SimulatedStage
-    using MicroscopeControl.HardwareInterfaces.StageInterface
+    using ...MicroscopeControl.HardwareInterfaces.StageInterface
     using GLMakie
+
+    import ...MicroscopeControl: export_state, initialize, shutdown
 
     include("types.jl")
     include("interface_methods3d.jl")
@@ -8,5 +10,5 @@ module SimulatedStage
     include("interface_methods1d.jl")
 
     export SimStage3d, SimStage2d, SimStage1d
-    export initialize, shutdown, move, getposition, stopmotion, gui
+    export move, getposition, stopmotion, gui #, initialize, shutdown
 end
