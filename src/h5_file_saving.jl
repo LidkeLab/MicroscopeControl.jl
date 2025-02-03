@@ -68,7 +68,7 @@ end
 
 # # Run the test function
 
-function save_h5(filename::String, state_data::Tuple{Dict, any, Dict})
+function save_h5(filename::String, state_data::Tuple{Dict{String,Any}, Any, Dict{String,Any}})
     @async begin
         # Name the startigng group as "Main"
         group = "Main"
@@ -83,9 +83,9 @@ end
 
 
 # Test the saving function of Red Laser
-using .MicroscopeControl
-using .MicroscopeControl.HardwareImplementations.TCubeLaserControl
-using .MicroscopeControl.HardwareImplementations.NIDAQcard
+using MicroscopeControl
+using MicroscopeControl.HardwareImplementations.TCubeLaserControl
+using MicroscopeControl.HardwareImplementations.NIDAQcard
 
 function test_save_to_hdf5(tcube_light::TCubeLaser, file_name::String)
     # Extract the attributes, data and children from the instrument using the export_state function
@@ -130,3 +130,16 @@ MicroscopeControl.TCubeLaserControl.shutdown(tcube_light)
     
 #     return attributes, data, children
 # end
+
+function export_state(tcube_light::TCubeLaser)
+    attributes = Dict("some_key" => "some_value")
+    data = nothing
+    
+    # Instead of passing nested tuples, store everything as `Any`
+    children = Dict{String,Any}()
+    children["some_child"] = Dict("Attributes" => Dict(...),
+                                  "Data"       => ...,
+                                  "Children"   => Dict{String,Any}())
+    
+    return attributes, data, children
+end

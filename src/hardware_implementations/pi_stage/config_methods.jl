@@ -1,7 +1,7 @@
 """
 Function to initialize PI Stage, right now this requires calibration using PiMikroMove to work correctly, no documentation on how to calibrate using the PI_GCS2 library
 """
-function initialize(stage::PIStage) #TODO: Error handling
+function initialize_original(stage::PIStage) #TODO: Error handling
     if stage.connectionstatus == true
         @error "Stage already initialized"
         return
@@ -64,7 +64,7 @@ end
 """
 Function to disconnect PI Stage
 """
-function shutdown(stage::PIStage)
+function shutdown_original(stage::PIStage)
     isconnected = @ccall gcs2path.PI_IsConnected(stage.id::Cint)::Cint
 
     if isconnected == 1
