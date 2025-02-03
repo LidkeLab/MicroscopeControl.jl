@@ -131,15 +131,15 @@ MicroscopeControl.TCubeLaserControl.shutdown(tcube_light)
 #     return attributes, data, children
 # end
 
-function export_state(tcube_light::TCubeLaser)
-    attributes = Dict("some_key" => "some_value")
-    data = nothing
+# function export_state(tcube_light::TCubeLaser)
+#     attributes = Dict("some_key" => "some_value")
+#     data = nothing
     
-    # Instead of passing nested tuples, store everything as `Any`
-    children = Dict{String,Any}()
-    children["some_child"] = Dict("Attributes" => Dict(...),
-                                  "Data"       => ...,
-                                  "Children"   => Dict{String,Any}())
+#     # Instead of passing nested tuples, store everything as `Any`
+#     children = Dict{String,Any}()
+#     children["some_child"] = Dict("Attributes" => Dict(...),
+#                                   "Data"       => ...,
+#                                   "Children"   => Dict{String,Any}())
     
-    return attributes, data, children
-end
+#     return attributes, data, children
+# end
