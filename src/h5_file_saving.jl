@@ -16,7 +16,7 @@ function save_attributes_and_data(filename::String, group::String, attributes::D
             save_group_recursive(h5file, group, attributes, data, children)
         end
     catch e # Catch any exceptions (errors) that occur during the saving process
-        @error "Failed to save to HDF5 file" exception=e # Log the error message
+        @error "Failed to save to HDF5 file" exception = e # Log the error message
         rethrow(e) # Rethrow the exception to the caller function.
     end
 end
@@ -100,10 +100,10 @@ end
 #         "serial" => "ABC456",
 #         "is_active" => true
 #     )
-    
+
 #     # Actual measurement data
 #     data = [1.0, 2.0, 3.0]  # or any other data type
-    
+
 #     # Nested components (e.g., DAQ, stage, etc.)
 #     children = Dict(
 #         "daq" => Dict(
@@ -112,19 +112,19 @@ end
 #             "Children" => Dict()
 #         )
 #     )
-    
+
 #     return attributes, data, children
 # end
 
 # function export_state(tcube_light::TCubeLaser)
 #     attributes = Dict("some_key" => "some_value")
 #     data = nothing
-    
+
 #     # Instead of passing nested tuples, store everything as `Any`
 #     children = Dict{String,Any}()
 #     children["some_child"] = Dict("Attributes" => Dict(...),
 #                                   "Data"       => ...,
 #                                   "Children"   => Dict{String,Any}())
-    
+
 #     return attributes, data, children
 # end
