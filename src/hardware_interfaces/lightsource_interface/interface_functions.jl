@@ -56,11 +56,6 @@ end
 
 """
     shutdown(lightsource::LightSource)
-
-Shutdown the light source.
-
-# Arguments
-- `lightsource::LightSource`: A LightSource type.
 """
 function shutdown(lightsource::LightSource)
     # shutdown the lightsource
@@ -69,18 +64,8 @@ end
     
     """
         export_state(properties::LightSourceProperties)
-
-    Export the state of the lightsource.
-
-    # Arguments
-    - `properties::LightSourceProperties`: The properties of the lightsource.
-
-    # # Returns
-    # - `attributes::Dict{String,Any}`: The attributes of the lightsource.
-    # - `data::Any`: The data of the lightsource.
-    # - `children::Dict{String,Any}`: The children of the lightsource.
     """
-function export_state(properties::LightSourceProperties)
+function export_state(lightsource::LightSource)
     # attributes = Dict("power_unit" => properties.power_unit, "power" => properties.power, "is_on" => properties.is_on, "min_power" => properties.min_power, "max_power" => properties.max_power)
     # data = nothing
     # children = Dict()

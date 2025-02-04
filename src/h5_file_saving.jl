@@ -63,18 +63,6 @@ end
 #     return attributes, data, children
 # end
 
-# Test the saving function
-# function test_save_to_hdf5()
-#     file = "Y:/Personal Folders//Ali.test_output.h5"
-#     group = "/MainGroup"
-#     attributes, data, children = export_state()
-
-#     save_attributes_and_data(file, group, attributes, data, children)
-#     println("Data and attributes successfully saved to $file")
-# end
-
-# # Run the test function
-
 function save_h5(filename::String, state_data)
     @async begin
         # Name the startigng group as "Main"
@@ -112,19 +100,6 @@ end
 #             "Children" => Dict()
 #         )
 #     )
-
-#     return attributes, data, children
-# end
-
-# function export_state(tcube_light::TCubeLaser)
-#     attributes = Dict("some_key" => "some_value")
-#     data = nothing
-
-#     # Instead of passing nested tuples, store everything as `Any`
-#     children = Dict{String,Any}()
-#     children["some_child"] = Dict("Attributes" => Dict(...),
-#                                   "Data"       => ...,
-#                                   "Children"   => Dict{String,Any}())
 
 #     return attributes, data, children
 # end

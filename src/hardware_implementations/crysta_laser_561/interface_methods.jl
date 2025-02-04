@@ -1,3 +1,6 @@
+"""
+    initialize(light::CrystaLaser)
+"""
 function initialize(light::CrystaLaser)
     light.properties.is_on = false
     daq = light.daq
@@ -6,6 +9,15 @@ function initialize(light::CrystaLaser)
     return nothing
 end
 
+"""
+    setpower(light::CrystaLaser, voltage::Float64)
+
+Set the power of the laser by setting the voltage of the NIDAQ card.
+
+# Arguments
+- `light::CrystaLaser`: The laser to set the power of.
+- `voltage::Float64`: The voltage to set the laser to.
+"""
 function LightSourceInterface.setpower(light::CrystaLaser, voltage::Float64)
     daq = light.daq
     min_voltage = light.min_voltage
@@ -21,6 +33,9 @@ function LightSourceInterface.setpower(light::CrystaLaser, voltage::Float64)
     NIDAQcard.deletetask(daq,t)
 end
 
+"""
+    light_on(light::CrystaLaser)
+"""
 function LightSourceInterface.light_on(light::CrystaLaser)
     light.properties.is_on = true
     # power = 20.0
@@ -35,6 +50,9 @@ function LightSourceInterface.light_on(light::CrystaLaser)
     NIDAQcard.deletetask(daq,t)
 end
 
+"""
+    light_off(light::CrystaLaser)
+"""
 function LightSourceInterface.light_off(light::CrystaLaser)
     light.properties.is_on = false
     daq = light.daq
@@ -46,6 +64,9 @@ function LightSourceInterface.light_off(light::CrystaLaser)
     NIDAQcard.deletetask(daq,t)
 end
 
+"""
+    shutdown(light::CrystaLaser)
+"""
 function shutdown(light::CrystaLaser)
     light.properties.is_on = false
     daq = light.daq
@@ -56,13 +77,3 @@ function shutdown(light::CrystaLaser)
     NIDAQcard.setvoltage(daq,t, voltage)
     NIDAQcard.deletetask(daq,t)
 end
-
-# function createt(light::CrystaLaser)
-#     if light.laser_color == "488"
-#         j = 1
-#     elseif light.laser_color == "561"
-#         j = 2
-#     end
-#     t = NIDAQcard.createtask(light.daq,"AO",light.channelsAO[j])
-#     return t
-# end

@@ -2,7 +2,6 @@
     CrystaLaserControl
 
 A Module for controlling a laser through a NIDAQ card.
-Citation: Ali Kazemi Nasaban Shotorban & Sheng Liu, Lidke Lab, UNM
 """
 module CrystaLaserControl
 
