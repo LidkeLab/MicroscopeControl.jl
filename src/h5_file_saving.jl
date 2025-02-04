@@ -13,31 +13,32 @@ Saves hierarchical data to an HDF5 file.
 function save_attributes_and_data(filename::String, group::String, attributes::Dict, data, children)
     try
         h5open(filename, "w") do h5file
-            h5group = create_group(h5file, group)
-
-            # Saving data to the group
-            if !isnothing(data)
-                write(h5group, "data", data)
-            else
-                # Create empty dataset properly
-                write(h5group, "data", "no data")
-            end
-
-            # Saving attributes to the group
-            for (name, value) in attributes
-                attr_value = (eltype(value) == Bool) ? float.(value) : value
-                attr(h5group, name, attr_value)
-            end
-
-            # Recursive scheme to save children
-            for (child_name, child) in children
-                child_group = joinpath(group, child_name)
-                save_attributes_and_data(filename, child_group, child["Attributes"], child["Data"], child["Children"])
-            end
+            save_group_recursive(h5file, group, attributes, data, children)
         end
     catch e # Catch any exceptions (errors) that occur during the saving process
         @error "Failed to save to HDF5 file" exception=e # Log the error message
         rethrow(e) # Rethrow the exception to the caller function.
+    end
+end
+
+function save_group_recursive(h5parent, group_name::String, attributes::Dict, data, children)
+    h5group = create_group(h5parent, group_name)
+
+    # Save data
+    if !isnothing(data)
+        write(h5group, "data", data)
+    end
+
+    # Save attributes
+    for (name, value) in attributes
+        attr_value = (eltype(value) == Bool) ? float.(value) : value
+        attrs(h5group)[name] = attr_value
+    end
+
+    # Recursively save children
+    for (child_name, child) in children
+        child_attrs, child_data, child_children = child
+        save_group_recursive(h5group, child_name, child_attrs, child_data, child_children)
     end
 end
 

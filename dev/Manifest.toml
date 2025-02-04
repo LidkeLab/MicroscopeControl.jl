@@ -398,9 +398,9 @@ version = "2.2.8"
 
 [[deps.Expat_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "e51db81749b0777b2147fbe7b783ee79045b8e99"
+git-tree-sha1 = "d55dffd9ae73ff72f1c0482454dcf2ec6c6c4a63"
 uuid = "2e619515-83b5-522b-bb60-26c02a35a201"
-version = "2.6.4+3"
+version = "2.6.5+0"
 
 [[deps.Extents]]
 git-tree-sha1 = "063512a13dbe9c40d999c439268539aa552d1ae6"
@@ -1213,7 +1213,7 @@ version = "0.8.0"
 
 [[deps.MicroscopeControl]]
 deps = ["CairoMakie", "Dates", "FFTW", "GLMakie", "HDF5", "ImageView", "Images", "JLD2", "NIDAQ", "Revise", "Statistics"]
-path = "C:\\Users\\Ali\\.julia\\dev\\MicroscopeControl"
+path = "C:\\Users\\lidkelab\\.julia\\dev\\MicroscopeControl"
 uuid = "aa70d9ae-4a1e-49fd-870a-8ccfd99f4c3e"
 version = "1.0.0-DEV"
 
