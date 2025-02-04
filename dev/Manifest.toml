@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.1"
+julia_version = "1.11.3"
 manifest_format = "2.0"
 project_hash = "0565b8201fce1da2f229faeba935b1688669ecdd"
 
@@ -127,10 +127,10 @@ uuid = "62783981-4cbd-42fc-bca8-16325de8dc4b"
 version = "0.1.6"
 
 [[deps.Bzip2_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "8873e196c2eb87962a2048b3b8e08946535864a1"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "1b96ea4a01afe0ea4090c5c8039690672dd13f2e"
 uuid = "6e34b625-4abd-537c-b88f-471c36dfa7a0"
-version = "1.0.8+4"
+version = "1.0.9+0"
 
 [[deps.CEnum]]
 git-tree-sha1 = "389ad5c84de1ae7cf0e28e381131c98ea87d54fc"
@@ -884,9 +884,9 @@ weakdeps = ["Dates", "Test"]
     InverseFunctionsTestExt = "Test"
 
 [[deps.IrrationalConstants]]
-git-tree-sha1 = "630b497eafcc20001bba38a4651b327dcfc491d2"
+git-tree-sha1 = "e2222959fbc6c19554dc15174c81bf7bf3aa691c"
 uuid = "92d709cd-6900-40b7-9082-c6be49f344b6"
-version = "0.2.2"
+version = "0.2.4"
 
 [[deps.Isoband]]
 deps = ["isoband_jll"]
@@ -1213,7 +1213,7 @@ version = "0.8.0"
 
 [[deps.MicroscopeControl]]
 deps = ["CairoMakie", "Dates", "FFTW", "GLMakie", "HDF5", "ImageView", "Images", "JLD2", "NIDAQ", "Revise", "Statistics"]
-path = "C:\\Users\\klidke\\.julia\\dev\\MicroscopeControl"
+path = "C:\\Users\\Ali\\.julia\\dev\\MicroscopeControl"
 uuid = "aa70d9ae-4a1e-49fd-870a-8ccfd99f4c3e"
 version = "1.0.0-DEV"
 
@@ -1256,15 +1256,15 @@ uuid = "d4071afc-4203-49ee-90bc-13ebeb18d604"
 version = "0.1.4"
 
 [[deps.NIDAQ]]
-git-tree-sha1 = "fe0a06031dae76e9b11eeb5cd8b092e8f2989582"
+path = "../../NIDAQ"
 uuid = "66b72792-1abf-55ab-8064-6e9051317175"
 version = "0.6.0"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
-git-tree-sha1 = "fe891aea7ccd23897520db7f16931212454e277e"
+git-tree-sha1 = "cc0a5deefdb12ab3a096f00a6d42133af4560d71"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
-version = "1.1.1"
+version = "1.1.2"
 
 [[deps.NearestNeighbors]]
 deps = ["Distances", "StaticArrays"]

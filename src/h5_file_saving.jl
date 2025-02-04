@@ -10,13 +10,18 @@ Saves hierarchical data to an HDF5 file.
 - `data::Any`: Data to save in the group
 - `children::Dict{String,Any}`: Dictionary of child groups
 """
-function save_attributes_and_data(filename::String, group::String, attributes::Dict, data::Any, children::Dict{String, Any})
+function save_attributes_and_data(filename::String, group::String, attributes::Dict, data, children)
     try
         h5open(filename, "w") do h5file
             h5group = create_group(h5file, group)
 
             # Saving data to the group
-            write(h5group, "data", data)
+            if !isnothing(data)
+                write(h5group, "data", data)
+            else
+                # Create empty dataset properly
+                write(h5group, "data", "no data")
+            end
 
             # Saving attributes to the group
             for (name, value) in attributes
@@ -68,7 +73,7 @@ end
 
 # # Run the test function
 
-function save_h5(filename::String, state_data::Tuple{Dict{String,Any}, Any, Dict{String,Any}})
+function save_h5(filename::String, state_data)
     @async begin
         # Name the startigng group as "Main"
         group = "Main"
@@ -82,17 +87,7 @@ function save_h5(filename::String, state_data::Tuple{Dict{String,Any}, Any, Dict
 end
 
 
-# Test the saving function of Red Laser
-using MicroscopeControl
-using MicroscopeControl.HardwareImplementations.TCubeLaserControl
-using MicroscopeControl.HardwareImplementations.NIDAQcard
 
-function test_save_to_hdf5(tcube_light::TCubeLaser, file_name::String)
-    # Extract the attributes, data and children from the instrument using the export_state function
-    attributes, data, children = export_state(tcube_light)
-    # Save the attributes and data to the hdf5 file
-    save_h5(file_name, (attributes, data, children))
-end
 
 
 # Example
