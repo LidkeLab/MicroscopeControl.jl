@@ -94,18 +94,6 @@ function test_save_to_hdf5(tcube_light::TCubeLaser, file_name::String)
     save_h5(file_name, (attributes, data, children))
 end
 
-### TCube Laser Control ###
-file_name = "Y:/Personal Folders/Ali.test_output.h5"
-tcube_light = TCubeLaser("64849775")
-MicroscopeControl.TCubeLaserControl.initialize(tcube_light)
-MicroscopeControl.TCubeLaserControl.light_on(tcube_light)
-MicroscopeControl.TCubeLaserControl.setpower(tcube_light, 70.0)
-
-test_save_to_hdf5(tcube_light, file_name)
-
-MicroscopeControl.TCubeLaserControl.light_off(tcube_light)
-MicroscopeControl.TCubeLaserControl.shutdown(tcube_light)
-
 
 # Example
 # function export_state(instrument::SomeInstrument)
