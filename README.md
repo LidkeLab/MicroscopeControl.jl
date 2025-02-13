@@ -8,172 +8,120 @@
 MicroscopeControl.jl is a Julia package designed to streamline the control of optical microscopy hardware, providing a flexible and high-performance solution for biologists. Julia is a high-level, high-performance language optimized for scientific computing. It is fast, dynamic, reproducible, and open-source, using multiple dispatch to facilitate both object-oriented and functional programming patterns.
 
 MicroscopeControl.jl utilizes three layers of code: high-level, low-level, and user-level. High-level code is generic, providing interfaces for stages, light sources, cameras, etc. Low-level code handles hardware-specific implementations, defining functions for individual microscope components. This design heavily leverages Julia’s multiple dispatch, enabling different behaviors for the same function based on argument types. The user-level code integrates these layers to control the microscope system.
- 
+
+---
+
 ## Module Structure Overview
 
- The structure of MicroscopeControl is designed to ensure scalability and easy integration of new hardware.
+MicroscopeControl.jl is organized to ensure scalability and easy integration of new hardware:
 
-### abstract
-- Defines basic functions and properties common across all classes.
-  - `abstract`
+### Abstract Interfaces
+- Defines basic functions and properties common across all device types (e.g., cameras, light sources, stages).  
+- Each abstract interface (e.g., `CameraInterface`, `LightSourceInterface`, `StageInterface`) outlines the required methods, such as `initialize`, `shutdown`, and `export_state`.
 
-### camera
-- The camera namespace is the base for all camera-related classes, defining common functions and properties.
-  - `abstract`
-  - `AndorCamera`
-  - `AndorCameraZyla`
-  - `DCam4Camera`
-  - `HamamatsuCamera`
-  - `Imaq`
-  - `IMGSourceCamera`
-  - `PyDcam`
-  - `ThorlabsIR`
-  - `ThorlabsSICamera`
-  - `example`
+### Hardware Implementations
+- Provides concrete modules for each hardware device model (e.g., `TCubeLaserControl`, `DCAM4Camera`, `MCLStage`).  
+- These modules implement the abstract interfaces and add device-specific functionality.
 
-### lightSource
-- The lightSource namespace is the base for all light sources (e.g., lasers), defining common functions and properties.
-  - `abstract`
-  - `CoherentLaser561`
-  - `CrystaLaser405`
-  - `CrystaLaser561`
-  - `DHOMLaser532`
-  - `HSMLaser488`
-  - `IX71Lamp01`
-  - `MPBLaser`
-  - `RebelStarLED`
-  - `TIRFLaser488`
-  - `TubeLaserDiode`
-  - `VortranLaser488`
-  - `example`
+### Example Workflow
+1. Create an object of a specific device type.  
+2. Call `initialize` to set up the hardware.  
+3. Use various control functions (e.g., `light_on`, `move_stage`, `capture_image`).  
+4. Call `export_state` to retrieve the device’s current settings and data.  
+5. Shut down with `shutdown` when finished.
 
-### linearStage
-- The linearStage abstract is the abstract class for linear stages.
-  - `abstract`
-  - `KCubePiezo`
-  - `MCLMicroDrive`
-  - `TCubePiezo`
-  - `example`
-
-### powermeter
-- The powermeter namespace creates an interface with the power meter.
-  - `abstract`
-  - `PM100D`
-  - `example`
-  
-### stage3D
-- The stage3D is the namespace for 3D stages.
-  - `abstract`
-  - `MCLNanoDrive`
-  - `NanoMaxPiezos`
-  - `example`
-
-This class structure is integral to the functioning and expansion of our imaging capabilities, facilitating easy maintenance and upgrading of the imaging system components.
-
+---
 
 ## Common Features
-Each of the instrument components in MicroscopeControl.jl have constructor, export methods, functional tests, and graphical user interfaces with a common format.
 
-### Constructor method
-The constructor method of each instrument component class is used to create an object of the class. The constructor method is called when the class is initialized. The constructor method can take input arguments. One example of the constructor method is shown below.
-```
-attenuator = mic.Attenuator('Dev1', 'ao1');
+1. **Constructor Methods**  
+   Each hardware component has a constructor that takes relevant parameters (like serial numbers or device addresses). After constructing the device object, you can call `initialize` or other methods to start interacting with the hardware.
 
-% Load calibration data
-attenuator.loadCalibration('CalibrationFile.mat');
+2. **Export State**  
+   The function `export_state` gives you a structured overview of the device’s current settings:  
+   - **Attributes**: Key-value pairs with the device’s configuration.  
+   - **Data**: Measurement or imaging data.  
+   - **Children**: Nested hardware components or linked instruments.
 
-% Set transmission to 50%
-attenuator.setTransmission(50);
+3. **Functional Tests**  
+   Many instrument modules include test functions that validate basic operations (e.g., turning a laser on/off, adjusting power, capturing an image). These help confirm that the hardware is working correctly.
 
-% Shutdown the attenuator
-attenuator.shutdown();
-```
+4. **Graphical User Interface**  
+   Some modules provide a simple GUI for controlling hardware, created using Julia packages like Gtk or Makie. This interface often allows for easy on/off toggling, parameter changes, and live readouts.
 
-### Export state method
-The current state of the individual instrument can be obtained using the function `export_state`. The output of the `export_state` function is organized as Attributes, Data and Children.  
+---
 
-Example: 
-```
-% obj = mic.lightsource.TCubeLaserDiode(SerialNo, Mode, MaxPower, WperA, TIARange);
-TIRFLaser642 = mic.lightsource.TCubeLaserDiode('64838719', 'Power', 80, 182.5,1);
-[Attributes, Data, Children] = TIRFLaser642.exportState()
-```
-`Attributes` is a structure with fields carrying information on the current state of the instrument. In the example, Attribute is a structure with fields `Power`, `IsOn` and `InstrumentName`. 
+## Installation Notes
 
-`Data` contain any data associated with the instrument.
+- **Julia Environment**: Ensure you have a compatible version of Julia installed.  
+- **Driver/SDK Requirements**: Most hardware devices require manufacturer-specific drivers and SDKs installed on your system (e.g., Thorlabs Kinesis for TCube devices, DCAM-API for Hamamatsu cameras, NI-DAQ for National Instruments cards).  
+- **Package Installation**:  
+  ```julia
+  using Pkg
+  Pkg.add("MicroscopeControl")
+  ```
+- **Initial Setup**: Depending on the device, you may need to provide the path to certain libraries (e.g., `.dll` or `.so` files). Check each hardware implementation’s documentation for details.
 
-`Children` contain export_state output from children instrument components (if any) called within the parent instrument class??. 
-
-
-### Functional test (funcTest) method
-Each instrument component class in MIC comes equipped with a static method functional test. The `funcTest` cycles through a series of pre-defined tests, uniquely selected for the corresponding instrument component, outputting success status. Common steps in the functional test method are creating the object, turning the instrument On/Off, change/modify state of the instrument, output exportState and deleting the object.  
-
-**It is important to know the input arguments needed for calling the class on a particular instrument component before calling the funcTest.** This information can be obtained by performing a `doc` function on the corresponding MIC class.
-
-Example: 
-```
-TCubeLaserDiode = mic.lightsource.TCubeLaserDiode('64838719','Power', 80, 182.5, 1)
-Success = TCubeLaserDiode.funcTest()
-```
-
-### Graphical user interface
-Instrument component modules in MicroscopeControl.jl also come equipped with graphical user interfaces (gui). Classes inheriting from the same instrument abstract class share a common gui, located in the abstract class folder. For all other instrument components, the corresponding gui scripts are stored in the instrument's class folder.
-
-Example: 
-```
-DynamixelServo.gui
-```
-
-### Full example
-
-See [mic_example.m](doc/mic_example.m) for an example of z-stack acquisition using various MIC low-level routines for a laser, camera and 3D stage.  (Note: this won't run properly without the appropriate hardware and Kinesis software installed!)  See also "Projects using MIC" below.
-
-## Installation notes
-Each instrument will be controlled by its own drivers, which must be installed on the system. In many cases, the manufacturer's software development kit (SDK) is provided to create custom applications for controlling the instrument. When installing the drivers, either a header file or dynamic-link library is installed. For example, the `MCLNanoDrive` class controls the Mad City Labs 3D Piezo stage and requires the `madlib.h` header file. During the first initialization of this class on a system, users are prompted to set the location of the `madlib.h` header file, typically located in `C:\Program Files\Mad City Labs\NanoDrive`. 
-
-Similarly, the `MCLMicroDrive` class controls the Mad City Labs Micro Stage and requires the `MicroDrive.dll` dynamic-link library. The first time this class is used on a given computer, the user will be prompted to select the location of `MicroDrive.dll`. On a Windows machine, this is typically placed by default in `C:\Program Files\Mad City Labs\MicroDrive\MicroDrive.dll` during the installation process (installation files provided by MCL).
-
-To set up the correct MATLAB path for MIC in startup.m (typically located in the Documents\MATLAB folder in the user's home directory), add the line
-```matlab
-run(fullfile(userpath, 'matlab-instrument-control', 'setupMIC'))
-```
-(for MATLAB 2017a or more recent versions).
+---
 
 ## Testing
-See [tests](tests) folder for unit tests of simulated classes, which in turn tests the various abstract classes the
-simulated classes are based on.  This is done automatically on a push or pull request to main.
 
-## Top-level files and directories
-name | description
----|---
-doc | miscellaneous documentation
-genDoc.m | generates Readme.md files for each MIC class
-LICENSE | MIT license
-mex64 | Windows executable mex files generated from those in mex_source
-mex_source | mex source files
-paper | JOSS paper
-README.md | this document
-setupMIC.m | set the MATLAB path correctly for MIC
-src | MATLAB code source
-tests | simulated functional tests
+MicroscopeControl.jl includes test scripts for simulated devices and real hardware (where supported). To run tests from the Julia REPL:
 
-## High-level implementation of MIC classes
+```julia
+using Pkg
+Pkg.test("MicroscopeControl")
+```
 
-High-level implementations of MIC classes are demonstrated through:
-- Custom-built Sequential microscope available on [Sequential SR Microscope](https://github.com/LidkeLab/microscopes-seqsr) specifically designed for dSTORM and DNA-PAINT based super-resolution imaging.
-- TIRF based super-resolution microscope available on [TIRF SR Microscope](https://github.com/LidkeLab/microscope-tirf). 
+These tests ensure that abstract interfaces and concrete implementations behave as expected.
 
-## Projects using MIC
-- David J. Schodt, Farzin Farzam, Sheng Liu, and Keith A. Lidke, "Automated multi-target super-resolution microscopy with trust regions," Biomed. Opt. Express 14, 429-440 (2023). https://doi.org/10.1364/BOE.477501
-- Fazel, M., Wester, M.J., Schodt, D.J. et al. High-precision estimation of emitter positions using Bayesian grouping of localizations. Nat Commun 13, 7152 (2022). https://doi.org/10.1038/s41467-022-34894-2
+---
 
-## Related software
-- `Micro-Manager` is a customizable platform for controlling microscopy systems, supporting a wide range of hardware devices, and is primarily built on Java. This software can be obtained from: https://micro-manager.org/
-- `PYME (PYthon Microscopy Environment)` is a Python based environment designed to facilitate image acquisition and data analysis in microscopy, with a focus on super-resolution techniques like PALM, STORM, and PAINT. This software can be obtained from GitHub: https://github.com/python-microscopy/python-microscopy
-- `LSMAQ` is a lightweight and flexible laser scanning microscope acquisition software written in MATLAB. It supports National Instruments hardware for galvo-based scanning. This software can be obtained from GitHub: https://github.com/danionella/lsmaq
+## Top-Level Files and Directories
+
+| Name         | Description                                                     |
+|--------------|-----------------------------------------------------------------|
+| LICENSE      | MIT license                                                    |
+| README.md    | This document                                                  |
+| src          | Julia code source (main package contents)                      |
+| docs         | Documentation files for MicroscopeControl.jl                   |
+| tests        | Contains unit tests and example hardware tests                 |
+| .github      | GitHub continuous integration (CI) workflows                   |
+
+---
+
+## High-Level Usage Examples
+
+- **Sequential or TIRF Super-Resolution**: By importing multiple hardware modules (cameras, stages, lasers), you can orchestrate advanced imaging protocols.  
+- **Live Acquisition**: Start cameras in continuous mode, adjust lasers for illumination, and read data in real time.  
+- **Automated Routines**: Use Julia’s scripting capabilities to run experiments, move stages, and log data automatically.
+
+---
+
+## Projects Using MicroscopeControl
+- Multiple super-resolution microscopy setups in the Lidke Lab.  
+- Automated laser control in time-lapse and multi-color imaging experiments.  
+- Potential expansion to additional optical devices and novel imaging platforms.
+
+---
+
+## Related Software
+- **Micro-Manager**: Java-based platform for device control.  
+- **PYME** (Python Microscopy Environment): Python-based imaging platform for super-resolution.  
+- **LSMAQ**: MATLAB-based laser scanning microscope acquisition software.
+
+MicroscopeControl.jl provides Julia-centric hardware control, offering a bridge for scientists who prefer Julia’s performance and syntax.
+
+---
 
 ## Documentation
-The detailed documentation of each MIC class can be found here: [MIC Classes](doc/MICclasses.md).
+Full, auto-generated documentation is hosted on GitHub Pages:
+- [Stable Docs](https://LidkeLab.github.io/MicroscopeControl.jl/stable/)
+- [Development Docs](https://LidkeLab.github.io/MicroscopeControl.jl/dev/)
+
+Documentation includes API references for each abstract interface and hardware module.
+
+---
 
 ## Contributions
-We welcome contributions to the MIC project. Please see [CONTRIBUTING](doc/CONTRIBUTING.md) for more information.
+Contributions are welcome! Please see our guidelines in the repository’s CONTRIBUTING.md for more details. We encourage pull requests that add support for new hardware or improve existing modules.
