@@ -5,7 +5,7 @@
 [![Build Status](https://github.com/LidkeLab/MicroscopeControl.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/LidkeLab/MicroscopeControl.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Coverage](https://codecov.io/gh/LidkeLab/MicroscopeControl.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/LidkeLab/MicroscopeControl.jl)
 
-MicroscopeControl.jl is a Julia package designed to streamline the control of optical microscopy hardware, providing a flexible and high-performance solution for biologists. Julia is a high-level, high-performance language optimized for scientific computing. It is fast, dynamic, reproducible, and open-source, using multiple dispatch to facilitate both object-oriented and functional programming patterns.
+MicroscopeControl.jl is a Julia package designed to streamline the control of optical microscopy hardware, providing a flexible and high-performance solution for microscope developers. 
 
 MicroscopeControl.jl utilizes three layers of code: high-level, low-level, and user-level. High-level code is generic, providing interfaces for stages, light sources, cameras, etc. Low-level code handles hardware-specific implementations, defining functions for individual microscope components. This design heavily leverages Julia’s multiple dispatch, enabling different behaviors for the same function based on argument types. The user-level code integrates these layers to control the microscope system.
 
@@ -74,21 +74,6 @@ Pkg.test("MicroscopeControl")
 ```
 
 These tests ensure that abstract interfaces and concrete implementations behave as expected.
-
----
-
-## Top-Level Files and Directories
-
-| Name         | Description                                                     |
-|--------------|-----------------------------------------------------------------|
-| LICENSE      | MIT license                                                    |
-| README.md    | This document                                                  |
-| src          | Julia code source (main package contents)                      |
-| docs         | Documentation files for MicroscopeControl.jl                   |
-| tests        | Contains unit tests and example hardware tests                 |
-| .github      | GitHub continuous integration (CI) workflows                   |
-
----
 
 ## High-Level Usage Examples
 
