@@ -1,3 +1,6 @@
+"""
+HardwareImplementations module is a container for all hardware implementations
+"""
 module HardwareImplementations
 
 include("simulated_camera/SimulatedCamera.jl")

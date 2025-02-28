@@ -1,4 +1,7 @@
 
+"""
+This module is a container for all hardware interfaces
+"""
 module HardwareInterfaces
 
 using ..MicroscopeControl

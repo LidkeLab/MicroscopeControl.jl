@@ -1,3 +1,6 @@
+"""
+MicroscopeControl is the main module for the MicroscopeControl package. It exports all the abstract types and methods for the instrument, as well as the implementations for the hardware interfaces. It also exports the methods for saving data to an HDF5 file, and the methods for controlling the camera, stage, light source, DAQ, and FPGA. Finally, it re-exports the GUI method for the user interface.
+"""
 module MicroscopeControl
 
 using HDF5

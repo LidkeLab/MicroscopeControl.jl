@@ -1,3 +1,6 @@
+"""
+    AbstractInstrument is an abstract type that all instruments should inherit from.
+"""
 abstract type AbstractInstrument end
 
 """
