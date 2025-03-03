@@ -24,19 +24,19 @@ mutable struct CrystaLaser <: LightSource
 end
 
 """
-    CrystaLaser(unique_id::String, properties::LightSourceProperties, laser_color::String, daq::NIdaq, min_voltage::Float64, max_voltage::Float64, channelsAO::Array{String}, channelsDO::Array{String})
+    CrystaLaser(unique_id::String, properties::LightSourceProperties, laser_color::String)
 
 Create a new CrystaLaser object.
+
+info
 
 # Arguments
 - `unique_id::String`: A unique identifier for the light source.
 - `properties::LightSourceProperties`: The properties of the light source.
 - `laser_color::String`: The color of the laser.
-- `daq::NIdaq`: The NIDAQ card.
-- `min_voltage::Float64`: The minimum voltage of the laser.
-- `max_voltage::Float64`: The maximum voltage of the laser.
-- `channelsAO::Array{String}`: The channels of the NIDAQ card.
-- `channelsDO::Array{String}`: The channels of the NIDAQ card.
+
+# Example
+
 """
 function CrystaLaser(;
     unique_id::String="CrystaLaser",

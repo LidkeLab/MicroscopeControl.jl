@@ -96,7 +96,7 @@ end
 """
     export_state(light::TCubeLaser)
 """
-function export_state(light::TCubeLaser)
+function export_state(light::TCubeLaser, sth)
 
     attributes = Dict(
         "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,
