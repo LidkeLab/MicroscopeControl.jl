@@ -1,37 +1,37 @@
-"""
-    initialize(stage::Stage)
+# """
+#     initialize(stage::Stage)
 
-Initializes the given stage. This function is expected to be implemented for each specific stage type.
+# Initializes the given stage. This function is expected to be implemented for each specific stage type.
 
-# Arguments
-- `stage::Stage`: The stage to be initialized.
+# # Arguments
+# - `stage::Stage`: The stage to be initialized.
 
-# Description
-This function is responsible for setting up the stage for operation. This may include tasks such as establishing a connection to the stage, setting initial parameters, or moving the stage to a default position. The specific actions taken during initialization may vary depending on the specific type of stage.
+# # Description
+# This function is responsible for setting up the stage for operation. This may include tasks such as establishing a connection to the stage, setting initial parameters, or moving the stage to a default position. The specific actions taken during initialization may vary depending on the specific type of stage.
 
-"""
+# """
 
-function initialize(stage::Stage)
-    #function to initialize stage
-    @error "initialize not implemented"
-end
+# function initialize(stage::Stage)
+#     #function to initialize stage
+#     @error "initialize not implemented"
+# end
 
-"""
-    shutdown(stage::Stage)
+# """
+#     shutdown(stage::Stage)
 
-Shuts down the given stage. This function is expected to be implemented for each specific stage type.
+# Shuts down the given stage. This function is expected to be implemented for each specific stage type.
 
-# Arguments
-- `stage::Stage`: The stage to be shut down.
+# # Arguments
+# - `stage::Stage`: The stage to be shut down.
 
-# Description
-This function is responsible for safely shutting down the stage. This may include tasks such as stopping any ongoing motion, disconnecting from the stage, or resetting the stage to a safe state. The specific actions taken during shutdown may vary depending on the specific type of stage.
+# # Description
+# This function is responsible for safely shutting down the stage. This may include tasks such as stopping any ongoing motion, disconnecting from the stage, or resetting the stage to a safe state. The specific actions taken during shutdown may vary depending on the specific type of stage.
 
-"""
-function shutdown(stage::Stage)
-    #function to shutdown stage
-    @error "shutdown not implemented"
-end
+# """
+# function shutdown(stage::Stage)
+#     #function to shutdown stage
+#     @error "shutdown not implemented"
+# end
 
 """
     move(stage::Stage, x::Float64, y::Float64, z::Float64)
@@ -167,7 +167,7 @@ function driftcorrection(stage::Stage, xtoggle::Bool, ytoggle::Bool, ztoggle::Bo
     @error "driftcorrection not implemented"
 end
 
-function export_state(stage::Stage)
-    #function to export stage state
-    @error "export_state not implemented"
-end
+# function export_state(stage::Stage)
+#     #function to export stage state
+#     @error "export_state not implemented"
+# end
