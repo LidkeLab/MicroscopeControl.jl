@@ -3,6 +3,8 @@ HardwareImplementations module is a container for all hardware implementations
 """
 module HardwareImplementations
 
+using ..MicroscopeControl
+
 include("simulated_camera/SimulatedCamera.jl")
 include("dcam4_camera/DCAM4.jl")
 include("pi_stage/PI.jl")

@@ -21,6 +21,18 @@ function save_attributes_and_data(filename::String, group::String, attributes::D
     end
 end
 
+"""
+    save_group_recursive(h5parent, group_name::String, attributes::Dict, data, children)
+
+Recursively saves hierarchical data to an HDF5 file.
+
+# Arguments
+- `h5parent`: Parent HDF5 group
+- `group_name::String`: Name of the HDF5 group
+- `attributes::Dict`: Dictionary of attributes to save
+- `data::Any`: Data to save in the group
+- `children::Dict{String,Any}`: Dictionary of child groups
+"""
 function save_group_recursive(h5parent, group_name::String, attributes::Dict, data, children)
     h5group = create_group(h5parent, group_name)
 

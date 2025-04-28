@@ -1,19 +1,5 @@
 
 """
-    initialize(lightsource::LightSource)
-
-Initialize the light source.
-
-# Arguments
-- `lightsource::LightSource`: A LightSource type.
-"""
-function initialize(lightsource::LightSource)
-    # initialize the lightsource
-    @error "initialize not implemented"
-end
-
-
-"""
     setpower(lightsource::LightSource,power::Float64)
 
 Set the power of the lightsource.
@@ -52,24 +38,4 @@ Turn off the light source.
 function light_off(lightsource::LightSource)
     # turn off the lightsource
     @error "off not implemented"
-end
-
-"""
-    shutdown(lightsource::LightSource)
-"""
-function shutdown(lightsource::LightSource)
-    # shutdown the lightsource
-    @error "shutdown not implemented"
-end
-    
-    """
-        export_state(properties::LightSourceProperties)
-    """
-function export_state(lightsource::LightSource)
-    # attributes = Dict("power_unit" => properties.power_unit, "power" => properties.power, "is_on" => properties.is_on, "min_power" => properties.min_power, "max_power" => properties.max_power)
-    # data = nothing
-    # children = Dict()
-    # return attributes, data, children
-    # export the state of the lightsource
-    @error "export_state not implemented"
 end

@@ -5,9 +5,8 @@ This module is a container for all hardware interfaces
 module HardwareInterfaces
 
 using ..MicroscopeControl
-# import ..MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
-# export AbstractInstrument 
-# export export_state, initialize, shutdown
+import ..MicroscopeControl: AbstractInstrument
+# import ..MicroscopeControl: export_state, initialize, shutdown
 
 
 include("camera_interface/CameraInterface.jl")

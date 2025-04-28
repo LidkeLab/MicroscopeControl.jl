@@ -101,18 +101,3 @@ Delete a task.
 function deletetask(daq::DAQ,t::Any)
     @error "deletetask not implemented"
 end 
-
-"""
-    export_state(daq::DAQ)
-
-Export the state of the DAQ.
-
-# Arguments
-- `daq::DAQ`: A DAQ type.
-
-# Returns
-
-"""
-function export_state(daq::DAQ)
-    @error "export_state not implemented"
-end
