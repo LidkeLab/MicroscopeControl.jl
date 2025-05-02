@@ -58,3 +58,34 @@ function StageInterface.driftcorrection(stage::SimStage3d, xtoggle::Bool, ytoggl
     println("Setting stage drift correction state...")
     stage.driftcorrectionstatus = (xtoggle, ytoggle, ztoggle)
 end
+
+"""
+    export_state(stage::SimStage3d)
+"""
+function export_state(stage::SimStage3d)
+    attributes = Dict{String, Any}(
+        "label" => stage.label,
+        "id" => stage.id,
+        "dimensions" => stage.dimensions,
+        "position_x" => stage.real_x,
+        "position_y" => stage.real_y,
+        "position_z" => stage.real_z,
+        "target_x" => stage.targ_x,
+        "target_y" => stage.targ_y,
+        "target_z" => stage.targ_z,
+        "range_x" => stage.range_x,
+        "range_y" => stage.range_y,
+        "range_z" => stage.range_z,
+        "connected" => stage.connectionstatus,
+        "servo_status_x" => stage.servostatus[1],
+        "servo_status_y" => stage.servostatus[2],
+        "servo_status_z" => stage.servostatus[3],
+        "drift_correction_status_x" => stage.driftcorrectionstatus[1],
+        "drift_correction_status_y" => stage.driftcorrectionstatus[2],
+        "drift_correction_status_z" => stage.driftcorrectionstatus[3]
+    )
+    data = nothing
+    children = Dict{String, Any}()
+
+    return attributes, data, children
+end

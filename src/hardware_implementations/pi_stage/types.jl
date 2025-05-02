@@ -22,9 +22,7 @@ end
 Constructor for the PI Stage Type, allows for creation on "empty", disconnected stage
 
 Initialize function must be called to connect to the stage, so the constructor just sets default values
-
 """
-
 function PIStage(;
     stagelabel::String = "PI-U751",
     units::String = "Milimeters",

@@ -32,3 +32,5 @@ function XEM(;
     )
     return XEM(fpgalabel,serialnumber,devicehandle,exposure_bit,exposure_time,enable,task_trigger,task_enable,bitfile,volt_bit,daq)
 end
+
+### export_state for later

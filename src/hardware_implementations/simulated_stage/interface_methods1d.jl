@@ -51,3 +51,24 @@ function StageInterface.driftcorrection(stage::SimStage1d, xtoggle::Bool)
     println("Setting stage drift correction state...")
     stage.driftcorrectionstatus = xtoggle
 end
+
+"""
+    export_state(stage::SimStage1d)
+"""
+function export_state(stage::SimStage1d)
+    attributes = Dict{String, Any}(
+        "label" => stage.label,
+        "id" => stage.id,
+        "dimensions" => stage.dimensions,
+        "position_x" => stage.real_x,
+        "target_x" => stage.targ_x,
+        "range_x" => stage.range_x,
+        "connected" => stage.connectionstatus,
+        "servo_status" => stage.servostatus,
+        "drift_correction_status" => stage.driftcorrectionstatus
+    )
+    data = nothing
+    children = Dict{String, Any}()
+
+    return attributes, data, children
+end

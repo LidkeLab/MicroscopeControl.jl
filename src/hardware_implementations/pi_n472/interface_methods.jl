@@ -102,3 +102,29 @@ end
 function StageInterface.driftcorrection(stage::N472, axisId::Int, dcON::BOOL)
     @error "Drift correction not supported by $(stage.stagelabel)"
 end
+
+"""
+    export_state(stage::N472)
+"""
+function export_state(stage::N472)
+    attributes = Dict{String, Any}(
+        "stage_label" => stage.stagelabel,
+        "units" => stage.units,
+        "dimensions" => stage.dimensions,
+        "axes" => join(stage.axes, " "),
+        "connected" => stage.connectionstatus,
+        "id" => stage.id,
+        "position" => copy(stage.pos),
+        "min_position" => copy(stage.minpos),
+        "max_position" => copy(stage.maxpos),
+        "home_position" => copy(stage.homepos),
+        "velocity" => copy(stage.velocity),
+        "is_on_target" => [Bool(x) for x in stage.isontarget],  # Convert BOOL to Julia Bool
+        "servo_status" => [Bool(x) for x in stage.servostatus]  # Convert BOOL to Julia Bool
+    )
+    
+    data = nothing
+    children = Dict{String, Any}()
+
+    return attributes, data, children
+end

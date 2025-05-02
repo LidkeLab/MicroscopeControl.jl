@@ -7,7 +7,7 @@ using GLMakie
 using Images
 using ...MicroscopeControl
 
-import ...MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
+# import ...MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
 
 export LightSource, LightSourceProperties
 export setpower, light_on, light_off #, shutdown, initialize, export_state

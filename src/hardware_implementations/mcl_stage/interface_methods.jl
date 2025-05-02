@@ -64,3 +64,30 @@ function StageInterface.getrange(stage::MCLStage)
 
     return (stage.range_x, stage.range_y, stage.range_z)
 end
+
+"""
+    export_state(stage::MCLStage)
+"""
+function export_state(stage::MCLStage)
+    attributes = Dict{String, Any}(
+        "stage_label" => stage.stagelabel,
+        "units" => stage.units,
+        "id" => stage.id,
+        "dimensions" => stage.dimensions,
+        "connected" => stage.connectionstatus,
+        "position_x" => stage.real_x,
+        "position_y" => stage.real_y,
+        "position_z" => stage.real_z,
+        "target_x" => stage.targ_x,
+        "target_y" => stage.targ_y,
+        "target_z" => stage.targ_z,
+        "range_x" => stage.range_x,
+        "range_y" => stage.range_y,
+        "range_z" => stage.range_z
+    )
+    
+    data = nothing
+    children = Dict{String, Any}()
+
+    return attributes, data, children
+end
