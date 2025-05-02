@@ -77,3 +77,34 @@ function shutdown(light::CrystaLaser)
     NIDAQcard.setvoltage(daq,t, voltage)
     NIDAQcard.deletetask(daq,t)
 end
+
+"""
+    export_state(light::CrystaLaser)
+"""
+function export_state(light::CrystaLaser)
+    attributes = Dict{String, Any}(
+        "unique_id" => light.unique_id,
+        "laser_color" => light.laser_color,
+        # Light source properties
+        "power_unit" => light.properties.power_unit,
+        "power" => light.properties.power,
+        "is_on" => light.properties.is_on,
+        "min_power" => light.properties.min_power,
+        "max_power" => light.properties.max_power,
+        # DAQ control parameters
+        "min_voltage" => light.min_voltage,
+        "max_voltage" => light.max_voltage,
+        # DAQ channels
+        "channels_AO" => copy(light.channelsAO),
+        "channels_DO" => copy(light.channelsDO)
+    )
+    
+    data = nothing
+    
+    # Include the DAQ state as a child component
+    children = Dict{String, Any}(
+        "daq" => DAQInterface.export_state(light.daq)
+    )
+
+    return attributes, data, children
+end

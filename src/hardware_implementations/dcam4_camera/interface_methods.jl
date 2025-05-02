@@ -265,16 +265,6 @@ end
 
 """
     export_state(camera::DCAM4Camera)
-
-Export the state of the camera to a dictionary.
-
-# Arguments
-- `camera::DCAM4Camera`: A DCAM4Camera type.
-
-# Returns
-- `attributes::Dict`: A dictionary of attributes.
-- `data`: The data of the camera.
-- `children::Dict`: A dictionary of children.
 """
 function export_state(camera::DCAM4Camera)
     attributes = Dict(
@@ -306,4 +296,13 @@ function export_state(camera::DCAM4Camera)
     data = nothing
     children = Dict()
     return attributes, data, children
+end
+
+function shutdown(camera::DCAM4Camera)
+    dcamdev_close(camera.camera_handle)
+    dcamapi_uninit()
+end
+
+function initialize(camera::DCAM4Camera)
+    return nothing
 end

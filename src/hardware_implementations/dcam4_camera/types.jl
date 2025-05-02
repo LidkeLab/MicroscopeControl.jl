@@ -61,13 +61,4 @@ function DCAM4Camera(dev_id::Int = 0;
     data = zeros(UInt16, im_width, im_height)
 
     DCAM4Camera(unique_id, camera_format, dco.hdcam, exposure_time, frame_rate, roi, capture_mode, trigger_mode, sequence_length, last_error, is_running, camerastate,data)
-end 
-
-function shutdown(camera::DCAM4Camera)
-    dcamdev_close(camera.camera_handle)
-    dcamapi_uninit()
-end
-
-function initialize(camera::DCAM4Camera)
-    return nothing
 end

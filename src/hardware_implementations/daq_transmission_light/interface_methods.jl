@@ -52,3 +52,33 @@ function shutdown(light::DaqTrLight)
     NIDAQcard.setvoltage(daq,t, voltage)
     NIDAQcard.deletetask(daq,t)
 end
+
+"""
+    export_state(light::DaqTrLight)
+"""
+function export_state(light::DaqTrLight)
+    attributes = Dict{String, Any}(
+        "unique_id" => light.unique_id,
+        # Light source properties
+        "power_unit" => light.properties.power_unit, 
+        "power" => light.properties.power, 
+        "is_on" => light.properties.is_on,
+        "min_power" => light.properties.min_power, 
+        "max_power" => light.properties.max_power,
+        # DAQ control parameters
+        "min_voltage" => light.min_voltage,
+        "max_voltage" => light.max_voltage,
+        # DAQ channels
+        "channels_AO" => copy(light.channelsAO),  # Analog output channels
+        "channels_DO" => copy(light.channelsDO)   # Digital output channels
+    )
+    
+    data = nothing
+    
+    # Include the DAQ state as a child component
+    children = Dict{String, Any}(
+        "daq" => DAQInterface.export_state(light.daq)
+    )
+
+    return attributes, data, children
+end
