@@ -73,17 +73,12 @@ function export_state(stage::SimStage3d)
         "target_x" => stage.targ_x,
         "target_y" => stage.targ_y,
         "target_z" => stage.targ_z,
-        "range_x" => stage.range_x,
-        "range_y" => stage.range_y,
-        "range_z" => stage.range_z,
-        "connected" => stage.connectionstatus,
-        "servo_status_x" => stage.servostatus[1],
-        "servo_status_y" => stage.servostatus[2],
-        "servo_status_z" => stage.servostatus[3],
-        "drift_correction_status_x" => stage.driftcorrectionstatus[1],
-        "drift_correction_status_y" => stage.driftcorrectionstatus[2],
-        "drift_correction_status_z" => stage.driftcorrectionstatus[3]
+        "range_x" => isa(stage.range_x, Tuple) ? collect(stage.range_x) : stage.range_x,
+        "range_y" => isa(stage.range_y, Tuple) ? collect(stage.range_y) : stage.range_y,
+        "range_z" => isa(stage.range_z, Tuple) ? collect(stage.range_z) : stage.range_z,
+        # Other attributes...
     )
+    
     data = nothing
     children = Dict{String, Any}()
 

@@ -79,17 +79,22 @@ end
     export_state(light::VortranLaser)
 """
 function export_state(light::VortranLaser)
-
     attributes = Dict(
-                     "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,
-                     "min_current" => light.min_current, "max_current" => light.max_current,
-                     "max_setcurrent" => light.max_setcurrent, "max_setpoint" => light.max_setpoint,
-                     "power_unit" => light.properties.power_unit, "power" => light.properties.power, "is_on" => light.properties.is_on,
-                     "min_power" => light.properties.min_power, "max_power" => light.properties.max_power
+                     "unique_id" => light.unique_id, 
+                     "laser_color" => light.laser_color,
+                     "min_voltage" => light.min_voltage, 
+                     "max_voltage" => light.max_voltage,
+                     "power_unit" => light.properties.power_unit, 
+                     "power" => light.properties.power, 
+                     "is_on" => light.properties.is_on,
+                     "min_power" => light.properties.min_power, 
+                     "max_power" => light.properties.max_power,
+                     "channelsAO" => light.channelsAO,
+                     "channelsDO" => light.channelsDO
                      )
     data = nothing
     children = Dict(
-        "daq" => DAQInterface.export_state(light.daq)
+        "daq" => export_state(light.daq)
         )
 
     return attributes, data, children

@@ -81,9 +81,9 @@ function export_state(stage::MCLStage)
         "target_x" => stage.targ_x,
         "target_y" => stage.targ_y,
         "target_z" => stage.targ_z,
-        "range_x" => stage.range_x,
-        "range_y" => stage.range_y,
-        "range_z" => stage.range_z
+        "range_x" => isa(stage.range_x, Tuple) ? collect(stage.range_x) : stage.range_x,
+        "range_y" => isa(stage.range_y, Tuple) ? collect(stage.range_y) : stage.range_y,
+        "range_z" => isa(stage.range_z, Tuple) ? collect(stage.range_z) : stage.range_z
     )
     
     data = nothing

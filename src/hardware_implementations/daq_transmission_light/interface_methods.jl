@@ -77,7 +77,7 @@ function export_state(light::DaqTrLight)
     
     # Include the DAQ state as a child component
     children = Dict{String, Any}(
-        "daq" => DAQInterface.export_state(light.daq)
+        "daq" => export_state(light.daq)
     )
 
     return attributes, data, children

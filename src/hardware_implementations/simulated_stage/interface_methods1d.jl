@@ -62,7 +62,7 @@ function export_state(stage::SimStage1d)
         "dimensions" => stage.dimensions,
         "position_x" => stage.real_x,
         "target_x" => stage.targ_x,
-        "range_x" => stage.range_x,
+        "range_x" => isa(stage.range_x, Tuple) ? collect(stage.range_x) : stage.range_x,
         "connected" => stage.connectionstatus,
         "servo_status" => stage.servostatus,
         "drift_correction_status" => stage.driftcorrectionstatus

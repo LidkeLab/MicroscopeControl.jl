@@ -73,14 +73,8 @@ function export_state(stage::PIStage)
         "position_y" => stage.real_y,
         "target_x" => stage.targ_x,
         "target_y" => stage.targ_y,
-        "range_x" => stage.range_x,
-        "range_y" => stage.range_y,
-        "is_moving_x" => stage.ismoving[1],
-        "is_moving_y" => stage.ismoving[2],
-        "servo_status_x" => stage.servostatus[1],
-        "servo_status_y" => stage.servostatus[2],
-        "velocity_x" => stage.velocity[1],
-        "velocity_y" => stage.velocity[2]
+        "range_x" => collect(stage.range_x),  # Convert tuple to array
+        "range_y" => collect(stage.range_y)   # Convert tuple to array
     )
     
     data = nothing

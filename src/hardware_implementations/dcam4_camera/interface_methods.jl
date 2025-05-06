@@ -267,31 +267,28 @@ end
     export_state(camera::DCAM4Camera)
 """
 function export_state(camera::DCAM4Camera)
+    # Convert frame_rate if it's a tuple
+    frame_rate_value = isa(camera.frame_rate, Tuple) ? collect(camera.frame_rate) : camera.frame_rate
+    
     attributes = Dict(
-        "device_id" => camera.dev_id, 
         "unique_id" => camera.unique_id,  
         "camera_format_x_pixels" => camera.camera_format.x_pixels,
         "camera_format_y_pixels" => camera.camera_format.y_pixels, 
         "camera_format_pixelsize" => camera.camera_format.pixelsize,
         "camera_format_gain" => camera.camera_format.gain, 
-        "camera_handle" => camera.camera_handle, 
         "exposure_time" => camera.exposure_time,
-        "frame_rate" => camera.frame_rate, 
-        "roi_x" => camera.roi.x, 
-        "roi_y" => camera.roi.y, 
+        "frame_rate" => frame_rate_value, # Use converted value
+        "roi_x" => camera.roi.x_start, 
+        "roi_y" => camera.roi.y_start, 
         "roi_width" => camera.roi.width,
         "roi_height" => camera.roi.height, 
-        "capture_mode" => camera.capture_mode, 
-        "trigger_mode" => camera.trigger_mode,
+        "capture_mode" => Int(camera.capture_mode),
+        "trigger_mode" => Int(camera.trigger_mode),
         "sequence_length" => camera.sequence_length, 
-        "last_error" => camera.last_error, 
+        "last_error" => Int(camera.last_error),
         "is_running" => camera.is_running,
         "camerastate" => camera.camerastate
     )
-
-    # Get camera properties and merge with base attributes
-    camera_properties = extract_properties(camera)
-    merge!(attributes, Dict("camera_extracted_properties" => camera_properties))
 
     data = nothing
     children = Dict()
