@@ -30,7 +30,7 @@ using .HardwareImplementations.CrystaLaserControl
 using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
 
-# Exportimg all modules
+# Export all HardwareImplementations modules
 export DCAM4, SimulatedCamera, SimulatedStage, PI, MadCityLabs, PI_N472, ThorCamCSC
 export SimulatedLight, NIDAQcard, TCubeLaserControl, TransmissionDaqControl
 export CrystaLaserControl, VortranLaserControl, OK_XEM
