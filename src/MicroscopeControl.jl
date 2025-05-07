@@ -43,6 +43,7 @@ export SimCamera, DCAM4Camera, ThorCamCSC
 export start_sequence, start_live
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime, settriggermode, setroi!, setexposuretime!
+export dcamprop_getvalue, DCAM_IDPROP_INTERNALFRAMERATE, CameraROI, dcamapi_uninit
 
 # Re-export stage implementations
 export PIStage, MCLStage, SimStage, N472
