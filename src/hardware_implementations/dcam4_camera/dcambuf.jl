@@ -101,17 +101,25 @@ function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
 end
 
 function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
-
     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
     err, height = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_HEIGHT))
     err, rowbytes = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_ROWBYTES))
     err, type = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_PIXELTYPE))
 
     if DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO16
-        data = zeros(UInt16, Int(height), Int(width))
+        ElementType = UInt16
+        bytes_per_pixel = 2
     elseif DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO8
-        data = zeros(UInt8, Int(height), Int(width))
+        ElementType = UInt8
+        bytes_per_pixel = 1
+    else
+        @error "Unsupported pixel type"
+        return nothing
     end
+
+    stride_elements = Int(rowbytes) ÷ bytes_per_pixel
+    # Allocate a flat buffer that matches the camera's stride (row-major)
+    temp_buffer = Vector{ElementType}(undef, stride_elements * Int(height))
 
     dcf = DCAMBUF_FRAME()
     dcf.iFrame = iFrame
@@ -119,15 +127,25 @@ function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
     dcf.height = Int32(height)
     dcf.rowbytes = Int32(rowbytes)
     dcf.type = DCAM_PIXELTYPE(Int32(type))
-    dcf.buf = pointer(data)
+    dcf.buf = pointer(temp_buffer)
 
-    pFrame=Ref(dcf)
+    pFrame = Ref(dcf)
 
     err = @ccall "dcamapi.dll".dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Copy Frame"
+        return nothing
     end
-    return data
+
+    # Now copy only the valid pixels from each row
+    data = Array{ElementType}(undef, Int(height), Int(width))
+    for y in 1:Int(height)
+        src_start = (y-1)*stride_elements + 1
+        src_end = src_start + Int(width) - 1
+        data[y, :] .= temp_buffer[src_start:src_end]
+    end
+
+    return permutedims(data, (2,1))  # Transpose for display
 end
 
 function dcambuf_getlastframe(hdcam::Ptr{Cvoid})

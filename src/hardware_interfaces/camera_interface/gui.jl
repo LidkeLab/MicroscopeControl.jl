@@ -29,12 +29,12 @@ function create_display(camera, display_function)
     # Setup display
     im_height = camera.roi.height
     im_width = camera.roi.width
-    println("Creating display with dimensions: $im_height x $im_width")
-    img = Observable(rand(Gray{N0f8}, im_height, im_width))
+    println("Creating display with dimensions: $im_width x $im_height")
+    img = Observable(rand(Gray{N0f8}, im_width, im_height))
 
     imgplot = image(img,
         axis=(aspect=DataAspect(),),
-        figure=(figure_padding=0, resolution=(im_height, im_width)), interpolate=false)
+        figure=(figure_padding=0, resolution=(im_width, im_height)), interpolate=false)
     # Create an Observable for the text
     text_data = Observable("Initial Text")
     neon_green = RGB(0.2, 1, 0.2)
