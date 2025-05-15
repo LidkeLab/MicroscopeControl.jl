@@ -100,6 +100,7 @@ function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
     return err
 end
 
+# Old version of dcambuf_getframe that was not working properly for rectangular ROIs
 # function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
 
 #     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
@@ -158,7 +159,7 @@ function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
     dcf.height = Int32(height)
     dcf.rowbytes = Int32(rowbytes)
     dcf.type = DCAM_PIXELTYPE(Int32(type))
-    dcf.buf = pointer(temp_buffer)
+    dcf.buf = pointer(temp_buffer) # Allocatring a 1D array circumvents the problem with Julia arrays being column-major and DCAM camera being row-major
 
     pFrame = Ref(dcf)
 
