@@ -100,6 +100,37 @@ function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
     return err
 end
 
+# function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
+
+#     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
+#     err, height = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_HEIGHT))
+#     err, rowbytes = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_ROWBYTES))
+#     err, type = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_PIXELTYPE))
+
+#     if DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO16
+#         data = zeros(UInt16, Int(height), Int(width))
+#     elseif DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO8
+#         data = zeros(UInt8, Int(height), Int(width))
+#     end
+
+#     dcf = DCAMBUF_FRAME()
+#     dcf.iFrame = iFrame
+#     dcf.width = Int32(width)
+#     dcf.height = Int32(height)
+#     dcf.rowbytes = Int32(rowbytes)
+#     dcf.type = DCAM_PIXELTYPE(Int32(type))
+#     dcf.buf = pointer(data)
+
+#     pFrame=Ref(dcf)
+
+#     err = @ccall "dcamapi.dll".dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
+#     if is_failed(err)
+#         @error "DCAM Failed to Copy Frame"
+#     end
+#     return data
+# end
+
+
 function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
     err, height = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_HEIGHT))
@@ -137,15 +168,17 @@ function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
         return nothing
     end
 
-    # Now copy only the valid pixels from each row
     data = Array{ElementType}(undef, Int(height), Int(width))
-    for y in 1:Int(height)
-        src_start = (y-1)*stride_elements + 1
-        src_end = src_start + Int(width) - 1
-        data[y, :] .= temp_buffer[src_start:src_end]
-    end
+    # If there was padding; but here we assume no padding and use reshape instead
+    # for y in 1:Int(height)
+    #     src_start = (y-1)*stride_elements + 1
+    #     src_end = src_start + Int(width) - 1
+    #     data[y, :] .= temp_buffer[src_start:src_end]
+    # end
+    data = reshape(temp_buffer, (Int(width), Int(height)))
 
-    return permutedims(data, (2,1))  # Transpose for display
+    return data 
+    # return permutedims(data, (2,1))  # Transpose for display if we don't use reshape
 end
 
 function dcambuf_getlastframe(hdcam::Ptr{Cvoid})
