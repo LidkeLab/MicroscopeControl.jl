@@ -1,11 +1,12 @@
-"""
-SLMInterface is a module for controlling a Spatial Light Modulator (SLM)
-"""
+# Spatial Light Modulator
 module SLMInterface
 
+using GLMakie
+using Images
 using ...MicroscopeControl
 
-# import ...MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
+export SLM, Pupil
+export displayimage, displayzernike, displayblaze
 
 include("interface_types.jl")
 include("interface_functions.jl")

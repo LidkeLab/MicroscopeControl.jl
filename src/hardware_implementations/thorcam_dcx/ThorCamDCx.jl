@@ -1,25 +1,27 @@
-# Thorlabs compact scientific camera
+# Thorlabs DCx camera
 
-module ThorCamCSC
+module ThorCamDCx
 
 using ...MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
+using CEnum
 
 import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
 import ...MicroscopeControl: export_state, initialize, shutdown
 
-export ThorCamCSCCamera, gui, shutdown
+export ThorcamDCXCamera, gui, shutdown
 export getlastframe, capture, live, sequence, abort, getdata
-export set_exposuretime, set_triggermode, set_roi
+export setexposuretime!, setroi!
+
+
+const uc480 = "C:\\Windows\\System32\\uc480_64.dll"
+
 
 # include statements
 
+include("constants_uc480.jl")
+include("functions_uc480.jl")
 include("types.jl")
-include("thorcamcsc_sdk.jl")
-include("thorcam_dev.jl")
-include("thorcamcsc_helpers.jl")
-include("thorcamcsc_camcontrol.jl")
-include("set_properties.jl")
 include("interface_methods.jl")
-end
 
+end
