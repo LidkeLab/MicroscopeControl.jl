@@ -29,6 +29,7 @@ using .HardwareImplementations.TransmissionDaqControl
 using .HardwareImplementations.CrystaLaserControl
 using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
+using .HardwareImplementations.ThorCamDCx
 
 # # Export all HardwareImplementations modules
 # export DCAM4, SimulatedCamera, SimulatedStage, PI, MadCityLabs, PI_N472, ThorCamCSC
@@ -39,7 +40,7 @@ using .HardwareImplementations.OK_XEM
 export save_h5, save_attributes_and_data
 
 # Re-export camera implementations
-export SimCamera, DCAM4Camera, ThorCamCSC
+export SimCamera, DCAM4Camera, ThorCamCSCCamera, ThorCamDCXCamera
 export start_sequence, start_live
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime, settriggermode, setroi!, setexposuretime!
