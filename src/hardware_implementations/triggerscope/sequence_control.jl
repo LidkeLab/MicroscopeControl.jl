@@ -1,0 +1,102 @@
+#These are julia implementations of the sequence control functions on the Triggerscope in the order they appear in the DAC documentation 
+#Each function should generate an ASCII String of the format of the command
+
+#arms the triggerscope with the script written to it
+function arm(scope::Triggerscope4)
+    #Build string
+    commandstring = "ARM\n"
+    #Write command
+    writecommand(scope, commandstring)
+    return readresponse(scope)
+end
+
+#Clears the program written to the triggerscope
+function clearall(scope::Triggerscope4)
+    #Build string
+    commandstring = "CLEAR_ALL\n"
+    #Write command
+    writecommand(scope, commandstring)
+    return readresponse(scope)
+end
+#Focus settings for the triggerscope, see manual for more information
+function progfocus(scope::Triggerscope4, startpos::Int, stepsize::Int, numsteps::Int, direction::Bool, priority::Bool)
+    #Build string
+    commandstring = "PROG_FOCUS," * string(startpos) * "," * string(stepsize) * "," * string(numsteps) * "," * string(Int(direction)) * "," * string(Int(priority)) * "\n"
+    #Write command
+    writecommand(scope, commandstring)
+    return readresponse(scope)
+end
+
+function progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bool)
+    #Build string
+    commandstring = "PROG_TTL," * string(programline) * "," * string(ttlnum) * "," * string(Int(ttlval)) * "\n"
+    #Write command
+    writecommand(scope, commandstring)
+    scope.ttloutputs[ttlnum] = ttlval
+    return readresponse(scope)
+end
+
+function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::Float64)
+    #Build string
+    commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(volttooutput(scope, voltage)) * "\n"
+    #Write command
+    writecommand(scope, commandstring)
+    scope.dacoutputs[dacnum] = voltage
+    return readresponse(scope)
+end
+
+#"Clears active program table"
+function cleartable(scope::Triggerscope4)
+    #Build string
+    commandstring = "CLEARTABLE\n"
+    #Write command
+    writecommand(scope, commandstring)
+    return readresponse(scope)
+end
+
+#Add delay to specific line (in ms)
+function progdelay(scope::Triggerscope4, programline::Int, delayms::Int)
+    #Build string
+    commandstring = "PROG_DEL," * string(programline) * "," * string(delayms) * "\n"
+    #Write command
+    writecommand(scope, commandstring)
+    return readresponse(scope)
+end
+"""
+Can have two waveforms per line (0, 1)
+
+Waveforms are as follows:
+1: Sine
+2: Sawtooth
+3: Triangle
+4: Square
+
+Duty cycle in percent, phase in degrees
+"""
+function progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform::Int, centervolt::Float64, dutycycle::Int, phase::Int, trigtype::Int; programstep::Int = 0)
+    #Build string
+    commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
+    #Write command
+    writecommand(scope, commandstring)
+    return readresponse(scope)
+    
+end
+
+function timecycles(scope::Triggerscope4, cycles::Int)
+    #Build string
+    commandstring = "TIMECYCLES," * string(cycles) * "\n"
+    #Write command
+    writecommand(scope, commandstring)
+    return readresponse(scope)
+end
+
+function trigmode(scope::Triggerscope4, mode::TriggerMode)
+    #Build string
+    commandstring = "TRIGMODE," * string(Int(mode)) * "\n"
+    #Write command
+    writecommand(scope, commandstring)
+    scope.trigmode = mode
+    return readresponse(scope)
+end
+
+
