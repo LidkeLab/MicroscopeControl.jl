@@ -16,8 +16,8 @@ mutable struct Galvo <: Scanner
     channel::Int
 end
 
-# constructor
-function Galvo(;
+# constructor, needs argument `scopeChannel::Int`
+function Galvo(scopeChannel::Int;
     unique_id::String="Galvanometer",
     properties::ScannerProperties=ScannerProperties(0, -5, 5)
     )
@@ -26,6 +26,6 @@ function Galvo(;
         triggerscope = Triggerscope4()
         init_triggerscope(triggerscope4)
     end
-    # channel = [CHANNEL ON THE SCOPE]
+    channel = scopeChannel
     Galvo(unique_id, properties, triggerscope, channel)
 end
