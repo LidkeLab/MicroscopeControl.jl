@@ -75,7 +75,7 @@ Duty cycle in percent, phase in degrees
 """
 function progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform::Int, centervolt::Float64, dutycycle::Int, phase::Int, trigtype::Int; programstep::Int = 0)
     #Build string
-    commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
+    commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, dacnum, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
     #Write command
     writecommand(scope, commandstring)
     return readresponse(scope)
@@ -98,5 +98,3 @@ function trigmode(scope::Triggerscope4, mode::TriggerMode)
     scope.trigmode = mode
     return readresponse(scope)
 end
-
-

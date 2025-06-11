@@ -7,9 +7,10 @@ module TrigInterface
 
 using GLMakie
 using Images
+using ...MicroscopeControl
 
 export TRIG, Output, Input
-export initialize, shutdown, getdatatypes, getranges, getnumchannels, setvalue, getvalue
+export getdatatypes, getranges, getnumchannels, setvalue, getvalue
 export gui
 
 include("interface_types.jl")

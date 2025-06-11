@@ -1,9 +1,9 @@
 module Galvanometer
-using ...MicrosopeControl.HardwareImplimentations.Triggerscope
-using ...MicrosopeControl.HardwareInterfaces.Scanner
+using ...MicroscopeControl.HardwareImplementations.Triggerscope
+using ...MicroscopeControl.HardwareInterfaces.Scanner
 
-import ...MicrosopeControl.HardwareImplimentations.Triggerscope: gui as triggerscope_gui
-import ...MicrosopeControl.HardwareImplimentations.Triggerscope: initialize as init_triggerscope
+import ...MicroscopeControl.HardwareImplementations.Triggerscope: gui as triggerscope_gui
+import ...MicroscopeControl.HardwareImplementations.Triggerscope: initialize as init_triggerscope
 
 export Galvanometer, set_voltage, reset, scan_path, gui
 

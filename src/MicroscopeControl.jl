@@ -30,6 +30,8 @@ using .HardwareImplementations.CrystaLaserControl
 using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
 using .HardwareImplementations.ThorCamDCx
+using .HardwareImplementations.Triggerscope
+using .HardwareImplementations.Galvanometer
 
 # # Export all HardwareImplementations modules
 # export DCAM4, SimulatedCamera, SimulatedStage, PI, MadCityLabs, PI_N472, ThorCamCSC
@@ -62,6 +64,9 @@ export showdevices, showchannels, createtask, setvoltage, readvoltage, deletetas
 # Re-export FPGA implementations
 export XEM
 export setexposure, enable, setupIO
+
+# Re-export triggerscope implementations
+export Triggerscope4
 
 # Re-export common GUI methods
 export gui

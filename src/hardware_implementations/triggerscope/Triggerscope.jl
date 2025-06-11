@@ -33,6 +33,7 @@ module Triggerscope
 
     export setdac, acknowledgetest, focus, setrange, getstatus, runtest, reset, savesettings
     export arm, clearall, progfocus, progttl, progdac, cleartable, progdelay, progwave, timecycles, trigmode
+    export TriggerMode
     export openport, closeport
     export gui
 

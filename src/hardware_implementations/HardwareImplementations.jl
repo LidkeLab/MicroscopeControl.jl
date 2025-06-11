@@ -22,7 +22,6 @@ include("crysta_laser_561/CrystaLaserControl.jl")
 include("vortran_laser_488/VortranLaserControl.jl")
 include("ok_xem/OK_XEM.jl")
 include("meadowlark_slm/Meadowlark.jl")
-include("galvanometer/Galvanometer.jl")
 include("triggerscope/Triggerscope.jl")
-
+include("galvanometer/Galvanometer.jl")
 end

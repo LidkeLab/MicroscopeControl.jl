@@ -13,7 +13,7 @@ end
     PLUSMINUS2_5 = 5
 end
 
-mutable struct Triggerscope4 <: DAQ #This is a "Data Aquistion Device
+mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     #basic setup parameters
     devicename::String               #devicename for the scope, defaults to "Triggerscope4"
     portname::String            #name of the serial port
