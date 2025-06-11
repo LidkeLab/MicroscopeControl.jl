@@ -49,7 +49,7 @@ export dcamprop_getvalue, DCAM_IDPROP_INTERNALFRAMERATE, CameraROI, dcamapi_unin
 # Re-export stage implementations
 export PIStage, MCLStage, SimStage, N472
 export move, getposition, stopmotion, getrange
-export setvel, reference, servoxy, movexy
+export setvel, reference, servoxy, movexy, servo
 
 # Re-export light source implementations
 export SimLight, TCubeLaser, DaqTrLight, CrystaLaser, VortranLaser
