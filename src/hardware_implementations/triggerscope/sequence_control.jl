@@ -38,7 +38,7 @@ end
 
 function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::Float64)
     #Build string
-    commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(volttooutput(scope, voltage)) * "\n"
+    commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(volttooutput(scope, dacnum, voltage)) * "\n"
     #Write command
     writecommand(scope, commandstring)
     scope.dacoutputs[dacnum] = voltage
@@ -97,4 +97,59 @@ function trigmode(scope::Triggerscope4, mode::TriggerMode)
     writecommand(scope, commandstring)
     scope.trigmode = mode
     return readresponse(scope)
+end
+
+"""
+    genprogarray(scope::Triggerscope4, signalArr::SignalArray, NLoops::Int, Arm::bool)
+
+Programs an array of commands to the scanner's scope
+
+# Arguments
+- `scope::Triggerscope4`: The triggerscope object
+- `signalArr::SignalArray`: The array of commands to be sent
+- `NLoops::Int`: The number of times the program should loop
+- `Arm::bool`: If the "ARM" command should be run after the program
+"""
+function progarray(scope::Triggerscope4, signalArr::SignalArray, NLoops::Int, arm::bool)
+    # Basic Setting init
+    clearall(scope)
+    trigmode(scope, Int(signalArr.trigMode))
+    savesettings(scope)
+    reset(scope)
+    timecycles(scope, NLoops)
+
+    # Select appropriate ranges
+    # I know this is horribly inefficient code, because it requires generating a 
+    # large array when it is not always needed and there are so many loops,
+    # but I am not clever enough to find a way to accomplish this otherwise. 
+    # Please replace if you have ideas
+    for command in signalArr.commands
+        dacChannelVals = [[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]]
+        if command.commandType == DAC
+            push!(dacChannelVals[command.channel, command.value])
+        end
+        for (i, channelVals) in enumerate(dacChannelVals)
+            if !isempty(channelVals)
+                range = selectVoltRange(min(channelVals), max(channelVals))
+                setrange(scope, i, range)
+            end
+        end
+    end
+
+    # Go through and program the command sequence
+    for (c, command) in enumerate(signalArr.commands)
+        if command.commandType == DAC
+            if typeof(command.value) != Float64 
+                @error "Value for DAC must be Float64" 
+            end
+            progdac(scope, c, command.channel, command.value)
+        elseif command.commandType == TTL
+            if typeof(command.value) != Bool 
+                @error "Value for TTL must be Bool" 
+            end
+            progttl(scope, c, command.channel, command.value)
+        end
+    end
+
+    if arm(scope) end
 end
