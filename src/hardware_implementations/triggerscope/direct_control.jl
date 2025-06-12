@@ -2,7 +2,7 @@
 #Each function should generate an ASCII String of the format of the command
 
 """
-Runs tha acknowledgement test on the Triggerscope
+Runs the acknowledgement test on the Triggerscope
 """
 function acknowledgetest(scope::Triggerscope4)
     commandstring = "*\n"
@@ -36,7 +36,7 @@ end
 function setttl(scope::Triggerscope4, channel::Int, ttlval::Bool)
     #create the command string
     #Sets ttl output to 0 or 1 "True or false"
-    commandstring = "TTL," *string(channel) * "," * string(Int(ttlval)) * "\n"
+    commandstring = "TTL" *string(channel) * "," * string(Int(ttlval)) * "\n"
     writecommand(scope, commandstring)
     return readresponse(scope)
 end
