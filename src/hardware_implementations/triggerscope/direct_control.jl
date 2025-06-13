@@ -2,7 +2,7 @@
 #Each function should generate an ASCII String of the format of the command
 
 """
-Runs tha acknowledgement test on the Triggerscope
+Runs the acknowledgement test on the Triggerscope
 """
 function acknowledgetest(scope::Triggerscope4)
     commandstring = "*\n"
@@ -43,6 +43,7 @@ end
 
 function setrange(scope::Triggerscope4, dacchannel::Int, range::Range)
     #create the command string
+    scope.dacranges[dacchannel] = range  # Update the range in the scope object
     commandstring = "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
 
     #write the command to the serial port
@@ -54,7 +55,7 @@ function getstatus(scope::Triggerscope4)
     #create the command string
     commandstring = "STAT?\n"
     writecommand(scope, commandstring)
-    return readresponse(scope)
+    return nothing #readresponse(scope)
 end
 
 function runtest(scope::Triggerscope4)

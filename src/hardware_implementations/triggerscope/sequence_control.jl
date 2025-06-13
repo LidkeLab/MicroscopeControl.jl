@@ -41,7 +41,7 @@ function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::F
     commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(volttooutput(scope, dacnum, voltage)) * "\n"
     #Write command
     writecommand(scope, commandstring)
-    scope.dacoutputs[dacnum] = voltage
+    scope.dacvalues[dacnum] = voltage
     return readresponse(scope)
 end
 

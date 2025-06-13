@@ -64,7 +64,7 @@ function Triggerscope4(;
     dacresolution::Int = 16,
     dacoutputs::Int = 16,
     dacvalues::Vector{Int} = zeros(Int, 16),
-    dacranges::Vector{Range} = fill(ZEROTOFIVE, 16),
+    dacranges::Vector{Range} = fill(PLUSMINUS10, 16),
 
     ttloutputs::Int = 16,
     ttlvalues::Vector{Bool} = zeros(Bool, 16),

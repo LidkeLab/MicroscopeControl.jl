@@ -34,9 +34,10 @@ module Triggerscope
     export setdac, setttl, acknowledgetest, focus, setrange, getstatus, runtest, reset, savesettings
     export arm, clearall, progfocus, progttl, progdac, progarray, cleartable, progdelay, progwave, timecycles, trigmode
     export TriggerMode, RISING, FALLING, CHANGE
+    export Range, ZEROTOFIVE, ZEROTOTEN, PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5
     export openport, closeport
     export SignalArray, CommandType
-    export gui
+    export gui, readresponse
 
     include("types.jl")
     include("interface_methods.jl")

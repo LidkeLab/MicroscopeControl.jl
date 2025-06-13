@@ -1,7 +1,8 @@
 module Galvanometer
 using ...MicroscopeControl.HardwareImplementations.Triggerscope
-using ...MicroscopeControl.HardwareInterfaces.Scanner
+using ...MicroscopeControl.HardwareInterfaces.ScannerInterface
 
+import MicroscopeControl.HardwareInterfaces.ScannerInterface: ScannerProperties
 import ...MicroscopeControl.HardwareImplementations.Triggerscope: gui as triggerscope_gui
 import ...MicroscopeControl.HardwareImplementations.Triggerscope: initialize as init_triggerscope
 
