@@ -1,22 +1,39 @@
 function addNewCommand!(fig, cmdSig::CommandSignal)
     box = Box(fig, linestyle = :dot)
     one_to_sixteen = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
-    # need to zip menu with enum for command types
-    typeMenu = Menu(box[1,1], options = ["DAC", "TTL"], default="DAC")
-    channelMenu = Menu(box[1,2], options =one_to_sixteen, default="1")
-    # need to zip menu with true false
-    trueFalse = Menu(box[1,3], options=["ON", "OFF"], default="OFF")
-    trueFalse.blockscene.visible[] = false
-    # Volts is visible as default is DAC
-    volts = Textbox(box[1,3], placeholder = string(0), validator = Float64, width = wd)
-    volts.blockscene.visible[] = true
     
+    # Define elements to go into box
+    typeMenu = Menu(
+        box[1,1], 
+        options = zip(["DAC", "TTL"], [DAC, TTL]),
+        default="DAC"
+    )
+    channelMenu = Menu(box[1,2], options=one_to_sixteen, default="1")
+
+    trueFalse = Menu(
+        box[1,3], 
+        options=zip(["ON", "OFF"], [true, false]), 
+        default="OFF"
+    )
+    trueFalse.blockscene.visible[] = false
+
+    volts = Textbox(
+        box[1,3], 
+        placeholder = string(0), 
+        validator = Float64, 
+        width = wd
+    )
+    volts.blockscene.visible[] = true # Volts is visible as default is DAC
+
+    # events!
     on(typeMenu.selection) do mode
         cmdSig.commandType = mode
         if mode == "DAC"
             volts.blockscene.visible[] = true
+            trueFalse.blockscene.visible[] = false
         else
             trueFalse.blockscene.visible[] = true
+            volts.blockscene.visible[] = false
         end
     end
     on(channelMenu.selection) do mode
@@ -86,18 +103,18 @@ function gui()
         reset(scanner)
     end
 
-    # # program a sequence onto the scanner
-    # cmdBoxes = [addNewCommand!(fig, CommandSignal("DAC", 1, 0.0))]
+    # program a sequence onto the scanner
+    cmdBoxes = [addNewCommand!(fig, CommandSignal("DAC", 1, 0.0))]
 
-    # newCmdButton = Button(control_fig, label="+")
-    # on(newCmdButton.clicks) do s
-    #     push!(cmdBoxes, addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0)))
-    # end
+    newCmdButton = Button(control_fig, label="+")
+    on(newCmdButton.clicks) do s
+        push!(cmdBoxes, addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0)))
+    end
 
-    # progButton = Button(control_fig, label="PROGRAM!")
-    # on(progButton.clicks) do s
-    #     prog_cmd_seq(scanner, sigArr, loops, false)
-    # end
+    progButton = Button(control_fig, label="PROGRAM!")
+    on(progButton.clicks) do s
+        prog_cmd_seq(scanner, sigArr, loops, false)
+    end
 
     # place on board
     control_fig[1,1] = hgrid!(setAngleLabel)
