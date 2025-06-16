@@ -22,10 +22,8 @@ function Galvo(scopeChannel::Int;
     properties::ScannerProperties=ScannerProperties(0, -5, 5)
     )
     # interacting with and setting up triggerscope connection
-    if !isdefined(Main, triggerscope)
-        triggerscope = Triggerscope4()
-        init_triggerscope(triggerscope4)
-    end
+    triggerscope = Triggerscope4()
+    init_triggerscope(triggerscope)
     channel = scopeChannel
     Galvo(unique_id, properties, triggerscope, channel)
 end
