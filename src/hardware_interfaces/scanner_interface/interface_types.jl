@@ -21,7 +21,7 @@ mutable struct ScannerProperties
 end
 
 struct CommandSignal
-    commandType::CommandType
+    commandType::Any
     channel::Int
     value::Union{Float64,Bool}
 end
