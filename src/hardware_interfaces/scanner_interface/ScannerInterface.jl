@@ -3,7 +3,7 @@ module ScannerInterface
 using GLMakie
 using ...MicroscopeControl
 
-export Scanner, set_voltage, reset, scan_path
+export Scanner, set_voltage, reset, scan_path, prog_cmd_seq
 
 include("interface_types.jl")
 include("interface_functions.jl")

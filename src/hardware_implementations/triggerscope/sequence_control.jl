@@ -55,6 +55,7 @@ function cleartable(scope::Triggerscope4)
 end
 
 #Add delay to specific line (in ms)
+# NOTE: Problems with both matlab and julia prog_delay with both 4 and 3B models
 function progdelay(scope::Triggerscope4, programline::Int, delayms::Int)
     #Build string
     commandstring = "PROG_DEL," * string(programline) * "," * string(delayms) * "\n"
@@ -73,6 +74,7 @@ Waveforms are as follows:
 
 Duty cycle in percent, phase in degrees
 """
+# NOTE: Does not appear to function, also not present in offical documentation
 function progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform::Int, centervolt::Float64, dutycycle::Int, phase::Int, trigtype::Int; programstep::Int = 0)
     #Build string
     commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, dacnum, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
@@ -124,15 +126,17 @@ function progarray(scope::Triggerscope4, signalArr::SignalArray, NLoops::Int, ar
     # but I am not clever enough to find a way to accomplish this otherwise. 
     # Please replace if you have ideas
     for command in signalArr.commands
+        # each arr represents one of the 16 avaliable DAC channels
         dacChannelVals = [[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]]
         if command.commandType == DAC
             push!(dacChannelVals[command.channel, command.value])
         end
-        for (i, channelVals) in enumerate(dacChannelVals)
-            if !isempty(channelVals)
-                range = selectVoltRange(min(channelVals), max(channelVals))
-                setrange(scope, i, range)
-            end
+    end
+    # go through every channel to find maxes and mins to give to helper func selectVoltRange()
+    for (i, channelVals) in enumerate(dacChannelVals)
+        if !isempty(channelVals)
+            range = selectVoltRange(min(channelVals), max(channelVals))
+            setrange(scope, i, range)
         end
     end
 

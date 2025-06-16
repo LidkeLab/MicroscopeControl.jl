@@ -1,3 +1,36 @@
+function addNewCommand!(fig, cmdSig::CommandSignal)
+    box = Box(fig, linestyle = :dot)
+    one_to_sixteen = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
+    # need to zip menu with enum for command types
+    typeMenu = Menu(box[1,1], options = ["DAC", "TTL"], default="DAC")
+    channelMenu = Menu(box[1,2], options =one_to_sixteen, default="1")
+    # need to zip menu with true false
+    trueFalse = Menu(box[1,3], options=["ON", "OFF"], default="OFF")
+    trueFalse.blockscene.visible[] = false
+    # Volts is visible as default is DAC
+    volts = Textbox(box[1,3], placeholder = string(0), validator = Float64, width = wd)
+    volts.blockscene.visible[] = true
+    
+    on(typeMenu.selection) do mode
+        cmdSig.commandType = mode
+        if mode == "DAC"
+            volts.blockscene.visible[] = true
+        else
+            trueFalse.blockscene.visible[] = true
+        end
+    end
+    on(channelMenu.selection) do mode
+        cmdSig.channel = parse(Int, mode)
+    end
+    on(volts.stored_string) do s
+        cmdSig.value = parse(Float64, s)
+    end
+    on(trueFalse.selection) do mode
+        cmdSig.value = mode
+    end
+    return box
+end
+
 function gui()
     @info "Creating GUI for a " typeof(scanner) " Scanner!"
     
@@ -38,7 +71,7 @@ function gui()
 
     on(scanButton.clicks) do s
         println("Scanning!")
-        scan_path(scanner, volts2, volts3)
+        scan_path(scanner, volts2, volts3, stepSize)
     end
 
     # reset back to zero volts
@@ -52,6 +85,19 @@ function gui()
         tboxRange2.displayed_string = "0"
         reset(scanner)
     end
+
+    # # program a sequence onto the scanner
+    # cmdBoxes = [addNewCommand!(fig, CommandSignal("DAC", 1, 0.0))]
+
+    # newCmdButton = Button(control_fig, label="+")
+    # on(newCmdButton.clicks) do s
+    #     push!(cmdBoxes, addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0)))
+    # end
+
+    # progButton = Button(control_fig, label="PROGRAM!")
+    # on(progButton.clicks) do s
+    #     prog_cmd_seq(scanner, sigArr, loops, false)
+    # end
 
     # place on board
     control_fig[1,1] = hgrid!(setAngleLabel)

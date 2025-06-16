@@ -34,7 +34,7 @@ function reset(scanner::Scanner)
 end
 
 """
-    scan_path(scanner::Scanner, voltage1::Float64, voltage2::Float64)
+    scan_path(scanner::Scanner, voltage1::Float64, voltage2::Float64, stepSize::Int)
 
 Scan through set of voltages
 
@@ -42,11 +42,17 @@ Scan through set of voltages
 - `scanner::Scanner`: The scanner object
 - `voltage1::Float64`: The starting voltage
 - `voltage2::Float64`: The ending voltage
+- `stepSize::Int`: The step at which it should move along path
 
 # Returns
 - nothing
 """
-function scan_path(scanner::Scanner, voltage1::Float64, voltage2::Float64)
+function scan_path(scanner::Scanner, voltage1::Float64, voltage2::Float64, stepSize::Int)
     # scan through set of voltages
     @error "scan_path() not implimented"
+end
+
+function prog_cmd_seq(scanner::Scanner, sigArr::Any, NLoops::Int, arm::Bool)
+    # program commands to the scanner
+    @error "prog_cmd_seq() not implimented"
 end
