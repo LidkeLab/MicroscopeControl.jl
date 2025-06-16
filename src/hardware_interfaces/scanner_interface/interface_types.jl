@@ -19,3 +19,9 @@ mutable struct ScannerProperties
     min_volts::Float64
     max_volts::Float64
 end
+
+struct CommandSignal
+    commandType::CommandType
+    channel::Int
+    value::Union{Float64,Bool}
+end
