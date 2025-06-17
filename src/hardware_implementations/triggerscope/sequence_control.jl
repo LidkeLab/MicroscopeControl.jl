@@ -37,11 +37,12 @@ function progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bo
 end
 
 function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::Float64)
+    dac_code = volttooutput(scope, dacnum, voltage)
     #Build string
-    commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(volttooutput(scope, dacnum, voltage)) * "\n"
+    commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(dac_code) * "\n"
     #Write command
     writecommand(scope, commandstring)
-    scope.dacvalues[dacnum] = voltage
+    scope.dacvalues[dacnum] = dac_code
     return readresponse(scope)
 end
 
