@@ -37,7 +37,7 @@ module Triggerscope
     export Range, ZEROTOFIVE, ZEROTOTEN, PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5
     export openport, closeport
     export SignalArray, CommandType
-    export gui, readresponse
+    export gui
 
     include("types.jl")
     include("interface_methods.jl")
