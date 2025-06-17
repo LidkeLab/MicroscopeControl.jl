@@ -1,34 +1,45 @@
-function addNewCommand!(fig, cmdSig::CommandSignal)
-    box = Box(fig, linestyle = :dot)
+function addNewCommand!(fig, cmdSig::CommandSignal, boxnum)
+    grid = GridLayout(fig[boxnum, 1])
     one_to_sixteen = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
-    
+    one_to_fifty = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", 
+        "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
+        "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+        "31", "32", "33", "34", "35", "36", "37", "38", "39", "40",
+        "41", "42", "43", "44", "45", "46", "47", "48", "49", "50",
+    ]
+
     # Define elements to go into box
+    programLine = Menu(
+        grid[1,1],
+        options = one_to_fifty,
+        default = "1"
+    )
     typeMenu = Menu(
-        box[1,1], 
+        grid[1,2], 
         options = zip(["DAC", "TTL"], [DAC, TTL]),
         default="DAC"
     )
-    channelMenu = Menu(box[1,2], options=one_to_sixteen, default="1")
+    channelMenu = Menu(grid[1,3], options=one_to_sixteen, default="1")
 
     trueFalse = Menu(
-        box[1,3], 
+        grid[1,4], 
         options=zip(["ON", "OFF"], [true, false]), 
-        default="OFF"
+        default="OFF",
+        width=50
     )
     trueFalse.blockscene.visible[] = false
 
     volts = Textbox(
-        box[1,3], 
+        grid[1,4], 
         placeholder = string(0), 
         validator = Float64, 
-        width = wd
     )
     volts.blockscene.visible[] = true # Volts is visible as default is DAC
 
     # events!
     on(typeMenu.selection) do mode
         cmdSig.commandType = mode
-        if mode == "DAC"
+        if mode == DAC
             volts.blockscene.visible[] = true
             trueFalse.blockscene.visible[] = false
         else
@@ -45,13 +56,16 @@ function addNewCommand!(fig, cmdSig::CommandSignal)
     on(trueFalse.selection) do mode
         cmdSig.value = mode
     end
-    return box
+    on(programLine.selection) do line
+        cmdSig.progLine = line
+    end
+    return grid
 end
 
 function gui()
     @info "Creating GUI for a " typeof(scanner) " Scanner!"
     
-    control_fig = Figure(size=(300,400))
+    control_fig = Figure(size=(500,400))
     wd = 150
     wd2 = 75
     volts1 = 0
@@ -104,11 +118,13 @@ function gui()
     end
 
     # program a sequence onto the scanner
-    cmdBoxes = [addNewCommand!(fig, CommandSignal("DAC", 1, 0.0))]
+    cmdBoxes = [addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0), 7)]
+    boxnum = 8
 
     newCmdButton = Button(control_fig, label="+")
     on(newCmdButton.clicks) do s
-        push!(cmdBoxes, addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0)))
+        push!(cmdBoxes, addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0), boxnum))
+        boxnum += 1
     end
 
     progButton = Button(control_fig, label="PROGRAM!")
@@ -121,8 +137,9 @@ function gui()
     control_fig[2,1] = hgrid!(tboxVolts, setVoltsButton)
     control_fig[3,1] = hgrid!(scanPathLabel)
     control_fig[4,1] = hgrid!(tboxRange1, tboxRange2, scanButton)
-    control_fig[5,1] = hgrid!(resetLabel)
-    control_fig[6,1] = hgrid!(resetButton)
+    control_fig[5,1] = hgrid!(resetLabel, resetButton)
+    control_fig[6,1] = hgrid!(progButton, newCmdButton)
+    
 
     GLMakie.activate!(title="scanner gui")
     display(GLMakie.Screen(), control_fig)

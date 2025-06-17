@@ -93,7 +93,7 @@ function Triggerscope4(;
     return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs)
 end
 
-struct CommandSignal
+mutable struct CommandSignal
     commandType::CommandType
     channel::Int
     value::Union{Float64,Bool}

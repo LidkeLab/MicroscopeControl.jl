@@ -142,17 +142,17 @@ function progarray(scope::Triggerscope4, signalArr::SignalArray, NLoops::Int, ar
     end
 
     # Go through and program the command sequence
-    for (c, command) in enumerate(signalArr.commands)
+    for command in enumerate(signalArr.commands)
         if command.commandType == DAC
             if typeof(command.value) != Float64 
                 @error "Value for DAC must be Float64" 
             end
-            progdac(scope, c, command.channel, command.value)
+            progdac(scope, command.progLine, command.channel, command.value)
         elseif command.commandType == TTL
             if typeof(command.value) != Bool 
                 @error "Value for TTL must be Bool" 
             end
-            progttl(scope, c, command.channel, command.value)
+            progttl(scope, command.progLine, command.channel, command.value)
         end
     end
 
