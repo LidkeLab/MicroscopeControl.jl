@@ -118,12 +118,16 @@ function gui()
     end
 
     # program a sequence onto the scanner
-    cmdBoxes = [addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0), 7)]
+    cmdBoxes = [addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0, 1), 7)]
     boxnum = 8
 
     newCmdButton = Button(control_fig, label="+")
     on(newCmdButton.clicks) do s
-        push!(cmdBoxes, addNewCommand!(control_fig, CommandSignal("DAC", 1, 0.0), boxnum))
+        push!(cmdBoxes, 
+            addNewCommand!(
+                control_fig, 
+                CommandSignal("DAC", 1, 0.0, last(cmdBoxes).line + 1), 
+                boxnum))
         boxnum += 1
     end
 
