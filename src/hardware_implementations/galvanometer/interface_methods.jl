@@ -1,7 +1,22 @@
 # These are the implimentations (methods) of the generic ScannerInterface functions
-function initialize(scanner::Galvo)
+function ScannerInterface.initialize(scanner::Galvo)
     @info initializing galvo
     setdac(scanner.triggerscope, scanner.channel, 0.0)
+end
+
+function ScannerInterface.shutdown(scanner::Galvo)
+    @error SHUTDOWN NOT IMPLIMENTED
+end
+
+function ScannerInterface.export_state(scanner::Galvo)
+    attributes = Dict{String, Any}(
+        "id" => scanner.unique_id,
+        "DAQ" => scanner.triggerscope.devicename,
+        "DAQ Channel" => scanner.channel,
+        "Current Voltage" => scanner.properties.voltage,
+        "Voltage range" => (scanner.properties.min_volts, scanner.properties.max_volts) 
+    )
+    return attributes
 end
 
 # Sets voltage of the galvanometer with a triggerscope

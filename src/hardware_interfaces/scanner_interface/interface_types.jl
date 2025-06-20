@@ -9,9 +9,9 @@ abstract type Scanner <: AbstractInstrument end
 Generic properties for a scanner.
 
 # Fields
-- `voltage::Float64`: The current voltage of the light source.
-- `min_volts::Float64`: The minimum voltage of the light source.
-- `max_volts::Float64`: The maximum voltage of the light source.
+- `voltage::Float64`: The current voltage of the scanner.
+- `min_volts::Float64`: The minimum voltage of the scanner.
+- `max_volts::Float64`: The maximum voltage of the scanner.
 """
 
 mutable struct ScannerProperties
