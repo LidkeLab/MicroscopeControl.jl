@@ -5,6 +5,8 @@ using MicroscopeControl.HardwareImplementations.NIDAQcard
 
 using LibSerialPort
 
+include("timeout/calling_code.jl")
+
 scope4 = Triggerscope4()
 initialize(scope4)
 
@@ -50,6 +52,7 @@ end
 
 program_circle(10.0, π/12, 500)
 arm(scope4)
+clearall(scope4)
 
 
 
@@ -122,7 +125,16 @@ program_para_eq(9.0, π/25, 0.0, 2π, 500, x, y)
 
 arm(scope4)
 
-with_timeout(progdelay(scope4, 1, 1000), 10)
+function addition(x, y)
+    return x + y
+end
+
+run_with_serialization(10)
+
+scope4 = Triggerscope4()
+initialize(scope4)
+progdac(scope4, 1, 1, 1.0)
+
 
 
 
