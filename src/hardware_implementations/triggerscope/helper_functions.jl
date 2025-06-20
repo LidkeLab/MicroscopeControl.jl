@@ -34,3 +34,30 @@ end
 function closeport(scope::Triggerscope4)
     close(scope.sp)
 end
+
+# selects the best range given the min and max values of a channel
+function selectVoltRange(valueMin, valueMax)
+    if valueMin >= 0.0
+        if valueMax <= 5.0
+            return ZEROTOFIVE
+        else 
+            return ZEROTOTEN
+        end
+    elseif valueMin >= -2.5
+        if valueMax <= 2.5
+            return PLUSMINUS2_5
+        elseif valueMax <= 5.0
+            return PLUSMINUS5
+        else 
+            return PLUSMINUS10
+        end
+    elseif valueMin >= -5.0
+        if valueMax <= 5.0
+            return PLUSMINUS5
+        else 
+            return PLUSMINUS10
+        end
+    else 
+        return PLUSMINUS10
+    end
+end

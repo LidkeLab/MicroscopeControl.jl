@@ -15,4 +15,5 @@ include("stage_interface/StageInterface.jl")
 
 include("lightsource_interface/LightSourceInterface.jl")
 include("daq_interface/DAQInterface.jl")
+include("triggerscope_interface/TrigInterface.jl")
 end

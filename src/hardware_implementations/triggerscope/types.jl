@@ -13,7 +13,12 @@ end
     PLUSMINUS2_5 = 5
 end
 
-mutable struct Triggerscope4 <: DAQ #This is a "Data Aquistion Device
+@enum CommandType begin
+    DAC = 1
+    TTL = 2
+end
+
+mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     #basic setup parameters
     devicename::String               #devicename for the scope, defaults to "Triggerscope4"
     portname::String            #name of the serial port
@@ -59,7 +64,7 @@ function Triggerscope4(;
     dacresolution::Int = 16,
     dacoutputs::Int = 16,
     dacvalues::Vector{Int} = zeros(Int, 16),
-    dacranges::Vector{Range} = fill(ZEROTOFIVE, 16),
+    dacranges::Vector{Range} = fill(PLUSMINUS10, 16),
 
     ttloutputs::Int = 16,
     ttlvalues::Vector{Bool} = zeros(Bool, 16),
@@ -73,7 +78,8 @@ function Triggerscope4(;
     
     #Create a SerialPort object, unopened
     sp = LibSerialPort.SerialPort(portname)
-
+    set_read_timeout(sp, rwtimeout*1000) # Set read timeout in milliseconds
+    set_write_timeout(sp, rwtimeout*1000) # Set write timeout in milliseconds
 
     #Create the necessary GUI fields
     outputs = Vector{Output}(undef, 2) #DAC and TTL outputs
@@ -85,4 +91,15 @@ function Triggerscope4(;
     inputs[1] = Input("TTL", Bool, ttlinputs, [false, true], ttlreadings, false)
 
     return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs)
+end
+
+mutable struct CommandSignal
+    commandType::CommandType
+    channel::Int
+    value::Union{Float64,Bool}
+end
+
+mutable struct SignalArray
+    trigMode::TriggerMode
+    commands::Vector{CommandSignal}
 end
