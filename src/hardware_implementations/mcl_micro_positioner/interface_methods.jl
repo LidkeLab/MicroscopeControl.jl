@@ -17,6 +17,22 @@ function shutdown(positioner::MCLZPositioner)
     return nothing
 end
 
+function export_state(positioner::MLCZPositioner)
+        attributes = Dict{String, Any}(
+        "label" => positioner.label,
+        "units" => positioner.units,
+        "handle" => positioner.handle,
+        "connectionstatus" => positioner.connectionstatus,
+        "real position" => positioner.real_z,
+        "target position" => positioner.targ_z,
+        "range" => positioner.range,
+        "velocity"=> positioner.velocity,
+        "axis" => positioner.axis,
+        "rounding" => positioner.rounding
+    )
+    return attributes
+end
+
 function ObjPositionerInterface.move(positioner::MCLZPositioner, z::Float64)
     positioner.targ_z = z
     call = @ccall madlibpath.MCL_MicroDriveMoveProfile(
@@ -24,6 +40,18 @@ function ObjPositionerInterface.move(positioner::MCLZPositioner, z::Float64)
         positioner.velocity::Cdouble, 
         positioner.targ_z::Cdouble, 
         positioner.rounding::Cint, 
+        positioner.handle::Cint
+    )
+    return HardwareReturn[call]
+end
+
+function ObjPositionerInterface.get_position(positioner::MCLZPositioner)
+
+end
+
+function ObjPositionerInterface.stop_motion(positioner::MCLZPositioner)
+    call = @ccall madlibpath.MCL_MicroDriveStop(
+        Cuchar(00000000)::Cuchar, # Status, see manual for more info
         positioner.handle::Cint
     )
     return HardwareReturn[call]
