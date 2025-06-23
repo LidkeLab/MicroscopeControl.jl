@@ -31,6 +31,7 @@ using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
 using .HardwareImplementations.ThorCamDCx
 using .HardwareImplementations.Triggerscope
+using .HardwareImplementations.MCLPositioner
 
 # # Export all HardwareImplementations modules
 # export DCAM4, SimulatedCamera, SimulatedStage, PI, MadCityLabs, PI_N472, ThorCamCSC
@@ -66,6 +67,9 @@ export setexposure, enable, setupIO
 
 # Re-export triggerscope implementations
 export Triggerscope4
+
+#re-export objective positioner implementations
+export MclZPositioner
 
 # Re-export common GUI methods
 export gui
