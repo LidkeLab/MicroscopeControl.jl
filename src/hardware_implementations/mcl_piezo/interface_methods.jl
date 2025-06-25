@@ -37,7 +37,7 @@ function export_state(positioner::Piezo)
         "connected" => positioner.connected,
         "real position" => positioner.real_pos,
         "target position" => positioner.target,
-        "range" => posiioner.range
+        "range" => positioner.range
     )
     return attributes
 end
