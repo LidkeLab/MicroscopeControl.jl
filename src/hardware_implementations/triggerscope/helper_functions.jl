@@ -41,28 +41,11 @@ function readresponse(scope::Triggerscope4)
     end
 end
 
-# Old version:
-# function openport(scope::Triggerscope4)
-#     scope.sp = LibSerialPort.open(scope.portname, scope.baudrate)
-#     set_read_timeout(scope.sp, scope.rwtimeout) #Sets timeout for failed read operations
-#     set_write_timeout(scope.sp, scope.rwtimeout)
-#     sp_flush(scope.sp, SP_BUF_BOTH)
-#     sleep(scope.compause)
-# end
-
 function openport(scope::Triggerscope4)
-    # # Method 1: Configure via OS level first (Windows-specific)
-    # try
-    #     # This sets 8-N-1 configuration at OS level (8 bits, No parity, 1 stop bit)
-    #     run(`mode $(scope.portname): baud=$(scope.baudrate) parity=n data=8 stop=1`)
-    # catch
-    #     @warn "Could not pre-configure port at OS level, will use defaults"
-    # end
-
-    # Open the serial port - equivalent to MATLAB's serialport() call
+    # Open the serial port
     scope.sp = open(scope.portname, scope.baudrate)
 
-    sp_set_dtr(scope.sp.ref, SP_DTR_ON)
+    LibSerialPort.sp_set_dtr(scope.sp.ref, SP_DTR_ON)
     
     set_read_timeout(scope.sp, scope.rwtimeout)
     set_write_timeout(scope.sp, scope.rwtimeout)
@@ -70,7 +53,7 @@ function openport(scope::Triggerscope4)
     # Flush buffers
     sp_flush(scope.sp, SP_BUF_BOTH)
     
-    # Wait for device to stabilize - MATLAB likely has internal delays
+    # Wait for device to stabilize
     sleep(scope.compause)
 end
 

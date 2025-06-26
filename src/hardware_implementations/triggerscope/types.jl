@@ -78,8 +78,6 @@ function Triggerscope4(;
     
     #Create a SerialPort object, unopened
     sp = LibSerialPort.SerialPort(portname)
-    set_read_timeout(sp, rwtimeout*1000) # Set read timeout in milliseconds
-    set_write_timeout(sp, rwtimeout*1000) # Set write timeout in milliseconds
 
     #Create the necessary GUI fields
     outputs = Vector{Output}(undef, 2) #DAC and TTL outputs
