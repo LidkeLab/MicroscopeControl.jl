@@ -35,6 +35,13 @@ end
 
 function ObjPositionerInterface.move(positioner::MCLZPositioner, z::Float64)
     positioner.targ_z = z
+
+    # Ensures that the device is not written to while it is moving
+    # (If the device is written to while it is moving, the internal clock gets messed up)
+    if microdrive_move_status(positioner)
+        microdrive_wait(positioner)
+    end
+
     call = @ccall madlibpath.MCL_MicroDriveMoveProfile(
         positioner.axis::Cint, 
         positioner.velocity::Cdouble, 
@@ -46,13 +53,26 @@ function ObjPositionerInterface.move(positioner::MCLZPositioner, z::Float64)
 end
 
 function ObjPositionerInterface.get_position(positioner::MCLZPositioner)
-
+    pos = Vector{Cdouble}(undef, 1)  # allocate memory
+    @ccall madlibpath.MCL_MD1ReadEncoder(
+        pos::ptr{Cdouble},
+        positioner.handle::Cint
+    )
+    if call != 0 
+        # fatal error, do not want to read bad memory
+        error("Failed to get position. Error code: $(HardwareReturn[call])")
+    end
+    return pos
 end
 
 function ObjPositionerInterface.stop_motion(positioner::MCLZPositioner)
+    status = Vector{Cuchar}(undef, 1) # allocate memory as array of bytes
     call = @ccall madlibpath.MCL_MicroDriveStop(
-        Cuchar(00000000)::Cuchar, # Status, see manual for more info
+        status::Ptr{Cuchar}, # passes pointer
         positioner.handle::Cint
     )
+    if call != 0 
+        @error "Failed to stop motion. Error code: $(HardwareReturn[call])"
+    end
     return HardwareReturn[call]
 end

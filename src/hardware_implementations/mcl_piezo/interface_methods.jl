@@ -63,7 +63,7 @@ function ObjPositionerInterface.reset(positioner::Piezo)
 end
 
 function ObjPositionerInterface.get_position(positioner::Piezo)
-    # Perhaps single write N should go here instead
+    # Perhaps single Read N should go here instead
     pos = @ccall nanoDrivePath.MCL_SingleReadZ(positioner.handle::Cint)
     stage.real_pos = pos
     return pos
