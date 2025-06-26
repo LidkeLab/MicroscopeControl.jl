@@ -1,23 +1,39 @@
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
+using MicroscopeControl.HardwareImplementations.ThorCamDCx
+import MicroscopeControl.HardwareImplementations.ThorCamDCx: gui as camera_gui
 using MicroscopeControl.HardwareImplementations.NIDAQcard
 
 using LibSerialPort
 
-include("timeout/calling_code.jl")
+
+camera = ThorcamDCXCamera()
+initialize(camera)
+camera_gui(camera)
+shutdown(camera)
+
+data = capture(camera)
+
+scope4.sp.ref
 
 scope4 = Triggerscope4()
 initialize(scope4)
+setrange(scope4, 1, PLUSMINUS10)
+
+shutdown(scope4)
 
 setdac(scope4, 1, 0.0)
 setdac(scope4, 2, 0.0)
+program_para_eq(9.0, π/25, 0.0, 2π, 200, x, y)
+clearall(scope4)
+arm(scope4)
 
-for i in 1:5
-    setdac(scope4, 1, -3.0)
-    setdac(scope4, 2, -3.0) 
-    setdac(scope4, 1, 3.0) 
-    setdac(scope4, 2, 3.0)
+for i in 1:20
+    setdac(scope4, 1, -1.0)
+    setdac(scope4, 2, -2.0) 
+    setdac(scope4, 1, 1.0) 
+    setdac(scope4, 2, 2.0)
 end
 
 function program_square(side_length::Float64, num_cycles::Int)
@@ -34,7 +50,7 @@ function program_square(side_length::Float64, num_cycles::Int)
     trigmode(scope4, CHANGE)
 end
 
-program_square(5.5, 1000)
+program_square(9.0, 1000)
 arm(scope4)
 
 
@@ -48,9 +64,11 @@ function program_circle(radius::Float64, step_size::Float64, num_cycles::Int)
     end
     timecycles(scope4, num_cycles)
     trigmode(scope4, CHANGE)
+    setdac(scope4, 1, 0.0)
+    setdac(scope4, 2, 0.0)
 end
 
-program_circle(10.0, π/12, 500)
+program_circle(10.0, π/24, 200)
 arm(scope4)
 clearall(scope4)
 
@@ -59,13 +77,15 @@ clearall(scope4)
 
 function program_heart(scale::Float64, num_cycles::Int)
     clearall(scope4)
+    setdac(scope4, 1, 0.0)
+    setdac(scope4, 2, 0.0)
     line_number = 1
     
     # Heart parametric equations
     # x = 16*sin^3(t)
     # y = 13*cos(t) - 5*cos(2t) - 2*cos(3t) - cos(4t)
     
-    step_size = π/15  # Higher resolution for smooth heart shape
+    step_size = π/24  # Higher resolution for smooth heart shape
     
     for t in 0:step_size:2π
         # Calculate heart coordinates
@@ -74,7 +94,7 @@ function program_heart(scale::Float64, num_cycles::Int)
         
         # Scale to desired voltage range and flip y-axis for proper orientation
         voltage_x = scale * x / 16  # Normalize and scale
-        voltage_y = scale * (-y) / 16  # Flip y-axis, normalize and scale
+        voltage_y = scale * y / 16  # Flip y-axis, normalize and scale
         
         # Program the DAC values
         progdac(scope4, line_number, 1, voltage_x)
@@ -92,6 +112,8 @@ arm(scope4)
 
 function program_para_eq(scale::Float64, step_size::Float64, low_range::Float64, high_range::Float64, num_cycles::Int, x_eq::Function, y_eq::Function)
     clearall(scope4)
+    setdac(scope4, 1, 0.0)
+    setdac(scope4, 2, 0.0)
     line_number = 1
 
     for t in low_range:step_size:high_range
@@ -121,22 +143,17 @@ function y(t)
     return sin(4t)
 end
 
-program_para_eq(9.0, π/25, 0.0, 2π, 500, x, y)
-
-arm(scope4)
-
-function addition(x, y)
-    return x + y
+function with_reset(func::Function, args...)
+    try
+        func(args...)
+    catch e
+        @error "$e Resetting port"
+        closeport(scope4)
+        openport(scope4)
+    end
 end
 
-run_with_serialization(10)
-
-scope4 = Triggerscope4()
-initialize(scope4)
-progdac(scope4, 1, 1, 1.0)
-
-
-
+shutdown(scope4)
 
 
 
