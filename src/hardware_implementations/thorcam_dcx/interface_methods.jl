@@ -3,6 +3,7 @@
 function initialize(camera::ThorcamDCXCamera)
     dev_number = zeros(INT, 1)
     success = is_GetNumberOfCameras(dev_number)
+    println("number of cameras: ", dev_number[1])
     if dev_number[1] == 0
         @error("No cameras found")
         return
@@ -41,7 +42,8 @@ function initialize(camera::ThorcamDCXCamera)
 
     pixel_clock_range = zeros(UINT,3)
     success = is_PixelClock(hcam,IS_PIXELCLOCK_CMD_GET_RANGE,pixel_clock_range,sizeof(pixel_clock_range))
-    pixelClock = [INT(pixel_clock_range[2]-5)]
+    println("Pixel clock range: ", pixel_clock_range[1], " - ", pixel_clock_range[2])
+    pixelClock = [INT(pixel_clock_range[1]+10)]
     success = is_PixelClock(hcam, IS_PIXELCLOCK_CMD_SET, pixelClock,sizeof(pixelClock))
 
     framerate = camera.frame_rate
