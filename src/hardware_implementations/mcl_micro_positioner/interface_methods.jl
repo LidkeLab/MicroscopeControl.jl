@@ -1,4 +1,4 @@
-function initialize(positioner::MCLZPositioner)
+function initialize(positioner::MclZPositioner)
     @info "Initializing Objective Positioner"
     handle = @ccall madlibpath.MCL_InitHandle()::Cint
     positioner.handle = handle
@@ -10,14 +10,14 @@ function initialize(positioner::MCLZPositioner)
     end
 end
 
-function shutdown(positioner::MCLZPositioner)
+function shutdown(positioner::MclZPositioner)
     @ccall madlibpath.MCL_ReleaseHandle(positioner.handle::Cint)::Cvoid
     positioner.connectionstatus = false
     @info "Handle Released"
     return nothing
 end
 
-function export_state(positioner::MLCZPositioner)
+function export_state(positioner::MclZPositioner)
         attributes = Dict{String, Any}(
         "label" => positioner.label,
         "units" => positioner.units,
@@ -33,7 +33,7 @@ function export_state(positioner::MLCZPositioner)
     return attributes
 end
 
-function ObjPositionerInterface.move(positioner::MCLZPositioner, z::Float64)
+function ObjPositionerInterface.move(positioner::MclZPositioner, z::Float64)
     positioner.targ_z = z
 
     # Ensures that the device is not written to while it is moving
@@ -52,7 +52,7 @@ function ObjPositionerInterface.move(positioner::MCLZPositioner, z::Float64)
     return HardwareReturn[call]
 end
 
-function ObjPositionerInterface.get_position(positioner::MCLZPositioner)
+function ObjPositionerInterface.get_position(positioner::MclZPositioner)
     pos = Vector{Cdouble}(undef, 1)  # allocate memory
     @ccall madlibpath.MCL_MD1ReadEncoder(
         pos::ptr{Cdouble},
@@ -65,7 +65,7 @@ function ObjPositionerInterface.get_position(positioner::MCLZPositioner)
     return pos
 end
 
-function ObjPositionerInterface.stop_motion(positioner::MCLZPositioner)
+function ObjPositionerInterface.stop_motion(positioner::MclZPositioner)
     status = Vector{Cuchar}(undef, 1) # allocate memory as array of bytes
     call = @ccall madlibpath.MCL_MicroDriveStop(
         status::Ptr{Cuchar}, # passes pointer

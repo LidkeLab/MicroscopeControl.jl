@@ -1,7 +1,7 @@
 # This file contains wrappers for the Motion Control C functions for the microdrive
 
 """
-    microdrive_move_status(positioner::MCLZPositioner)
+    microdrive_move_status(positioner::MclZPositioner)
 Checks to see if the device is moving. Should be called before writing to encoders, as it could
 mess up their internal clock.
 
@@ -11,7 +11,7 @@ mess up their internal clock.
 # Returns 
     - `ismoving::Bool`: Returns true 1 if moving, false 0 if not 
 """
-function microdrive_move_status(positioner::MCLZPositioner)
+function microdrive_move_status(positioner::MclZPositioner)
     ismoving = Vector{Cint}(undef, 1) # allocate mem
     call = @ccall madlibpath.MCL_MicroDriveMoveStatus(
         ismoving::Ptr{Cint},
@@ -24,7 +24,7 @@ function microdrive_move_status(positioner::MCLZPositioner)
 end
 
 """
-    microdrive_wait(positioner::MCLZPositioner)
+    microdrive_wait(positioner::MclZPositioner)
 Waits untill the stage stops moving. Manual says it should be about 10ms with a working device.
 Call after every function to ensure that internal clock of MicroDrive doesn't get messed up.
 
@@ -34,13 +34,13 @@ Call after every function to ensure that internal clock of MicroDrive doesn't ge
 # Returns 
     - Error code, decoded
 """
-function microdrive_wait(positioner::MCLZPositioner)
+function microdrive_wait(positioner::MclZPositioner)
     call = @ccall madlibpath.MCL_MicroDriveWait(positioner.handle::Cint)
     return HardwareReturn[call]
 end
 
 """
-    microdrive_status(positioner::MCLZPositioner)
+    microdrive_status(positioner::MclZPositioner)
 Reads the current state of the limit switches 
 
 # Arguments
@@ -59,7 +59,7 @@ Reads the current state of the limit switches
             - Bit 3, Forward Limit Switch
             - Bit 2, Reverse Limit Switch
 """
-function microdrive_status(positioner::MCLZPositioner)
+function microdrive_status(positioner::MclZPositioner)
     status = Vector{Cuchar}(undef, 1) # allocate memory 
     call = @ccall madlibpath.MCL_MicroDriveStatus(
         status::Ptr{Cuchar},
@@ -74,7 +74,7 @@ function microdrive_status(positioner::MCLZPositioner)
 end
 
 """
-    microdrive_stop(positioner::MCLZPositioner)
+    microdrive_stop(positioner::MclZPositioner)
 Stops the stage from moving
 
 # Arguments
@@ -94,7 +94,7 @@ Stops the stage from moving
             - Bit 3, Forward Limit Switch
             - Bit 2, Reverse Limit Switch
 """
-function microdrive_stop(positioner::MCLZPositioner)
+function microdrive_stop(positioner::MclZPositioner)
     # same code as stop_motion, but also returns status
     status = Vector{Cuchar}(undef, 1) # allocate memory as array of bytes
     call = @ccall madlibpath.MCL_MicroDriveStop(
@@ -108,17 +108,17 @@ function microdrive_stop(positioner::MCLZPositioner)
 end
 
 """
-    microdrive_information(positioner::MCLZPositioner)
+    microdrive_information(positioner::MclZPositioner)
 Obtains information about the state of the MicroDrive, including encoder resolution
 step size, max velocity, and min velocity.
 
 # Arguments
-    - `positioner::MCLZPositioner`: the positioner or stage
+    - `positioner::MclZPositioner`: the positioner or stage
 
 # Returns 
     - `status::Dict{String, Float64}`
 """
-function microdrive_information(positioner::MCLZPositioner)
+function microdrive_information(positioner::MclZPositioner)
     res = Vector{Cdouble}(undef, 1) 
     step_size = Vector{Cdouble}(undef, 1)
     max_velocity = Vector{Cdouble}(undef, 1)
@@ -129,7 +129,7 @@ function microdrive_information(positioner::MCLZPositioner)
         step_size::Ptr{Cdouble},
         max_velocity::Ptr{Cdouble},
         min_velocity::Ptr{Cdouble}.
-        possitioner.handle::Cint
+        positioner.handle::Cint
     )
 
     if call != 0 
