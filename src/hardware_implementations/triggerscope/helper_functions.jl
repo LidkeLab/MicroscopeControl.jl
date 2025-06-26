@@ -60,15 +60,15 @@ function openport(scope::Triggerscope4)
     # end
 
     # Open the serial port - equivalent to MATLAB's serialport() call
-    scope.sp = LibSerialPort.open(scope.portname, scope.baudrate)
+    scope.sp = open(scope.portname, scope.baudrate)
 
-    LibSerialPort.sp_set_dtr(scope.sp.ref, LibSerialPort.SP_DTR_ON)
+    sp_set_dtr(scope.sp.ref, SP_DTR_ON)
     
-    LibSerialPort.set_read_timeout(scope.sp, scope.rwtimeout)
-    LibSerialPort.set_write_timeout(scope.sp, scope.rwtimeout)
+    set_read_timeout(scope.sp, scope.rwtimeout)
+    set_write_timeout(scope.sp, scope.rwtimeout)
     
     # Flush buffers
-    LibSerialPort.sp_flush(scope.sp, LibSerialPort.SP_BUF_BOTH)
+    sp_flush(scope.sp, SP_BUF_BOTH)
     
     # Wait for device to stabilize - MATLAB likely has internal delays
     sleep(scope.compause)
