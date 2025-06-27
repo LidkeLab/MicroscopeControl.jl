@@ -11,8 +11,8 @@ Waits for specified number of milliseconds and checks to see if the MicroDrive i
 # Returns 
     - `isattached::Bool`: true if the device is attached
 """
-function mcl_device_attached(positioner::MclZPositioner, wait::Uint32)
-    isattached = @ccall madlibpath.MCL_DeviceAttached(wait::Cuint, positioner.handle)::Bool
+function mcl_device_attached(positioner::MclZPositioner, wait::UInt32)
+    isattached = @ccall madlibpath.MCL_DeviceAttached(wait::Cuint, positioner.handle::Cint)::Bool
     return isattached
 end
 
@@ -41,7 +41,7 @@ function mcl_get_firmware_version(positioner::MclZPositioner)
         @error "Failed to retrive MicroDrive information. Error code: $(HardwareReturn[call])"
     end
 
-    return version, profile
+    return version[1], profile[1]
 end
 
 """
@@ -71,7 +71,7 @@ Returns the serial number.
 """
 function mcl_get_serial_number(positioner::MclZPositioner)
     serial_num = @ccall madlibpath.MCL_GetSerialNumber(positioner.handle::Cint)::Cint
-    return serial_num
+    return serial_num[1]
 end
 
 """
@@ -94,7 +94,7 @@ function mcl_dll_version(positioner::MclZPositioner)
         positioner.handle::Cint
     )::Cvoid
 
-    return String(version[1]) * "." * String(revision[1])
+    return string(version[1]) * "." * string(Int32(revision[1]))
 end
 
 """
@@ -119,5 +119,5 @@ function mcl_get_product_id(positioner::MclZPositioner)
         @error "Failed to Retrive device information"
     end
 
-    return id
+    return id[1]
 end

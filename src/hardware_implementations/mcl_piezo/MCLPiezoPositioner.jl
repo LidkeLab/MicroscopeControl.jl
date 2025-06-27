@@ -1,6 +1,6 @@
 module MCLPiezoPositioner
 using ..MicroscopeControl
-using ..MicroscopeControl.HardwareImplementations.ObjPositionerInterface
+using ..MicroscopeControl.HardwareInterfaces.ObjPositionerInterface
 
 nanoDrivePath = "C:\\Program Files\\Mad City Labs\\NanoDrive\\Madlib.dll"
 

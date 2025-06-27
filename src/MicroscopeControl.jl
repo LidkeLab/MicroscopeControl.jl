@@ -70,7 +70,7 @@ export setexposure, enable, setupIO
 export Triggerscope4
 
 #re-export objective positioner implementations
-export MCLMicroPositioner, MCLPiezoPositioner
+export MclZPositioner
 
 # Re-export common GUI methods
 export gui
