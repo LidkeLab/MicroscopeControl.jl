@@ -16,7 +16,7 @@ function initialize(positioner::Piezo)
     # get and set range of positioner
     callibration = @ccall nanoDrivePath.MCL_GetCalibration(
         Cint(1)::Cint, # axis
-        positioner.handle::Cint) # which handle?
+        positioner.handle::Cint)::Cdouble # which handle?
     positioner.range = callibration
 
     return handle_id
@@ -24,7 +24,7 @@ end
 
 function shutdown(positioner::Piezo)
     @info "Shutting down Piezo"
-    @ccall nanoDrivePath.MCL_ReleaseHandle(stage.id::Cint)
+    @ccall nanoDrivePath.MCL_ReleaseHandle(stage.id::Cint)::Cvoid
     stage.connectionstatus = false
     return nothing
 end
@@ -42,12 +42,12 @@ function export_state(positioner::Piezo)
     return attributes
 end
 
-function ObjPositionerInterface.move(positioner::Piezo, pos::Foat64)
+function ObjPositionerInterface.move(positioner::Piezo, pos::Float64)
     @info "Moving objective to $pos"
     # Perhaps single write N should go here instead
     err = @ccall nanoDrivePath.MCL_SingleWriteZ(
         pos::Cdouble, 
-        positioner.handle::Cint)
+        positioner.handle::Cint)::Cint
     stage.target = pos
     return err
 end
@@ -56,15 +56,15 @@ function ObjPositionerInterface.reset(positioner::Piezo)
     @info "Resetting the objective"
     # Perhaps single write N should go here instead
     err = @ccall nanoDrivePath.MCL_SingleWriteZ(
-        Cdouble(0.0),
-        positioner.handle::Cint)
-    stage.target = pos
+        0.0::Cdouble,
+        positioner.handle::Cint)::Cint
+    stage.target = 0.0
     return err
 end
 
 function ObjPositionerInterface.get_position(positioner::Piezo)
     # Perhaps single Read N should go here instead
-    pos = @ccall nanoDrivePath.MCL_SingleReadZ(positioner.handle::Cint)
+    pos = @ccall nanoDrivePath.MCL_SingleReadZ(positioner.handle::Cint)::Cdouble
     stage.real_pos = pos
     return pos
 end

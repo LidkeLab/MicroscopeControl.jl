@@ -5,12 +5,12 @@
     -   
 
 """
-Base.@kwdef mutable struct Piezo <: Zpositioner
-    unique_id::String ="MCL_Piezo",
-    units::String,
-    handle::Int = 0,
-    connected::Bool = false,
-    real_pos::Float64 = 0.0,
-    target::Float64 = 0.0,
+@kwdef mutable struct Piezo <: Zpositioner
+    unique_id::String ="MCL_Piezo"
+    units::String
+    handle::Int = 0
+    connected::Bool = false
+    real_pos::Float64 = 0.0
+    target::Float64 = 0.0
     range::Tuple{Float64, Float64}
 end

@@ -16,11 +16,11 @@ function microdrive_move_status(positioner::MclZPositioner)
     call = @ccall madlibpath.MCL_MicroDriveMoveStatus(
         ismoving::Ptr{Cint},
         positioner.handle::Cint
-    )
+    )::Cint
     if call != 0 
         @error "Failed to retrive move status. Error code: $(HardwareReturn[call])"
     end
-    return ismoving
+    return Bool(ismoving[1])
 end
 
 """
@@ -35,7 +35,7 @@ Call after every function to ensure that internal clock of MicroDrive doesn't ge
     - Error code, decoded
 """
 function microdrive_wait(positioner::MclZPositioner)
-    call = @ccall madlibpath.MCL_MicroDriveWait(positioner.handle::Cint)
+    call = @ccall madlibpath.MCL_MicroDriveWait(positioner.handle::Cint)::Cint
     return HardwareReturn[call]
 end
 
@@ -64,13 +64,12 @@ function microdrive_status(positioner::MclZPositioner)
     call = @ccall madlibpath.MCL_MicroDriveStatus(
         status::Ptr{Cuchar},
         positioner.handle::Cint
-    )
+    )::Cint
 
     if call != 0 
         @error "Failed to retrive MicroDrive Status. Error code: $(HardwareReturn[call])"
     end
-    return status
-
+    return status[1]
 end
 
 """
@@ -100,7 +99,7 @@ function microdrive_stop(positioner::MclZPositioner)
     call = @ccall madlibpath.MCL_MicroDriveStop(
         status::Ptr{Cuchar}, # passes pointer
         positioner.handle::Cint
-    )
+    )::Cint
     if call != 0 
         @error "Failed to stop motion. Error code: $(HardwareReturn[call])"
     end
@@ -124,13 +123,13 @@ function microdrive_information(positioner::MclZPositioner)
     max_velocity = Vector{Cdouble}(undef, 1)
     min_velocity = Vector{Cdouble}(undef, 1)
 
-    call = @ccall madlibpath.MCL_MicroDriveInformation (
+    call = @ccall madlibpath.MCL_MicroDriveInformation(
         res::Ptr{Cdouble},
         step_size::Ptr{Cdouble},
         max_velocity::Ptr{Cdouble},
-        min_velocity::Ptr{Cdouble}.
+        min_velocity::Ptr{Cdouble},
         positioner.handle::Cint
-    )
+    )::Cint
 
     if call != 0 
         @error "Failed to retrive MicroDrive information. Error code: $(HardwareReturn[call])"
