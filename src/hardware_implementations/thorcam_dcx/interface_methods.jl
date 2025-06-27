@@ -212,6 +212,7 @@ end
 
 function shutdown(camera::ThorcamDCXCamera)
     success = is_ExitCamera(camera.camera_handle)
+    camera.is_running = 0
 end
 
 function setexposuretime!(camera::ThorcamDCXCamera)

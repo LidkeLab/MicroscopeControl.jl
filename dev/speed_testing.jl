@@ -2,38 +2,22 @@ using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
-import MicroscopeControl.HardwareImplementations.ThorCamDCx: gui as camera_gui
-using MicroscopeControl.HardwareImplementations.NIDAQcard
+using GLMakie
 
-using LibSerialPort
-
-
-camera = ThorcamDCXCamera()
-initialize(camera)
-camera_gui(camera)
-shutdown(camera)
-
-data = capture(camera)
-
-scope4.sp.ref
-
-scope4 = Triggerscope4()
+scope4 = Triggerscope4(compause = 0.035)
 initialize(scope4)
 setrange(scope4, 1, PLUSMINUS10)
-
-shutdown(scope4)
-
+setrange(scope4, 2, PLUSMINUS10)
+clearall(scope4)
 setdac(scope4, 1, 0.0)
 setdac(scope4, 2, 0.0)
-program_para_eq(9.0, π/25, 0.0, 2π, 200, x, y)
-clearall(scope4)
-arm(scope4)
-
+shutdown(scope4)
+shutdown(camera)
 for i in 1:20
-    setdac(scope4, 1, -1.0)
-    setdac(scope4, 2, -2.0) 
-    setdac(scope4, 1, 1.0) 
-    setdac(scope4, 2, 2.0)
+    setdac(scope4, 1, 0.0)
+    setdac(scope4, 2, 0.0) 
+    setdac(scope4, 1, 2.0) 
+    setdac(scope4, 2, 10.0)
 end
 
 function program_square(side_length::Float64, num_cycles::Int)
@@ -50,7 +34,7 @@ function program_square(side_length::Float64, num_cycles::Int)
     trigmode(scope4, CHANGE)
 end
 
-program_square(9.0, 1000)
+program_square(9.0, 100)
 arm(scope4)
 
 
@@ -142,34 +126,3 @@ end
 function y(t)
     return sin(4t)
 end
-
-function with_reset(func::Function, args...)
-    try
-        func(args...)
-    catch e
-        @error "$e Resetting port"
-        closeport(scope4)
-        openport(scope4)
-    end
-end
-
-shutdown(scope4)
-
-
-
-
-#= This is for controlling the arduino but it doesn't work yet
-
-daq = NIdaq() # the type of daq is NIdaq
-
-NIDAQcard.gui(daq)
-
-
-devs = NIDAQcard.showdevices(daq)
-channelsAO = NIDAQcard.showchannels(daq,"AO",devs[1])
-
-t = NIDAQcard.createtask(daq,"AO",channelsAO[1]) # the type of t is Task
-NIDAQcard.setvoltage(daq,t, 0.0) # the maximum voltage is 5.0 V.
-NIDAQcard.deletetask(daq,t)
-
-=#

@@ -18,7 +18,6 @@ function writecommand(scope::Triggerscope4, commandstring::String)
     try
         sp_flush(scope.sp, SP_BUF_BOTH)
         write(scope.sp, commandstring)
-        println("Command sent: ", commandstring)
         sleep(scope.compause)
     catch e
         closeport(scope)
