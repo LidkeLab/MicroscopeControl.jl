@@ -55,7 +55,7 @@ end
 function ObjPositionerInterface.get_position(positioner::MclZPositioner)
     pos = Vector{Cdouble}(undef, 1)  # allocate memory
     @ccall madlibpath.MCL_MD1ReadEncoder(
-        pos::ptr{Cdouble},
+        pos::Ptr{Cdouble},
         positioner.handle::Cint
     )
     if call != 0 
