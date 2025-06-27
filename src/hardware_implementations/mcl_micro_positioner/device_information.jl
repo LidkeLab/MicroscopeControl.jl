@@ -76,7 +76,7 @@ end
 
 """
     mcl_dll_version(positioner::MclZPositioner)
-
+Retrives the version of the firmware.
 
 # Arguments
     - `positioner::MCLZPositioner`: the positioner or stage
@@ -99,7 +99,7 @@ end
 
 """
     mcl_get_product_id(positioner::MclZPositioner)
-
+Returns the product ID.
 
 # Arguments
     - `positioner::MCLZPositioner`: the positioner or stage
