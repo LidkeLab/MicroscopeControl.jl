@@ -30,8 +30,9 @@ end
 # Returns 
     - 
 """
-function md1_move_profile(positioner::MclZPositioner)
-    #This function is already defined as 'move' in interface_methods.jl
+function md1_move_profile(positioner::MclZPositioner, targ_z::Float64)
+    @info "This function is already defined as 'move' in interface_methods.jl"
+    return move(positioner, targ_z)
 end
 
 """
