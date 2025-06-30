@@ -1,8 +1,20 @@
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner
+using MicroscopeControl.HardwareImplementations.MadCityLabs
+
+
 
 positioner = MclZPositioner()
+piezo = MCLStage()
+
+initialize(piezo)
+singlewriteZ(piezo, 1.0)
+singlereadZ(piezo)
+monitorZ(piezo, 2.0)
+shutdown(piezo)
+
+piezo.id
 
 initialize(positioner)
 

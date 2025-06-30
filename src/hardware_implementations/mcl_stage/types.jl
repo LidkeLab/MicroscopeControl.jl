@@ -20,3 +20,15 @@ Base.@kwdef mutable struct MCLStage <: Stage
     range_y::Tuple{Float64,Float64} = (0, 300)
     range_z::Tuple{Float64,Float64} = (0, 300)
 end
+
+HardwareReturn = Dict{Int, String}(
+    0 => "MCL_SUCCESS",
+    -1 => "MCL_GENERAL_ERROR",
+    -2 => "MCL_DEV_ERROR",
+    -3 => "MCL_DEV_NOT_ATTACHED",
+    -4 => "MCL_USAGE_ERROR",
+    -5 => "MCL_DEV_NOT_READY",
+    -6 => "MCL_ARGUMENT_ERROR",
+    -7 => "MCL_INVALID_AXIS",
+    -8 => "MCL_INVALID_HANDLE"
+)
