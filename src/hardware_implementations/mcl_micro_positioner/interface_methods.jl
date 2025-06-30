@@ -55,6 +55,8 @@ end
 function ObjPositionerInterface.reset(positioner::MclZPositioner)
     positioner.targ_z = 0.0
     status = Vector{Cuchar}(undef, 1)
+    # get number of microsteps away from zero
+    microsteps = md1_current_microstep_pos(positioner)
 
     # Ensures that the device is not written to while it is moving
     # (If the device is written to while it is moving, the internal clock gets messed up)
@@ -62,11 +64,9 @@ function ObjPositionerInterface.reset(positioner::MclZPositioner)
         microdrive_wait(positioner)
     end
 
-    call = @ccall madlibpath.MCL_MD1ResetEncoder(
-        status::Ptr{Cuchar},
-        positioner.handle::Cint
-    )::Cint
-    return status[1], HardwareReturn[call]
+    call = md1_move_profile_microsteps(positioner, microsteps)
+
+    return call
 end
 
 function ObjPositionerInterface.get_position(positioner::MclZPositioner)
