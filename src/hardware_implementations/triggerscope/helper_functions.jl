@@ -15,19 +15,44 @@ function volttooutput(scope::Triggerscope4,  dacchannel::Int,voltage::Float64)
 end
 
 function writecommand(scope::Triggerscope4, commandstring::String)
-    sp_flush(scope.sp, SP_BUF_BOTH)
-    write(scope.sp, commandstring)
-    sleep(scope.compause)
+    try
+        sp_flush(scope.sp, SP_BUF_BOTH)
+        write(scope.sp, commandstring)
+        sleep(scope.compause)
+    catch e
+        closeport(scope)
+        openport(scope)
+        error("Failed to read response from scope: Resetting port ")
+        return nothing
+    end
 end
 
 function readresponse(scope::Triggerscope4)
-    line = readline(scope.sp)
-    sleep(scope.compause)
-    return line
+    try
+        line = readline(scope.sp)
+        sleep(scope.compause)
+        return line
+    catch e
+        closeport(scope)
+        openport(scope)
+        error("Failed to read response from scope: Resetting port ")
+        return nothing
+    end
 end
 
 function openport(scope::Triggerscope4)
-    scope.sp = LibSerialPort.open(scope.portname, scope.baudrate)
+    # Open the serial port
+    scope.sp = open(scope.portname, scope.baudrate)
+
+    LibSerialPort.sp_set_dtr(scope.sp.ref, SP_DTR_ON)
+    
+    set_read_timeout(scope.sp, scope.rwtimeout)
+    set_write_timeout(scope.sp, scope.rwtimeout)
+    
+    # Flush buffers
+    sp_flush(scope.sp, SP_BUF_BOTH)
+    
+    # Wait for device to stabilize
     sleep(scope.compause)
 end
 

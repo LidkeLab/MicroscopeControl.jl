@@ -13,7 +13,7 @@ module PI
 
     export PIStage
     # export initialize, shutdown
-    export servoxy, servox, servoy, driftcorrection, servo
+    export servoxy, servox, servoy, driftcorrection
     export immediatestop, referencemove, stopmotion
     export movexy, movex, movey, getposition, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait
     export gui

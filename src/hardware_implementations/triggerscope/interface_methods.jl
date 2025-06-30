@@ -4,8 +4,21 @@
 
 #Start and Stop the Device
 function TrigInterface.initialize(scope::Triggerscope4)
-    @info "Initializing Triggerscope4"
+    @info "Connecting to serial port '$(scope.portname)'..."
+    
+    # Create connection using openport function
     openport(scope)
+    
+    # Julia assumes connection was successful after opening
+    @info "Triggerscope connected successfully"
+    
+    # Acknowledgement test to verify connection
+    try
+        response = acknowledgetest(scope)
+        @info "Triggerscope version: $response"
+    catch e
+        @warn "Could not get version information: $e"
+    end
 end
 
 function TrigInterface.shutdown(scope::Triggerscope4)
