@@ -32,7 +32,6 @@ using .HardwareImplementations.OK_XEM
 using .HardwareImplementations.ThorCamDCx
 using .HardwareImplementations.Triggerscope
 using .HardwareImplementations.MCLMicroPositioner
-using .HardwareImplementations.MCLPiezoPositioner
 
 # # Export all HardwareImplementations modules
 # export DCAM4, SimulatedCamera, SimulatedStage, PI, MadCityLabs, PI_N472, ThorCamCSC

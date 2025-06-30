@@ -24,6 +24,5 @@ include("ok_xem/OK_XEM.jl")
 include("meadowlark_slm/Meadowlark.jl")
 include("triggerscope/Triggerscope.jl")
 include("mcl_micro_positioner/MCLMicroPositioner.jl")
-include("mcl_piezo/MCLPiezoPositioner.jl")
 
 end
