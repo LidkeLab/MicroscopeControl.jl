@@ -1,0 +1,75 @@
+using GLMakie
+
+function gui(positioner::Zpositioner)
+    fig = Figure(resolution=(600, 400))
+    
+    # Set position observables
+    targ_pos = Observable(0.0)
+    real_pos = Observable(0.0)
+    is_moving = Observable{Bool}(false)
+
+    # update obervable strings
+    current_pos_str = lift(real_pos) do real_pos
+        "Current Position: $real_pos"
+    end
+    current_pos_label = Label(fig, current_pos_str)
+
+    targ_pos_str = lift(targ_pos) do targ_pos
+        "Current Target Position: $targ_pos"
+    end
+    targ_pos_label = Label(fig, targ_pos_str)
+
+    is_moving_str = lift(is_moving) do is_moving
+        is_moving ? "Positioner IS MOVING" : "Positioner at rest"
+    end
+    is_moving_label = Label(fig, is_moving_str)
+
+    # Move the positioner
+    set_targ_label = Label(fig, "Set the target position")
+    targ_tb = Textbox(fig, placeholder = string(0), validator = Float64)
+
+    on(targ_tb.stored_string) do target_change
+        if !positioner.connectionstatus
+            @error "Stage is not connected!"
+            return
+        end
+
+        x = parse(Float64, target_change)
+        positioner.targ_x = x
+        targ_pos[] = x
+
+        move(positioner, x)
+    end
+
+    # get position
+
+    # Reset positioner
+    reset_button = Button(fig, label="reset")
+    on(reset_button.clicks) do mb
+        if !positioner.connectionstatus
+            @error "Stage is not connected!"
+            return
+        end
+        reset(positioner)
+    end
+
+    # Stop motion
+    stop_button = Button(fig, label="STOP MOTION")
+    on(stop_button.clicks) do mb
+        if !positioner.connectionstatus
+            @error "Stage is not connected!"
+            return
+        end
+        stop_motion(positioner)
+    end
+
+    # Place Everything on screen
+    fig[1,1] = hgrid!(current_pos_label, targ_pos_label)
+    fig[2,1] = hgrid!(is_moving_label)
+    fig[3,1] = hgrid!(set_targ_label, targ_tb)
+    fig[4,1] = hgrid!(reset_button, stop_button)
+
+    # Show!
+    GLMakie.activate!(title="Objective Positioner GUI")
+    display(GLMakie.Screen(), fig)
+end

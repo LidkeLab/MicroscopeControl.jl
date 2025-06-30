@@ -2,7 +2,7 @@ using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner
 using MicroscopeControl.HardwareImplementations.MadCityLabs
-
+import MicroscopeControl.HardwareInterfaces.ObjPositionerInterface: gui as objective_gui
 
 
 positioner = MclZPositioner()
