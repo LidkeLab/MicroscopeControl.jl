@@ -46,7 +46,7 @@ function live_makie_display(camera::ThorcamDCXCamera)
                 ax.title = "Live Camera Feed - Frame: $frame_count, Time: $duration seconds"
             end
 
-            sleep(0.0003)
+            sleep(1e-4)
         end
         println("Captured $frame_count frames in $duration seconds")
     end
@@ -81,8 +81,14 @@ function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4)
         if 1 <= x <= frame_width && 1 <= y <= frame_height
             cursor_text[] = "Mouse: ($center_x, $center_y) \n Tracking $(track_mouse ? "enabled" : "disabled" )"
             if track_mouse
-                setdac(scope, 1, center_x / 164) # Set X position
-                setdac(scope, 2, - (center_y / 119)) # Set Y position
+                try
+                    setdac(scope, 1, center_x / 164) # Set X position
+                    setdac(scope, 2, - (center_y / 119)) # Set Y position
+                catch e
+                    setrange(scope4, 1, PLUSMINUS10)
+                    sleep(0.2)
+                    setrange(scope4, 2, PLUSMINUS10)
+                end
             end
         end
     end
@@ -119,7 +125,7 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera)
         setrange(scope, 2, PLUSMINUS10)
         setdac(scope, 1, 0.0)
         setdac(scope, 2, 0.0)
-        camera.exposure_time = 0.0002
+        camera.exposure_time = 6e-5
     catch e
         @error "Error initializing camera or scope: $e"
         shutdown(scope)
@@ -143,8 +149,5 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera)
 end
 
 camera = ThorcamDCXCamera()
-scope4 = Triggerscope4(compause = 0.0003) 
-#The shorter the compause, the higher the chance that communication 
-#with the scope fails.
-# If it breaks, close the window and run the program again.
+scope4 = Triggerscope4(compause = 1e-4) 
 laser_mouse_tracking(scope4, camera)
