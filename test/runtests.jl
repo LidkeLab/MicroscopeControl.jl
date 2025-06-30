@@ -5,7 +5,7 @@ using Test
     @testset "Simulated Camera" begin
         cam = SimCamera()
         
-        @test initialize(cam) == nothing
+        @test initialize(cam) === nothing
         
         # Test exposure time setting
         @test setexposuretime(cam, 0.1) === nothing

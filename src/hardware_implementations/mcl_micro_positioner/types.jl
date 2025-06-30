@@ -14,6 +14,7 @@
     velocity::Float64 = 1.0
     axis::Int = 2 # 1 = x, 2 = y, 3 = z
     rounding::Int = 0 # Nearest microstep = 0, Nearest full step = 1, Nearest half step = 2
+    ismoving::Bool = false
 end
 
 HardwareReturn = Dict{Int, String}(

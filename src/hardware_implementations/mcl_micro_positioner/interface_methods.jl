@@ -18,7 +18,7 @@ function ObjPositionerInterface.shutdown(positioner::MclZPositioner)
     return nothing
 end
 
-function export_state(positioner::MclZPositioner)
+function ObjPositionerInterface.export_state(positioner::MclZPositioner)
         attributes = Dict{String, Any}(
         "label" => positioner.label,
         "units" => positioner.units,
@@ -35,20 +35,23 @@ function export_state(positioner::MclZPositioner)
 end
 
 function ObjPositionerInterface.move(positioner::MclZPositioner, z::Float64)
-    positioner.targ_z = z
+    positioner.targ_z += z
 
     # Ensures that the device is not written to while it is moving
     # (If the device is written to while it is moving, the internal clock gets messed up)
     if microdrive_move_status(positioner)
         microdrive_wait(positioner)
     end
-
     call = @ccall madlibpath.MCL_MD1MoveProfile(
         positioner.velocity::Cdouble, 
-        positioner.targ_z::Cdouble, 
+        z::Cdouble, 
         positioner.rounding::Cint, 
         positioner.handle::Cint
     )::Cint
+    while microdrive_move_status(positioner)
+        positioner.ismoving = true
+    end
+    positioner.ismoving = false
     return HardwareReturn[call]
 end
 
@@ -56,16 +59,9 @@ function ObjPositionerInterface.reset(positioner::MclZPositioner)
     positioner.targ_z = 0.0
     status = Vector{Cuchar}(undef, 1)
     # get number of microsteps away from zero
-    microsteps = md1_current_microstep_pos(positioner)
+    current_pos = md1_read_encoder(positioner)[1]
 
-    # Ensures that the device is not written to while it is moving
-    # (If the device is written to while it is moving, the internal clock gets messed up)
-    if microdrive_move_status(positioner)
-        microdrive_wait(positioner)
-    end
-
-    call = md1_move_profile_microsteps(positioner, microsteps)
-
+    call = ObjPositionerInterface.move(positioner, -current_pos) # move to zero
     return call
 end
 

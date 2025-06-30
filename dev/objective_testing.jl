@@ -20,9 +20,9 @@ piezo.id
 
 initialize(positioner)
 positioner.velocity = 1.0
-move(positioner, 3.0)
+ObjPositionerInterface.move(positioner, 3.0)
 stop_motion(positioner)
-reset(positioner)
+ObjPositionerInterface.reset(positioner)
 get_position(positioner)
 microdrive_wait(positioner)
 microdrive_status(positioner)
