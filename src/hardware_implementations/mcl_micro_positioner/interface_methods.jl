@@ -52,6 +52,23 @@ function ObjPositionerInterface.move(positioner::MclZPositioner, z::Float64)
     return HardwareReturn[call]
 end
 
+function ObjPositionerInterface.reset(positioner::MclZPositioner)
+    positioner.targ_z = 0.0
+    status = Vector{Cuchar}(undef, 1)
+
+    # Ensures that the device is not written to while it is moving
+    # (If the device is written to while it is moving, the internal clock gets messed up)
+    if microdrive_move_status(positioner)
+        microdrive_wait(positioner)
+    end
+
+    call = @ccall madlibpath.MCL_MD1ResetEncoder(
+        status::Ptr{Cuchar},
+        positioner.handle::Cint
+    )::Cint
+    return status[1], HardwareReturn[call]
+end
+
 function ObjPositionerInterface.get_position(positioner::MclZPositioner)
     pos = Vector{Cdouble}(undef, 1)  # allocate memory
     call = @ccall madlibpath.MCL_MD1ReadEncoder(

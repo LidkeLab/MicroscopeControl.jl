@@ -2,11 +2,13 @@ using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner
 using MicroscopeControl.HardwareImplementations.MadCityLabs
-import MicroscopeControl.HardwareInterfaces.ObjPositionerInterface: gui as objective_gui
+import MicroscopeControl.HardwareInterfaces.ObjPositionerInterface
 
 
 positioner = MclZPositioner()
 piezo = MCLStage()
+
+ObjPositionerInterface.gui(positioner)
 
 initialize(piezo)
 singlewriteZ(piezo, 1.0)
@@ -17,10 +19,10 @@ shutdown(piezo)
 piezo.id
 
 initialize(positioner)
-
 positioner.velocity = 1.0
 move(positioner, 3.0)
 stop_motion(positioner)
+reset(positioner)
 get_position(positioner)
 microdrive_wait(positioner)
 microdrive_status(positioner)

@@ -1,6 +1,13 @@
 using GLMakie
 
 function gui(positioner::Zpositioner)
+    try
+        initialize(positioner)
+    catch
+        @error "Failed to initialize the positioner. Please check the connection."
+        return
+    end
+
     fig = Figure(resolution=(600, 400))
     
     # Set position observables
@@ -35,7 +42,7 @@ function gui(positioner::Zpositioner)
         end
 
         x = parse(Float64, target_change)
-        positioner.targ_x = x
+        positioner.targ_z = x
         targ_pos[] = x
 
         move(positioner, x)
@@ -68,6 +75,17 @@ function gui(positioner::Zpositioner)
     fig[2,1] = hgrid!(is_moving_label)
     fig[3,1] = hgrid!(set_targ_label, targ_tb)
     fig[4,1] = hgrid!(reset_button, stop_button)
+
+    # closing the window, shutting down the positioner
+    on(events(fig).window_open) do is_open
+        if !is_open
+            try
+                shutdown(positioner)
+            catch e
+                @error "Error shutting down positioner: $e"
+            end
+        end
+    end
 
     # Show!
     GLMakie.activate!(title="Objective Positioner GUI")
