@@ -38,7 +38,7 @@ function program_square(side_length::Float64, num_cycles::Int)
     setdac(scope4, 2, 0.0)
 end
 
-program_square(2.0, 5000)
+program_square(2.0, 2000)
 arm(scope4)
 
 
