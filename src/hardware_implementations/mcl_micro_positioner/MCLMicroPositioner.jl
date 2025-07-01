@@ -3,7 +3,7 @@ using ..MicroscopeControl
 using ..MicroscopeControl.HardwareInterfaces.ObjPositionerInterface
 
 export MclZPositioner
-export move, get_position, stop_motion, reset
+export move, getposition, stopmotion, home
 export microdrive_information, microdrive_move_status, microdrive_status, microdrive_stop, microdrive_wait
 export mcl_device_attached, mcl_get_firmware_version, mcl_print_device_info, mcl_get_serial_number, mcl_dll_version, mcl_get_product_id
 export md1_move_profile_microsteps, md1_single_step, md1_reset_encoder, md1_read_encoder, md1_current_microstep_pos

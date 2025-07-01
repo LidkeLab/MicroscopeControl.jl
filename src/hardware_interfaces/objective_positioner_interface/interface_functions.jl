@@ -14,7 +14,7 @@ function StageInterface.move(positioner::Zpositioner, z::Float64)
 end
 
 """
-    get_position(positioner::Zpositioner)
+    getposition(positioner::Zpositioner)
 Gets the current possition of the objective positioner.
 
 # Arguments
@@ -22,11 +22,11 @@ Gets the current possition of the objective positioner.
 """
 
 function StageInterface.getposition(positioner::Zpositioner)
-    @error "get_position() not implimented"
+    @error "getposition() not implimented"
 end
 
 """
-    reset(positioner::Zpositioner)
+    home(positioner::Zpositioner)
 Resets the objective positioner back to a safe "home" state.
 
 # Arguments
@@ -38,7 +38,7 @@ function StageInterface.home(positioner::Zpositioner)
 end
 
 """
-    stop_motion(positioner::Zpositioner)
+    stopmotion(positioner::Zpositioner)
 Stops the motion of the objective positioner.
 
 # Arguments
@@ -46,5 +46,5 @@ Stops the motion of the objective positioner.
 """
 
 function StageInterface.stopmotion(positioner::Zpositioner)
-    @error "stop_motion() not implimented"
+    @error "stopmotion() not implimented"
 end

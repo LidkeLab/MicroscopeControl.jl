@@ -1,9 +1,10 @@
 module ObjPositionerInterface
 using ...MicroscopeControl
 using GLMakie
+using ..MicroscopeControl.HardwareInterfaces.StageInterface
 
 export Zpositioner
-export move, get_position, reset, stop_motion
+export move, getposition, home, stopmotion
 export gui
 
 include("interface_types.jl")
