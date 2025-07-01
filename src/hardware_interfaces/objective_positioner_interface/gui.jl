@@ -60,7 +60,7 @@ function gui(positioner::Zpositioner)
             return
         end
         targ_pos[] = 0.0
-        reset(positioner)
+        home(positioner)
     end
 
     # Stop motion
@@ -70,7 +70,7 @@ function gui(positioner::Zpositioner)
             @error "Stage is not connected!"
             return
         end
-        stop_motion(positioner)
+        stopmotion(positioner)
     end
 
     # Place Everything on screen
@@ -92,7 +92,7 @@ function gui(positioner::Zpositioner)
     on(events(fig).tick) do tick
         if positioner.connectionstatus
             # Update the real position observable
-            real_pos[] = round(get_position(positioner), digits=3)
+            real_pos[] = round(getposition(positioner), digits=3)
             # is_moving[] = positioner.ismoving
         else
             @error "Positioner is not connected!"

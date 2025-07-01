@@ -55,7 +55,7 @@ function ObjPositionerInterface.move(positioner::MclZPositioner, z::Float64)
     return HardwareReturn[call]
 end
 
-function ObjPositionerInterface.reset(positioner::MclZPositioner)
+function ObjPositionerInterface.home(positioner::MclZPositioner)
     positioner.targ_z = 0.0
     status = Vector{Cuchar}(undef, 1)
     # get number of microsteps away from zero
@@ -65,7 +65,7 @@ function ObjPositionerInterface.reset(positioner::MclZPositioner)
     return call
 end
 
-function ObjPositionerInterface.get_position(positioner::MclZPositioner)
+function ObjPositionerInterface.getposition(positioner::MclZPositioner)
     pos = Vector{Cdouble}(undef, 1)  # allocate memory
     call = @ccall madlibpath.MCL_MD1ReadEncoder(
         pos::Ptr{Cdouble},
@@ -78,7 +78,7 @@ function ObjPositionerInterface.get_position(positioner::MclZPositioner)
     return pos[1]
 end
 
-function ObjPositionerInterface.stop_motion(positioner::MclZPositioner)
+function ObjPositionerInterface.stopmotion(positioner::MclZPositioner)
     status = Vector{Cuchar}(undef, 1) # allocate memory as array of bytes
     call = @ccall madlibpath.MCL_MicroDriveStop(
         status::Ptr{Cuchar}, # passes pointer

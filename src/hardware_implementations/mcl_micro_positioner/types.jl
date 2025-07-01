@@ -1,14 +1,15 @@
 """
     `MclZPositioner` is a mutable struct inhereted from `ZpositionerInterface`. It is used to control the Z-positioner of a microscope using MCL hardware.
 # Feilds
-    -   
+    -  
 
 """
 @kwdef mutable struct MclZPositioner <: Zpositioner
     label::String = "MCLZPositioner"
     units::String = "Microns"
-    connectionstatus::Bool = false
     handle::Int = 0
+    connectionstatus::Bool = false
+    dimensions::Int = 1
     real_z::Float64 = 0.0
     targ_z::Float64 = 0.0
     velocity::Float64 = 1.0

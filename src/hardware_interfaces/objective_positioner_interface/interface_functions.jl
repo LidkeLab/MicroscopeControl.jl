@@ -9,7 +9,7 @@ Moves the objective positioner to a specified position.
 - `z::Float64`: The target z-coordinate for the positioner.
 """
 
-function move(positioner::Zpositioner, z::Float64)
+function StageInterface.move(positioner::Zpositioner, z::Float64)
     @error "Move() not implimented"
 end
 
@@ -21,7 +21,7 @@ Gets the current possition of the objective positioner.
 - `positioner::Zpositioner`: The objective positioner whose position is to be retrieved.
 """
 
-function get_position(positioner::Zpositioner)
+function StageInterface.getposition(positioner::Zpositioner)
     @error "get_position() not implimented"
 end
 
@@ -33,8 +33,8 @@ Resets the objective positioner back to a safe "home" state.
 - `positioner::Zpositioner`: The objective positioner who will be reset.
 """
 
-function reset(positioner::Zpositioner)
-    @error "reset() not implimented"
+function StageInterface.home(positioner::Zpositioner)
+    @error "home() not implimented"
 end
 
 """
@@ -45,6 +45,6 @@ Stops the motion of the objective positioner.
 - `positioner::Zpositioner`: The objective positioner whose motion will halt.
 """
 
-function stop_motion(positioner::Zpositioner)
+function StageInterface.stopmotion(positioner::Zpositioner)
     @error "stop_motion() not implimented"
 end
