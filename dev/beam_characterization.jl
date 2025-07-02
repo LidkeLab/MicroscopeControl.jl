@@ -24,7 +24,17 @@ function live_view_3d(
     x = 1:nx
     y = 1:ny
 
+    # for mathematical ideal overlay
+    C = Observable(1.0)
+    ω = Observable(1.0)
+    rs = 1:10
+    theatas = 0:360
+    ideal_x = rs .* cosd.(theatas')
+    ideal_y = rs .* sind.(theatas')
+    ideal_z = C*exp((-2(rs^2))/ω)*((r/ω)^4)
+
     surface!(ax3d, x, y, frame_obs; colormap = :viridis)
+    surface!(ax3d, ideal_x, ideal_y, ideal_z; colormap = (:greyC10, 0.2), overdraw = false)
 
     display(fig)
     window_closer(fig, () -> shutdown(camera))
@@ -64,7 +74,7 @@ function window_closer(fig, cleanups...)
 end
 
 function bright_median(frame; frac=0.05)
-    thresh = quantile(vec(frame), 1 - frac)  # threshold for top frac
+    thresh = quantile(vec(frame), 1 - frac)  # threshold for top fraction of pixels
     inds = findall(>=(thresh), frame)
     xs = []; ys = []
     for index in inds
@@ -74,6 +84,18 @@ function bright_median(frame; frac=0.05)
     center_x = median(xs)
     center_y = median(ys)
     return center_x, center_y
+end
+
+function set_constants(frame; frac = 0.05)
+    # C is related to the highest intensity, ω is the beam width
+    # To find the first constant C average the intensity of the brightest pixels
+    thresh = quantile(vec(frame), 1 - frac)
+    inds = findall(>=(thresh), frame)
+    sum = 0
+    for index in inds
+        sum += frame[index[1]][index[2]]
+    end
+    average_high_intensity = sum/length(inds)
 end
 
 camera = ThorcamDCXCamera()
