@@ -15,6 +15,7 @@ Images = "916415d5-f1e6-5110-898d-aaa5f9f070e0"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
 LibSerialPort = "a05a14c7-6e3b-5ba9-90a2-45558833e1df"
 NIDAQ = "66b72792-1abf-55ab-8064-6e9051317175"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
