@@ -4,7 +4,7 @@ using MicroscopeControl.HardwareImplementations.Triggerscope
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using GLMakie
 
-scope4 = Triggerscope4(compause = 0.035)
+scope4 = Triggerscope4(compause = 0.1)
 initialize(scope4)
 setrange(scope4, 1, PLUSMINUS10)
 setrange(scope4, 2, PLUSMINUS10)
@@ -14,10 +14,10 @@ setdac(scope4, 2, 0.0)
 shutdown(scope4)
 shutdown(camera)
 for i in 1:20
-    setdac(scope4, 1, 0.0)
-    setdac(scope4, 2, 0.0) 
-    setdac(scope4, 1, 2.0) 
-    setdac(scope4, 2, 10.0)
+    setdac(scope4, 1, 5.0)
+    setdac(scope4, 2, 5.0) 
+    setdac(scope4, 1, -5.0) 
+    setdac(scope4, 2, -5.0)
 end
 
 function program_square(side_length::Float64, num_cycles::Int)
@@ -38,7 +38,7 @@ function program_square(side_length::Float64, num_cycles::Int)
     setdac(scope4, 2, 0.0)
 end
 
-program_square(2.0, 2000)
+program_square(2.0, 500)
 arm(scope4)
 
 
@@ -142,3 +142,8 @@ arm(scope4)
 setrange(scope4, 1, PLUSMINUS10)
 setrange(scope4, 2, PLUSMINUS10)
 shutdown(camera)
+
+setdac(scope4, 1, 5.0)
+setdac(scope4, 2, 5.0) 
+setdac(scope4, 1, -5.0) 
+setdac(scope4, 2, -5.0)
