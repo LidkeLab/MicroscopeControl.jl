@@ -1,8 +1,8 @@
+# Created by Abbie Gatsch and Martin Zanazzi, Summer 2025
 using Revise
-using GLMakie, ImageFiltering
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
-using Statistics, Optim
+using Statistics, Optim, GLMakie, ImageFiltering
 
 function beam_characterization(
     camera::ThorcamDCXCamera, 
@@ -82,6 +82,7 @@ function beam_characterization(
     y_prof_optim = Observable(zeros(ny)) # y profile of the optimized frame
     ext_ratio = Observable(0.0) # extinction ratio
 
+    # update the observables that depend on optimizers
     on(refresh_optim.clicks) do n
         if !optimized_toggle.active[]
             @warn "toggle switch must be on to view optimized beam fit"
@@ -126,12 +127,12 @@ function beam_characterization(
     surface!(ax3d, y, x, ideal_z; colormap = (:greys, 0.6), overdraw = false, visible = fit_toggle.active) # 3d ideal data
     surface!(ax3d, y, x, diff_img; colormap = (:bone, 0.6), overdraw = true, visible = diff_toggle.active) # 3d difference data
     surface!(ax3d, y, x, optimized; colormap = (:blues, 0.6), overdraw = false, visible = optimized_toggle.active) # 3d optimized data
-    lines!(y_profile_ax, y_prof, color = :red)
-    lines!(x_profile_ax, x_prof, color = :blue)
-    lines!(y_profile_ax, y_prof_ideal, color = :grey, visible = fit_toggle.active)
-    lines!(x_profile_ax, x_prof_ideal, color = :grey, visible = fit_toggle.active)
-    lines!(x_profile_ax, x_prof_optim, color = :deepskyblue, visible = optimized_toggle.active)
-    lines!(y_profile_ax, y_prof_optim, color = :deepskyblue, visible = optimized_toggle.active)
+    lines!(y_profile_ax, y_prof, color = :red) # y profile centered on donut
+    lines!(x_profile_ax, x_prof, color = :blue) # x profile centered on donut
+    lines!(y_profile_ax, y_prof_ideal, color = :grey, visible = fit_toggle.active) # ideal profile line
+    lines!(x_profile_ax, x_prof_ideal, color = :grey, visible = fit_toggle.active) # ideal profile line
+    lines!(x_profile_ax, x_prof_optim, color = :deepskyblue, visible = optimized_toggle.active) # optimized profile line
+    lines!(y_profile_ax, y_prof_optim, color = :deepskyblue, visible = optimized_toggle.active) # optimized profile line
 
     # these tasks run every frame and would not update automatically otherwise.
     # they update the observables that the functions above rely on.
@@ -177,6 +178,7 @@ function window_closer(fig, cleanups...)
 end
 
 # find the center of the donut by averaging the coordinates of the bright ring
+# if this doesn't work well, adjust the fraction of brightest pixels to average
 function find_center(frame; frac=0.002) # frac is fraction of brightest pixels to average
     thresh = quantile(vec(frame), 1 - frac)  # gives the fraction of pixels that are above the threshold
     coords = findall(>=(thresh), frame) # gives a vector of the coordinates that corrospond to above threshold
@@ -208,6 +210,7 @@ function set_constants(frame, cx, cy, high_xs, high_ys; frac = 0.001)
     return avg_high_intensity, beam_radius
 end
 
+# Find radius of donut by averaging the distance from the center to the bright ring
 function ring_radius(xs, ys, cx, cy)
     dist_sum = 0
     for i in eachindex(xs)
@@ -216,14 +219,18 @@ function ring_radius(xs, ys, cx, cy)
     return dist_sum / length(xs)
 end
 
-
+# Fits a 4th degree polynomial to the center of the donut and uses its minimum to calculate the extinction ratio
+# The subframe size needs to be adjusted depending on the size of the donut on the screen.
 function extinction_ratio(frame, cx, cy, high_xs, high_ys; subframe_size = 20)
     int_cx = round(Int, cx)
     int_cy = round(Int, cy)
+
+    # create a subimage centered on the donut for the ideal overlay and extinction ratio calculation
     x_range = max(int_cx - subframe_size ÷ 2, 1) : min(int_cx + subframe_size ÷ 2, size(frame, 1))
     y_range = max(int_cy - subframe_size ÷ 2, 1) : min(int_cy + subframe_size ÷ 2, size(frame, 2))
     sub_image = frame[x_range, y_range]
     
+    # creates a funciton to optimize that does not depend on sub_image
     func_to_min = inputs -> polysquare_err(inputs, sub_image)
     result = optimize(
         func_to_min, 
@@ -232,10 +239,13 @@ function extinction_ratio(frame, cx, cy, high_xs, high_ys; subframe_size = 20)
             show_trace = false, 
             iterations = 100000
         ))
+
     println(result)
     A, B, C, D, E, F, G, H, I, J, K, L, M, N, O = Optim.minimizer(result)
     ideal_poly = polysquare_err([A, B, C, D, E, F, G, H, I, J, K, L, M, N, O], sub_image; return_ideal = true)
     
+    # averages the intensity of the brightest fraction of pixels and calculates the extinction ratio
+    # the lower the better
     bright_sum = 0
     for i in eachindex(high_xs)
         bright_sum += frame[high_xs[i], high_ys[i]]
@@ -246,6 +256,9 @@ function extinction_ratio(frame, cx, cy, high_xs, high_ys; subframe_size = 20)
     return poly_min / avg_high
 end
 
+# creates a 2d polynomial to fit to the donut center
+# returns the sum of squared errors if return_ideal is false
+# otherwise returns the ideal polynomial
 function polysquare_err(inputs::Vector{Float64}, data; return_ideal::Bool = false)
     A, B, C, D, E, F, G, H, I, J, K, L, M, N, O = inputs
     nx, ny = size(data)
@@ -298,9 +311,11 @@ function square_err(inputs::Vector{Float64}, cx, cy, data, full_frame, return_id
     x_grid = repeat(x', ny, 1)  # shape (ny, nx)
     y_grid = repeat(y, 1, nx) 
 
+    # calculate the center of the sub image instead of the full frame
     sub_cx = (nx + 1) / 2
     sub_cy = (ny + 1) / 2
 
+    # create an array of distances from the center calculated above
     r_grid = sqrt.((x_grid .- sub_cx).^2 .+ (y_grid .- sub_cy).^2)
     # make ideal function
     ideal = C .* exp.((-2 .* r_grid.^2) ./ (ω.^2)) .* (r_grid ./ ω).^4 .+ bg
@@ -343,6 +358,7 @@ function characterize(data, sub_frame_size = 100)
     return ideal, r_squared
 end
 
+# inserts the ideal subimage onto a full frame so it can be desplayed on the 3d intensity map
 function insert_image(sub_img, cx, cy, bg, frame)
     int_cx = round(Int, cx)
     int_cy = round(Int, cy)
