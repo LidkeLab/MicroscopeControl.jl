@@ -1,3 +1,8 @@
+# Created by Abbie Gatsch and Martin Zanazzi, Summer 2025
+# This code tracks the mouse on a GLMakie figure and sends voltages to a Triggerscope4 to have laser follow the mouse.
+# You can click the figure to enable and disable mouse tracking.
+# This serves as a simple example of galvo tracking that will eventually be implemented in the MINFLUX microscope.
+# The code also includes a live camera feed from a ThorcamDCX camera.
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
@@ -82,8 +87,10 @@ function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4)
             cursor_text[] = "Mouse: ($center_x, $center_y) \n Tracking $(track_mouse ? "enabled" : "disabled" )"
             if track_mouse
                 try
-                    setdac(scope, 1, center_x / 164) # Set X position
-                    setdac(scope, 2, - (center_y / 119)) # Set Y position
+                    # Set X and Y position. The numbers 1000 and 701 are scaling factors to convert pixels to volts. 
+                    # After changing the hardware you'll need to adjust this value.
+                    setdac(scope, 1, center_x / 1000)
+                    setdac(scope, 2, - (center_y / 701)) # Set Y position
                 catch e
                     setrange(scope4, 1, PLUSMINUS10)
                     sleep(0.2)
@@ -148,6 +155,7 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera)
 
 end
 
-camera = ThorcamDCXCamera()
-scope4 = Triggerscope4(compause = 1e-4) 
-laser_mouse_tracking(scope4, camera)
+# To run:
+# camera = ThorcamDCXCamera()
+# scope4 = Triggerscope4(compause = 1e-4) 
+# laser_mouse_tracking(scope4, camera)

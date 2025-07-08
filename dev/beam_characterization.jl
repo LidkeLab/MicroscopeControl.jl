@@ -1,4 +1,11 @@
 # Created by Abbie Gatsch and Martin Zanazzi, Summer 2025
+# This file provides a gui that has several tool to help characterize a leguerre gaussian beam of P = 0 L = 2
+# it will not work for other beam types
+# It provides a live camera feed, a 2d intensity map, a 3d intensity map, and line profiles of the beam
+# It also has options to show an apporximate fit and an optimized fit using Optim.jl
+# it also shows the difference image between the ideal and real data 
+# and calculates extinction ratio of the beam using a 2D 4th degree polynomial fit
+
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
@@ -373,8 +380,6 @@ function insert_image(sub_img, cx, cy, bg, frame)
     return ideal_frame
 end
 
-camera = ThorcamDCXCamera() # define camera first
-
-beam_characterization(camera)
-
-shutdown(camera)
+# camera = ThorcamDCXCamera() # define camera first
+# beam_characterization(camera)
+# shutdown(camera)
