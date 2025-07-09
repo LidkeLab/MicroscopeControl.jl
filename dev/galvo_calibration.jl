@@ -1,26 +1,29 @@
+# Created by Abbie Gatsch and Martin Zanazzi, Summer 2025
+# This code calibrates the galvo system of a microscope using a camera and a Triggerscope4.
+# It returns a covariance matrix that can be used to convert pixel positions to voltages for the galvo system, and vice versa.
+# It includes a gui that lets you visualize the calibration process in real-time.
+# It also plots the relationship between voltage and position in a 2x2 grid of axes and computes the linear fit and R^2 for each axis.
+# The entries of the covariance matrix are the slopes of the linear fits.
+
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
-using GLMakie
+using GLMakie, Polynomials
 include("./beam_characterization.jl")
 
-# overall goal: make a thing that tracks the slope of the Voltage vs positiion graph so that a covariance matrix can be made
-# steps to do that goal
-# 1. make a function that tracks the position of the beam and the voltage of the galvo
-# 2. make a function that calculates the slope of the voltage vs position graph
-# 3. make a function that calculates the covariance matrix from the slopes
-# 4. make a function that uses the covariance matrix to calculate the position of the beam given a voltage
-
-function galvo_position_predictor()
-
+function position_to_voltage(position::Vector{Int64},covariance_matrix::Matrix{Float64})
+    voltages = inv(covariance_matrix) * position
+    return round.(voltages, digits = 5)
 end
 
-function make_covariance_matrix()
-
+function voltage_to_position(voltage::Vector{Float64}, covariance_matrix::Matrix{Float64})
+    position = covariance_matrix * voltage
+    return round.(Int, position)
 end
 
-function calibrate_galvo(camera::ThorcamDCXCamera, scope::Triggerscope4; step_size::Float64 = 0.005, x_channel = 1, y_channel = 2)
+function calibrate_galvo(camera::ThorcamDCXCamera, scope::Triggerscope4; step_size::Float64 = 0.01, x_channel = 1, y_channel = 2)
+    # Dictionary for voltage ranges
     volt_ranges = Dict{Range, Tuple{Float64, Float64}}(
         PLUSMINUS10 => (-10.0, 10.0),
         PLUSMINUS5 => (-5.0, 5.0),
@@ -28,11 +31,13 @@ function calibrate_galvo(camera::ThorcamDCXCamera, scope::Triggerscope4; step_si
         ZEROTOTEN => (0.0, 10.0),
         PLUSMINUS2_5 => (-2.5, 2.5)
     )
+    # Assign voltage ranges based on the dacrange of the scope
     x_min_volts = volt_ranges[scope.dacranges[x_channel]][1]
     x_max_volts = volt_ranges[scope.dacranges[x_channel]][2]
     y_min_volts = volt_ranges[scope.dacranges[y_channel]][1]
     y_max_volts = volt_ranges[scope.dacranges[y_channel]][2]
 
+    # Run four calibration loops one for the positive and negative voltages of each channel
     x_pos_positions, x_pos_voltages = calibration_loop(
         camera, scope, x_max_volts, x_min_volts, true; 
         step_size = step_size, channel = x_channel)
@@ -49,40 +54,54 @@ function calibrate_galvo(camera::ThorcamDCXCamera, scope::Triggerscope4; step_si
         camera, scope, y_max_volts, y_min_volts, false; 
         step_size = step_size, channel = y_channel)
 
+    # Combine the positions and voltages for both channels
+    # Reverse the negative positions and voltages to maintain order
     x_positions::Vector{Tuple{Float64, Float64}} = vcat(reverse(x_neg_positions), x_pos_positions)
     y_positions::Vector{Tuple{Float64, Float64}} = vcat(reverse(y_neg_positions), y_pos_positions)
     x_voltages::Vector{Float64} = vcat(reverse(x_neg_voltages), x_pos_voltages)
     y_voltages::Vector{Float64} = vcat(reverse(y_neg_voltages), y_pos_voltages)
 
-    return x_positions, y_positions, x_voltages, y_voltages
+    # Graph the positions vs voltages and compute the covariance matrix
+    coeffs_ax1, coeffs_ax2, coeffs_ax3, coeffs_ax4 = graph_pos_vs_volts(x_positions, y_positions, x_voltages, y_voltages)
+    covariance_matrix = [
+        coeffs_ax1[2] coeffs_ax3[2];
+        coeffs_ax4[2] coeffs_ax2[2]
+    ]
+
+    return covariance_matrix
 end
 
+# This is the function that moves an individual galvo through a range of voltages while tracking the position of the beam.
 function calibration_loop(
     camera::ThorcamDCXCamera, 
     scope::Triggerscope4, 
-    max_voltage::Float64, 
-    min_voltage::Float64,
-    positive::Bool; 
-    step_size::Float64 = 0.01, 
-    channel = 1, 
+    max_voltage::Float64, # Set in the triggerscope
+    min_voltage::Float64, # Set in the triggerscope
+    positive::Bool; # Whether the calibration is for positive or negative voltages
+    step_size::Float64 = 0.01, # Step size for voltage increments
+    channel = 1, # DAC channel on triggerscope to use
 )
     frame_size = size(getlastframe(camera))
     positions = []
-    voltages = []
-    voltage_counter = 0.0
-    margin = 0.05
+    voltages = [] # create an array that is the same size as positions for graphing
+    voltage_counter = 0.0 # keeps track of current voltage
+    margin = 0.05 # The margin of the frame size to stop the calibration loop
     go = true
 
+    # step in increments of step_size until voltage_counter reaches max_voltage or min_voltage or frame edge is reached
     while go == true && (positive ? voltage_counter <= max_voltage : voltage_counter >= min_voltage)
         setdac(scope, channel, voltage_counter)
         new_frame = getlastframe(camera)
         new_cx, new_cy = find_center(new_frame)
 
+        # push the positions and voltages to the arrays
         push!(positions, (new_cx, new_cy))
         push!(voltages, round(voltage_counter, digits = 4))
 
+        # Increment or decrement the voltage counter based on the positive flag
         positive ? voltage_counter += step_size : voltage_counter -= step_size
 
+        # Sets go to false if the new center is outside the margin of the frame size
         if new_cx < frame_size[1] * margin || new_cx > frame_size[1] * (1 - margin) ||
         new_cy < frame_size[2] * margin || new_cy > frame_size[2] * (1 - margin)
             go = false
@@ -92,6 +111,10 @@ function calibration_loop(
     return positions, voltages
 end
 
+# Function to set up the triggerscope to ensure the zero point is consistent
+# The zero point of the DAC ports will be different if clearall is called after setting the ranges.
+# Compause is the time between setting the DAC and reading the response from scope.
+# Shorter compause leads to faster response, but increases the risk of errors or crashes.
 function scope_setup(scope::Triggerscope4; compause::Float64 = 0.1, range::Range = PLUSMINUS10)
     clearall(scope)
     scope.compause = compause
@@ -101,34 +124,74 @@ function scope_setup(scope::Triggerscope4; compause::Float64 = 0.1, range::Range
     setdac(scope, 2, 0.0)
 end
 
+# Plots the positions vs voltages in a 2x2 grid of axes in the same layout as the covariance matrix.
+# Also plots the linear fits and desplays the R^2 values.
 function graph_pos_vs_volts(
-    x_positions::Vector{Tuple{Float64, Float64}}, 
-    y_positions::Vector{Tuple{Float64, Float64}}, 
+    x_volt_positions::Vector{Tuple{Float64, Float64}}, 
+    y_volt_positions::Vector{Tuple{Float64, Float64}}, 
     x_voltages::Vector{Float64}, 
     y_voltages::Vector{Float64}
 )
-    fig = Figure(size = (800, 600), title = "Position vs Voltage")
-    ax1 = Axis(fig[1, 1], title = "X Position vs X Voltage")
-    ax2 = Axis(fig[2, 2], title = "Y Position vs Y Voltage")
-    ax3 = Axis(fig[1, 2], title = "X Position vs Y Voltage")
-    ax4 = Axis(fig[2, 1], title = "Y Position vs X Voltage")
+    # Create figure and axes
+    fig2 = Figure(size = (800, 600), title = "Position vs Voltage")
+    ax1 = Axis(fig2[1, 1], title = "X Position vs X Voltage")
+    ax2 = Axis(fig2[2, 2], title = "Y Position vs Y Voltage")
+    ax3 = Axis(fig2[1, 2], title = "X Position vs Y Voltage")
+    ax4 = Axis(fig2[2, 1], title = "Y Position vs X Voltage")
 
-    scatter!(ax1, x_voltages, [pos[1] for pos in x_positions], color=:blue, markersize=5)
-    scatter!(ax2, y_voltages, [pos[2] for pos in y_positions], color=:red, markersize=5)
-    scatter!(ax3, y_voltages, [pos[1] for pos in y_positions], color=:green, markersize=5)
-    scatter!(ax4, x_voltages, [pos[2] for pos in x_positions], color=:purple, markersize=5)
+    # Scatter plots for actual positions vs voltages
+    scatter!(ax1, x_voltages, [pos[1] for pos in x_volt_positions], color=:lightblue, markersize=4)
+    scatter!(ax2, y_voltages, [pos[2] for pos in y_volt_positions], color=:salmon, markersize=4)
+    scatter!(ax3, y_voltages, [pos[1] for pos in y_volt_positions], color=:lightgreen, markersize=4)
+    scatter!(ax4, x_voltages, [pos[2] for pos in x_volt_positions], color=:orchid, markersize=4)
 
-    ax1.xlabel = " X Voltage (V)"
+    # Calculate linear fits and R^2 values for each axis
+    fit_ax1, r2_ax1, coeffs_ax1 = linear_fit(x_volt_positions, x_voltages, true)
+    fit_ax2, r2_ax2, coeffs_ax2 = linear_fit(y_volt_positions, y_voltages, false)
+    fit_ax3, r2_ax3, coeffs_ax3 = linear_fit(y_volt_positions, y_voltages, true)
+    fit_ax4, r2_ax4, coeffs_ax4 = linear_fit(x_volt_positions, x_voltages, false)
+
+    # Plot linear fits
+    lines!(ax1, x_voltages, fit_ax1, color=:blue, linewidth=2)
+    lines!(ax2, y_voltages, fit_ax2, color=:red, linewidth=2)
+    lines!(ax3, y_voltages, fit_ax3, color=:green, linewidth=2)
+    lines!(ax4, x_voltages, fit_ax4, color=:purple, linewidth=2)
+
+    # Label axis and display R^2 values
+    ax1.xlabel = " X Voltage (V), R² = $(round(r2_ax1, digits=5))"
     ax1.ylabel = "X Position (pixels)"
-    ax2.xlabel = " Y Voltage (V)"
+    ax2.xlabel = " Y Voltage (V), R² = $(round(r2_ax2, digits=5))"
     ax2.ylabel = "Y Position (pixels)"
-    ax3.xlabel = "Y Voltage (V)"
+    ax3.xlabel = "Y Voltage (V), R² = $(round(r2_ax3, digits=5))"
     ax3.ylabel = "X Position (pixels)"
-    ax4.xlabel = "X Voltage (V)"
+    ax4.xlabel = "X Voltage (V), R² = $(round(r2_ax4, digits=5))"
     ax4.ylabel = "Y Position (pixels)"
 
-    display(fig)
+    # Separate window for displaying the figure
+    display(GLMakie.Screen(), fig2)
+
+    # Returns the coefficients of the linear fits for each axis
+    # These coefficients are used to create the covariance matrix
+    return coeffs_ax1, coeffs_ax2, coeffs_ax3, coeffs_ax4
 end
+
+# Calculates linear fit and R^2 values
+function linear_fit(volt_positions::Vector{Tuple{Float64, Float64}}, voltages::Vector{Float64}, x_pos::Bool)
+    # x_pos is a boolean that determines whether the x position is used for the fit (true) or y position (false)
+    x = [voltage for voltage in voltages]
+    y = x_pos ? [pos[1] for pos in volt_positions] : [pos[2] for pos in volt_positions]
+    p = fit(x, y, 1)  # Linear fit
+    fit_coeffs = coeffs(p)
+    # y_fit is the array of y values for the linear fit
+    y_fit = fit_coeffs[1] .+ fit_coeffs[2] .* x  # y = mx + b
+    # Compute R^2
+    ss_res = sum((y .- y_fit).^2)
+    ss_tot = sum((y .- mean(y)).^2)
+    r2 = 1 - ss_res / ss_tot
+    return y_fit, r2, fit_coeffs
+end
+
+
 
 # GUI for Galvo Calibration
 function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; framerate::Float64 = 15.0, exposure_time::Float64 = 0.01)
@@ -145,20 +208,24 @@ function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; f
     start = time()
 
     # initalize figure and axis
-    fig = Figure(size = (1000, 750), title = "Galvo Calibration")
-    ax = Axis(fig[1, 1], title = "Live Camera Feed"; aspect = DataAspect())
+    fig1 = Figure(size = (1000, 750), title = "Galvo Calibration")
+    ax = Axis(fig1[1, 1], title = "Live Camera Feed"; aspect = DataAspect())
 
+    # Create observables for the frame, duration, and center coordinates
     frame_obs = Observable(initial_frame)
     duration = Observable(0.0)
     center_x = Observable(0.0)
     center_y = Observable(0.0)
 
+    # Create heatmap for camera view and scatter for center point
     heatmap!(ax, frame_obs, colormap = :inferno)
     scatter!(ax, center_x, center_y, color=:teal, markersize=10)
 
-    display(fig)
-    window_closer(fig, () -> shutdown(camera), () -> shutdown(scope))
+    # Create separate window and call window_closer to shutdown scope and camera on close
+    display(GLMakie.Screen(), fig1)
+    window_closer(fig1, () -> shutdown(camera), () -> shutdown(scope))
 
+    # Async loop to update observables with live camera feed
     @async begin 
         while camera.is_running == 1
             frame = getlastframe(camera)
@@ -173,8 +240,10 @@ function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; f
     end
 end
 
-camera1 = ThorcamDCXCamera()
-scope = Triggerscope4()
-galvo_calibration_gui(camera1, scope)
-x_positions, y_positions, x_voltages, y_voltages = calibrate_galvo(camera1, scope)
-graph_pos_vs_volts(x_positions, y_positions, x_voltages, y_voltages)
+# To run:
+# Close each camera gui before running the next one.
+# camera1 = ThorcamDCXCamera()
+# scope = Triggerscope4()
+# galvo_calibration_gui(camera1, scope)
+# covariance_matrix = calibrate_galvo(camera1, scope)
+# galvo_voltage_calc([0.0, 0.0], covariance_matrix)

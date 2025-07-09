@@ -8,6 +8,7 @@ using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using GLMakie
+include("./galvo_calibration.jl")
 
 function live_makie_display(camera::ThorcamDCXCamera)
     live(camera)  # Start capture
@@ -59,7 +60,7 @@ function live_makie_display(camera::ThorcamDCXCamera)
 end
 
 
-function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4)
+function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4, covariance_matrix::Matrix{Float64})
     track_mouse = true
     cursor_text = Observable("Mouse: (0, 0)")
     text!(ax, cursor_text, position = (50, 950), fontsize = 16, color = :white)
@@ -79,18 +80,18 @@ function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4)
         current_frame = frame_obs[]
         frame_width, frame_height = size(current_frame)
         
-        # Transform to center origin
         center_x = x - frame_width ÷ 2
         center_y = y - frame_height ÷ 2
-        
+        voltages = position_to_voltage([center_x, center_y], covariance_matrix)
+
         if 1 <= x <= frame_width && 1 <= y <= frame_height
             cursor_text[] = "Mouse: ($center_x, $center_y) \n Tracking $(track_mouse ? "enabled" : "disabled" )"
             if track_mouse
                 try
                     # Set X and Y position. The numbers 1000 and 701 are scaling factors to convert pixels to volts. 
                     # After changing the hardware you'll need to adjust this value.
-                    setdac(scope, 1, center_x / 1000)
-                    setdac(scope, 2, - (center_y / 701)) # Set Y position
+                    setdac(scope, 1, voltages[1]) # Set X position
+                    setdac(scope, 2, voltages[2]) # Set Y position
                 catch e
                     setrange(scope4, 1, PLUSMINUS10)
                     sleep(0.2)
@@ -122,7 +123,7 @@ function window_close_handler(fig, camera::ThorcamDCXCamera, scope::Triggerscope
     end
 end
 
-function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera)
+function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera, covariance_matrix::Matrix{Float64})
     try # Initialize the camera and scope
         initialize(camera)
         initialize(scope)
@@ -133,6 +134,7 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera)
         setdac(scope, 1, 0.0)
         setdac(scope, 2, 0.0)
         camera.exposure_time = 6e-5
+        scope.compause = 1e-4
     catch e
         @error "Error initializing camera or scope: $e"
         shutdown(scope)
@@ -141,7 +143,7 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera)
 
     # Start live view
     fig, ax, frame_obs = live_makie_display(camera)
-    mouse_tracker(fig, ax, frame_obs, scope)
+    mouse_tracker(fig, ax, frame_obs, scope, covariance_matrix)
 
     frame_width, frame_height = size(frame_obs[])
     center_x_pos = frame_width ÷ 2
@@ -156,6 +158,9 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera)
 end
 
 # To run:
+# Close each camera gui before running the next one.
 # camera = ThorcamDCXCamera()
-# scope4 = Triggerscope4(compause = 1e-4) 
-# laser_mouse_tracking(scope4, camera)
+# scope4 = Triggerscope4(compause = 1e-4)
+# galvo_calibration_gui(camera, scope4)
+# covariance_matrix = calibrate_galvo(camera, scope4; step_size = 0.01)
+# laser_mouse_tracking(scope4, camera, covariance_matrix)

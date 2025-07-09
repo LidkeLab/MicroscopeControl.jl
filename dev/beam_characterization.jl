@@ -194,8 +194,8 @@ function find_center(frame; frac=0.002) # frac is fraction of brightest pixels t
         push!(high_xs, coord[1])
         push!(high_ys, coord[2])
     end
-    center_x = median(high_xs)
-    center_y = median(high_ys)
+    center_x = mean(high_xs)
+    center_y = mean(high_ys)
     return center_x, center_y, high_xs, high_ys
 end
 
@@ -380,6 +380,7 @@ function insert_image(sub_img, cx, cy, bg, frame)
     return ideal_frame
 end
 
+# To run:
 # camera = ThorcamDCXCamera() # define camera first
 # beam_characterization(camera)
 # shutdown(camera)
