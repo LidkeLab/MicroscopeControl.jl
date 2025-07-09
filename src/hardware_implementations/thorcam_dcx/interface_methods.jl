@@ -98,7 +98,7 @@ function CameraInterface.getlastframe(camera::ThorcamDCXCamera)
     end
 
     data = reshape(img_vector, (camera.bytes_pixel,Width, Height));
-    data = data[1,:,:]
+    data = data[1,:,:]'
 
     return data
 end

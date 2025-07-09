@@ -22,7 +22,7 @@ function beam_characterization(
     camera.exposure_time = exposure_time
     live(camera)
     start = time()
-    initial_frame = getlastframe(camera)
+    initial_frame = getlastframe(camera)'
 
     # create figure, axis, layout
     fig = Figure(size = (1000, 750), title = "Beam Characterization")
@@ -63,15 +63,15 @@ function beam_characterization(
     frame_obs = Observable(initial_frame)
 
     # the dimensions of the frame
-    ny, nx = size(initial_frame)
+    nx, ny = size(initial_frame)
     x = collect(1:nx)
     y = collect(1:ny)
 
     # observables for mathematical ideal overlay
     C = Observable(1.0) # constant for height of donut
     ω = Observable(100.0) # constant for beam radius
-    x_grid = repeat(x', ny, 1)  # shape (ny, nx)
-    y_grid = repeat(y, 1, nx)  # shape (ny, nx)
+    x_grid = repeat(x, 1, ny)  # shape (nx, ny)
+    y_grid = repeat(y', nx, 1)  # shape (nx, ny)
 
     # initalize donut constants
     cx = Observable(1.0) # the x coord of the center
@@ -116,7 +116,7 @@ function beam_characterization(
 
     # update observables when the beam changes
     r_grid = lift(cx, cy) do cx, cy
-        sqrt.((x_grid .- cy).^2 .+ (y_grid .- cx).^2) # distance formula
+        sqrt.((x_grid .- cx).^2 .+ (y_grid .- cy).^2) # distance formula
     end
     ideal_z = lift(C, ω, r_grid, frame_obs) do C, ω, r_grid, frame_obs
         # leguerre gaussian beam formula with p = 0 and l = 2 and baseline added
@@ -126,14 +126,14 @@ function beam_characterization(
         # difference image between ideal and real data
         ideal_z .- frame_obs
     end
-
+    
     # draw on figure
     heatmap!(ax2d, frame_obs, colormap = :inferno) # live camera view
     scatter!(ax2d, cx, cy, color=:teal, markersize=10) # center dot
-    surface!(ax3d, y, x, frame_obs; colormap = :viridis, visible = real_3d_toggle.active) # 3d real data
-    surface!(ax3d, y, x, ideal_z; colormap = (:greys, 0.6), overdraw = false, visible = fit_toggle.active) # 3d ideal data
-    surface!(ax3d, y, x, diff_img; colormap = (:bone, 0.6), overdraw = true, visible = diff_toggle.active) # 3d difference data
-    surface!(ax3d, y, x, optimized; colormap = (:blues, 0.6), overdraw = false, visible = optimized_toggle.active) # 3d optimized data
+    surface!(ax3d, x, y, frame_obs; colormap = :viridis, visible = real_3d_toggle.active) # 3d real data
+    surface!(ax3d, x, y, ideal_z; colormap = (:greys, 0.6), overdraw = false, visible = fit_toggle.active) # 3d ideal data
+    surface!(ax3d, x, y, diff_img; colormap = (:bone, 0.6), overdraw = true, visible = diff_toggle.active) # 3d difference data
+    surface!(ax3d, x, y, optimized; colormap = (:blues, 0.6), overdraw = false, visible = optimized_toggle.active) # 3d optimized data
     lines!(y_profile_ax, y_prof, color = :red) # y profile centered on donut
     lines!(x_profile_ax, x_prof, color = :blue) # x profile centered on donut
     lines!(y_profile_ax, y_prof_ideal, color = :grey, visible = fit_toggle.active) # ideal profile line
@@ -145,7 +145,7 @@ function beam_characterization(
     # they update the observables that the functions above rely on.
     @async begin
         while camera.is_running == 1
-            frame = getlastframe(camera)
+            frame = getlastframe(camera)'
             # if the camera is on, update observables and titles
             if frame !== nothing
                 frame_obs[] = frame
@@ -271,8 +271,8 @@ function polysquare_err(inputs::Vector{Float64}, data; return_ideal::Bool = fals
     nx, ny = size(data)
     x = collect(1:nx)
     y = collect(1:ny)
-    x_grid = repeat(x', ny, 1)  # shape (ny, nx)
-    y_grid = repeat(y, 1, nx)   # shape (ny, nx)
+    x_grid = repeat(x, 1, ny)  # shape (nx, ny)
+    y_grid = repeat(y', nx, 1)  # shape (nx, ny)
     poly = A .+ B .* x_grid .+ C .* y_grid .+ D .* x_grid.^2 .+ E .* y_grid.^2 .+
             F .* x_grid .* y_grid .+ G .* x_grid.^3 .+ H .* y_grid.^3 .+
             I .* x_grid.^2 .* y_grid .+ J .* x_grid .* y_grid.^2 .+
@@ -312,11 +312,11 @@ end
 function square_err(inputs::Vector{Float64}, cx, cy, data, full_frame, return_ideal::Bool = false)
     C, ω, bg = inputs
     # make coordinate system
-    ny, nx = size(data)
+    nx, ny = size(data)
     x = collect(1:nx)
     y = collect(1:ny)
-    x_grid = repeat(x', ny, 1)  # shape (ny, nx)
-    y_grid = repeat(y, 1, nx) 
+    x_grid = repeat(x, 1, ny)  # shape (nx, ny)
+    y_grid = repeat(y', nx, 1)  # shape (nx, ny) 
 
     # calculate the center of the sub image instead of the full frame
     sub_cx = (nx + 1) / 2

@@ -81,7 +81,7 @@ function calibration_loop(
     step_size::Float64 = 0.01, # Step size for voltage increments
     channel = 1, # DAC channel on triggerscope to use
 )
-    frame_size = size(getlastframe(camera))
+    frame_size = size(getlastframe(camera)')
     positions = []
     voltages = [] # create an array that is the same size as positions for graphing
     voltage_counter = 0.0 # keeps track of current voltage
@@ -91,7 +91,7 @@ function calibration_loop(
     # step in increments of step_size until voltage_counter reaches max_voltage or min_voltage or frame edge is reached
     while go == true && (positive ? voltage_counter <= max_voltage : voltage_counter >= min_voltage)
         setdac(scope, channel, voltage_counter)
-        new_frame = getlastframe(camera)
+        new_frame = getlastframe(camera)'
         new_cx, new_cy = find_center(new_frame)
 
         # push the positions and voltages to the arrays
@@ -204,12 +204,12 @@ function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; f
     initialize(camera)    
     camera.exposure_time = exposure_time
     live(camera)
-    initial_frame = getlastframe(camera)
+    initial_frame = getlastframe(camera)'
     start = time()
 
     # initalize figure and axis
     fig1 = Figure(size = (1000, 750), title = "Galvo Calibration")
-    ax = Axis(fig1[1, 1], title = "Live Camera Feed"; aspect = DataAspect())
+    ax = Axis(fig1[1, 1], title = "Live Camera Feed"; aspect = DataAspect(), yreversed = true)
 
     # Create observables for the frame, duration, and center coordinates
     frame_obs = Observable(initial_frame)
@@ -228,7 +228,7 @@ function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; f
     # Async loop to update observables with live camera feed
     @async begin 
         while camera.is_running == 1
-            frame = getlastframe(camera)
+            frame = getlastframe(camera)'
             if frame !== nothing
                 frame_obs[] = frame
                 duration[] = round(time() - start, digits = 2)
@@ -240,8 +240,8 @@ function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; f
     end
 end
 
-# To run:
-# Close each camera gui before running the next one.
+#To run:
+#Close each camera gui before running the next one.
 # camera1 = ThorcamDCXCamera()
 # scope = Triggerscope4()
 # galvo_calibration_gui(camera1, scope)

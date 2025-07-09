@@ -15,7 +15,7 @@ function live_makie_display(camera::ThorcamDCXCamera)
     start = time()
     
     # Get initial frame
-    initial_frame = getlastframe(camera)
+    initial_frame = getlastframe(camera)'
     if initial_frame === nothing
         @error "Failed to get initial frame"
         return
@@ -23,13 +23,13 @@ function live_makie_display(camera::ThorcamDCXCamera)
     
     # Create figure and axis
     fig = Figure(resolution = (1280, 1024))
-    ax = Axis(fig[1, 1], title = "Live Camera Feed")
+    ax = Axis(fig[1, 1], title = "Live Camera Feed", aspect = DataAspect(), yreversed = true)
     
     # Create observable for real-time updates
     frame_obs = Observable(initial_frame)
     
     # Create heatmap
-    hm = heatmap!(ax, frame_obs, colormap = :greys)
+    heatmap!(ax, frame_obs, colormap = :cividis)
     
     # Display the figure
     display(fig)
@@ -39,7 +39,7 @@ function live_makie_display(camera::ThorcamDCXCamera)
     # Update loop
     @async begin
         while camera.is_running == 1
-            frame = getlastframe(camera)
+            frame = getlastframe(camera)'
             
             if frame !== nothing
                 frame_count += 1
@@ -85,7 +85,7 @@ function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4, covariance_matr
         voltages = position_to_voltage([center_x, center_y], covariance_matrix)
 
         if 1 <= x <= frame_width && 1 <= y <= frame_height
-            cursor_text[] = "Mouse: ($center_x, $center_y) \n Tracking $(track_mouse ? "enabled" : "disabled" )"
+            cursor_text[] = "Mouse: ($x, $y) \n Tracking $(track_mouse ? "enabled" : "disabled" )"
             if track_mouse
                 try
                     # Set X and Y position. The numbers 1000 and 701 are scaling factors to convert pixels to volts. 
@@ -125,8 +125,8 @@ end
 
 function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera, covariance_matrix::Matrix{Float64})
     try # Initialize the camera and scope
-        initialize(camera)
         initialize(scope)
+        initialize(camera)
         sleep(2)  # Allow time for instruments to initialize
         clearall(scope)
         setrange(scope, 1, PLUSMINUS10)
