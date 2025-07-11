@@ -30,8 +30,8 @@ using .HardwareImplementations.CrystaLaserControl
 using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
 using .HardwareImplementations.ThorCamDCx
-using .HardwareImplementations.Triggerscope
-using .HardwareImplementations.MCLMicroPositioner
+# using .HardwareImplementations.Triggerscope
+# using .HardwareImplementations.MCLMicroPositioner
 
 # # Export all HardwareImplementations modules
 # export DCAM4, SimulatedCamera, SimulatedStage, PI, MadCityLabs, PI_N472, ThorCamCSC
@@ -52,6 +52,7 @@ export dcamprop_getvalue, DCAM_IDPROP_INTERNALFRAMERATE, CameraROI, dcamapi_unin
 export PIStage, MCLStage, SimStage, N472
 export move, getposition, stopmotion, getrange
 export setvel, reference, servoxy, movexy, servo
+export move_to_z, get_z_position
 
 # Re-export light source implementations
 export SimLight, TCubeLaser, DaqTrLight, CrystaLaser, VortranLaser
@@ -66,10 +67,10 @@ export XEM
 export setexposure, enable, setupIO
 
 # Re-export triggerscope implementations
-export Triggerscope4
+# export Triggerscope4
 
 #re-export objective positioner implementations
-export MclZPositioner
+# export MclZPositioner
 
 # Re-export common GUI methods
 export gui

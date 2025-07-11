@@ -43,7 +43,9 @@ function initialize(camera::ThorcamDCXCamera)
     pixel_clock_range = zeros(UINT,3)
     success = is_PixelClock(hcam,IS_PIXELCLOCK_CMD_GET_RANGE,pixel_clock_range,sizeof(pixel_clock_range))
     println("Pixel clock range: ", pixel_clock_range[1], " - ", pixel_clock_range[2])
-    pixelClock = [INT(pixel_clock_range[1]+10)]
+    # pixelClock = [INT(pixel_clock_range[1]+10)] # for MinFlux Project
+    pixelClock = [INT(pixel_clock_range[2]-5)] # for Smart microscope Project
+    # pixelClock = [INT(pixel_clock_range[1] + (pixel_clock_range[2] - pixel_clock_range[1]) ÷ 2)]  # Middle rangex
     success = is_PixelClock(hcam, IS_PIXELCLOCK_CMD_SET, pixelClock,sizeof(pixelClock))
 
     framerate = camera.frame_rate
