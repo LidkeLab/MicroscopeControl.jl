@@ -32,6 +32,24 @@ function StageInterface.move(stage::MCLStage, x::Float64, y::Float64, z::Float64
     return (errcodex, errcodey, errcodez)
 end
 
+function move_to_z(stage::MCLStage, z::Float64)
+    @info "Z stage moving to position: " * string(z)
+
+    # Move Z stage to position
+    errcodez = singlewriteZ(stage, z)
+
+    return errcodez
+end
+
+function get_z_position(stage::MCLStage)
+    @info "Getting Z stage position"
+
+    # Get Z stage position
+    z = singlereadZ(stage)
+
+    return z
+end
+
 function StageInterface.home(stage::MCLStage)
     @info "Homing stage"
 

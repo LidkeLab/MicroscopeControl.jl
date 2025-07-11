@@ -24,4 +24,5 @@ module MadCityLabs
     export inithandle, releasehandle, releaseallhandles                             #Handle handle_management
     export isdeviceattached, printdeviceinfo, getserialnumber, getcommandedposition, getcalibration #Device Information
     export singleread, singlewrite, singlereadZ, singlewriteZ, monitorZ             #Standard Device Movement
+    export move_to_z, get_z_position
 end
