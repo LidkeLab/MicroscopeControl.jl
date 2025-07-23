@@ -232,7 +232,8 @@ end
 camera = ThorCamCSCCamera()
 setgain(camera, Int32(480))
 fig, ax, frame_obs = live_camera_display(camera)
-# Setting the ROI does not work, Julia crashes. Maybe because getlastframe() and getlastframeornothing() are hard coded for 1440 x 1080? -Martin
+# Setting the ROI does not work. The function setroi returns 0 for success, but Julia crashes when you do that before calling live_camera_display.
+# Maybe because getlastframe() and getlastframeornothing() are hard coded for 1440 x 1080? -Martin
 
 
 # test_track(scope, camera, calibration_matrix)
