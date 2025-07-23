@@ -65,3 +65,49 @@ function setframespertrigger(camera::ThorCamCSCCamera)  #uses frames per trigger
     end
     return is_frames_set
 end
+
+function setgain(camera::ThorCamCSCCamera, gain::Cint)
+    is_gain_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_gain(camera.camera_handle::Ptr{Cvoid}, gain::Cint)::Cint
+    if is_gain_set != 0
+        @error "Gain not set"
+    end
+    return is_gain_set
+end
+
+#=
+function setroi!(camera::ThorCamCSCCamera, upper_left_x::Cint, upper_left_y::Cint, lower_right_x::Cint, lower_right_y::Cint)
+    is_roi_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_roi(
+        camera.camera_handle::Ptr{Cvoid}, 
+        upper_left_x::Cint,
+        upper_left_y::Cint,
+        lower_right_x::Cint,
+        lower_right_y::Cint
+    )::Cint
+
+    # camera.roi.x_start = upper_left_x
+    # camera.roi.y_start = upper_left_y
+    # camera.roi.width = lower_right_x - upper_left_x
+    # camera.roi.height = lower_right_y - upper_left_y
+
+    if is_roi_set != 0
+        @error "ROI not set"
+    end
+    return is_roi_set
+end
+
+function setroi(camera::ThorCamCSCCamera)
+    is_roi_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_roi(
+        camera.camera_handle::Ptr{Cvoid}, 
+        camera.roi.x_start::Cint,
+        camera.roi.y_start::Cint,
+        (camera.roi.width + camera.roi.x_start)::Cint,
+        (camera.roi.height + camera.roi.y_start)::Cint
+    )::Cint
+    if is_roi_set != 0
+        @error "ROI not set"
+    end
+    return is_roi_set
+end
+
+All ROI functions do not work yet
+=#

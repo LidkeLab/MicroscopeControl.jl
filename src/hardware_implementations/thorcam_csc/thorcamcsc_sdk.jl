@@ -20,6 +20,6 @@ end
 function shutdown(cam::ThorCamCSCCamera)
     is_closed = closecamera(cam)
     is_sdk_uninit = thorcamsdkuninit()
-
+    cam.is_running = 0
     return is_closed, is_sdk_uninit
 end

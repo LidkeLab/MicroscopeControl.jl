@@ -113,10 +113,15 @@ function gui(camera::Camera)
     end
 
     # Display the unique_id string in the window
-    id_label = Label(control_fig[1, 1], "Unique ID: " * camera.unique_id)
+    if typeof(camera.unique_id) == String
+        camera_name = camera.unique_id
+    else
+        camera_name = "Camera"
+    end
 
+    id_label = Label(control_fig[1, 1], "Unique ID: " * camera_name)
     # Display the control figure in a new window
-    GLMakie.activate!(title=camera.unique_id)
+    GLMakie.activate!(title=camera_name)
     display(GLMakie.Screen(), control_fig)
 end
 

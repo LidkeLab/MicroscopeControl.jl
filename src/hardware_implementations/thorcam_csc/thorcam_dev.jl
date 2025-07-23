@@ -6,7 +6,7 @@ function discoveravaliablecameras!(unique_id::Vector{UInt8}, max_length::Cint)
     return is_camera_found  
 end
 
-function discoveravaliablecameras!(camera::ThorCamCSCCamera, unique_id::Vector{UInt8}, max_length::Cint)
+function discoveravailablecameras!(camera::ThorCamCSCCamera, unique_id::Vector{UInt8}, max_length::Cint)
     is_camera_found = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_discover_available_cameras(unique_id::Ptr{UInt8}, max_length::Cint)::Cint   #returns zero if successful, test_ID is a pointer to a string containing the ID of the camera
     if is_camera_found != 0
         @error "Camera not found"

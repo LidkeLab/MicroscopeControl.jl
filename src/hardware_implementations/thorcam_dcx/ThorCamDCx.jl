@@ -12,7 +12,7 @@ import ...MicroscopeControl: export_state, initialize, shutdown
 export ThorcamDCXCamera, gui, shutdown
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime!, setroi!
-
+export CameraROI
 
 const uc480 = "C:\\Windows\\System32\\uc480_64.dll"
 

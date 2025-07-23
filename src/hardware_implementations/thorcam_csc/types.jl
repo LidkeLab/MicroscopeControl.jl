@@ -13,7 +13,7 @@ end
 
 mutable struct ThorCamCSCCamera <: Camera
     camera_handle::Ptr{Cvoid}
-    exposure_time::Clonglong
+    exposure_time::Clonglong # time in micro seconds
     poll_timeout::Cint
     unique_id::Vector{UInt8}
     max_id_length::Cint
