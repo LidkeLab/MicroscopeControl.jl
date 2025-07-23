@@ -1,9 +1,10 @@
+# Abbie Gatsch and Martin Zanazzi, Summer 2025
+# 
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner
 using MicroscopeControl.HardwareImplementations.MadCityLabs
 import MicroscopeControl.HardwareInterfaces.ObjPositionerInterface
-
 
 positioner = MclZPositioner()
 piezo = MCLStage()
@@ -20,7 +21,8 @@ piezo.id
 
 initialize(positioner)
 positioner.velocity = 1.0
-move(positioner, -3.0)
+
+move(positioner, 0.0)
 stopmotion(positioner)
 home(positioner)
 getposition(positioner)
@@ -39,4 +41,14 @@ md1_single_step(positioner, 1)
 md1_reset_encoder(positioner)
 md1_read_encoder(positioner)
 md1_current_microstep_pos(positioner)
+shutdown(positioner)
+
+
+
+positioner = MclZPositioner()
+initialize(positioner)
+positioner.velocity = 1.0
+move(positioner, -0.1)
+stopmotion(positioner)
+
 shutdown(positioner)

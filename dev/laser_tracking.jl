@@ -9,8 +9,9 @@ using MicroscopeControl.HardwareImplementations.Triggerscope
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using GLMakie
 include("./galvo_calibration.jl")
+include("./dev_helper_funcs.jl")
 
-function live_makie_display(camera::ThorcamDCXCamera)
+function live_makie_display(camera)
     live(camera)  # Start capture
     start = time()
     
@@ -23,22 +24,26 @@ function live_makie_display(camera::ThorcamDCXCamera)
     
     # Create figure and axis
     fig = Figure(resolution = (1280, 1024))
-    ax = Axis(fig[1, 1], title = "Live Camera Feed", aspect = DataAspect(), yreversed = true)
-    
+    ax = Axis(fig[1, 1:2], title = "Live Camera Feed", aspect = DataAspect(), yreversed = true)
+
+    toggle_box = GridLayout(fig[2, 1])
+    Label(toggle_box[1, 1], "Scan Pattern")
+    tog_scan_pattern = Toggle(toggle_box[1, 2], active = false)
+
     # Create observable for real-time updates
     frame_obs = Observable(initial_frame)
     
     # Create heatmap
-    heatmap!(ax, frame_obs, colormap = :cividis)
+    heatmap!(ax, frame_obs, colormap = :inferno)
     
     # Display the figure
     display(fig)
 
     frame_count = 0
-    
-    # Update loop
+
+    # Update loop every frame
     @async begin
-        while camera.is_running == 1
+        while Bool(camera.is_running) == 1
             frame = getlastframe(camera)'
             
             if frame !== nothing
@@ -56,9 +61,26 @@ function live_makie_display(camera::ThorcamDCXCamera)
         end
         println("Captured $frame_count frames in $duration seconds")
     end
+    # Scan if Toggle is active
+    update_scanner(tog_scan_pattern.active, scope4, camera)
+
     return fig, ax, frame_obs
 end
 
+function update_scanner(go::Observable, scope::Triggerscope4, camera)
+    active = lift(go) do go
+        Bool(go[])
+    end
+    @async begin
+        while Bool(camera.is_running) == 1
+            if active[]
+                arm(scope)
+                @info "Scanner is active"
+            end
+            sleep(5.5)
+        end
+    end
+end
 
 function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4, covariance_matrix::Matrix{Float64})
     track_mouse = true
@@ -88,8 +110,6 @@ function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4, covariance_matr
             cursor_text[] = "Mouse: ($x, $y) \n Tracking $(track_mouse ? "enabled" : "disabled" )"
             if track_mouse
                 try
-                    # Set X and Y position. The numbers 1000 and 701 are scaling factors to convert pixels to volts. 
-                    # After changing the hardware you'll need to adjust this value.
                     setdac(scope, 1, voltages[1]) # Set X position
                     setdac(scope, 2, voltages[2]) # Set Y position
                 catch e
@@ -102,28 +122,7 @@ function mouse_tracker(fig, ax, frame_obs, scope::Triggerscope4, covariance_matr
     end
 end
 
-function window_close_handler(fig, camera::ThorcamDCXCamera, scope::Triggerscope4)
-    on(events(fig).window_open) do is_open
-        if !is_open
-            println("Window closed - shutting down camera and scope...")
-            try
-                shutdown(camera)
-                println("Camera shutdown complete")
-            catch e
-                println("Error shutting down camera: $e")
-            end
-            
-            try
-                shutdown(scope)
-                println("Scope shutdown complete")
-            catch e
-                println("Error shutting down scope: $e")
-            end
-        end
-    end
-end
-
-function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera, covariance_matrix::Matrix{Float64})
+function laser_mouse_tracking(scope::Triggerscope4, camera, covariance_matrix::Matrix{Float64})
     try # Initialize the camera and scope
         initialize(scope)
         initialize(camera)
@@ -133,7 +132,7 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera, co
         setrange(scope, 2, PLUSMINUS10)
         setdac(scope, 1, 0.0)
         setdac(scope, 2, 0.0)
-        camera.exposure_time = 6e-5
+        camera.exposure_time = 1500
         scope.compause = 1e-4
     catch e
         @error "Error initializing camera or scope: $e"
@@ -145,6 +144,10 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera, co
     fig, ax, frame_obs = live_makie_display(camera)
     mouse_tracker(fig, ax, frame_obs, scope, covariance_matrix)
 
+    # program a scan pattern onto the scope
+    prog_scan(scope, getlastframe(camera)', covariance_matrix)
+    @info "Scan pattern programmed onto scope"
+
     frame_width, frame_height = size(frame_obs[])
     center_x_pos = frame_width ÷ 2
     center_y_pos = frame_height ÷ 2
@@ -153,14 +156,41 @@ function laser_mouse_tracking(scope::Triggerscope4, camera::ThorcamDCXCamera, co
     vlines!(ax, [center_x_pos], color = :black, linewidth = 1, alpha = 0.7)
     hlines!(ax, [center_y_pos], color = :black, linewidth = 1, alpha = 0.7)
 
-    window_close_handler(fig, camera, scope)
 
+    window_closer(fig, () -> shutdown(camera), () -> shutdown(scope))
+
+end
+
+function prog_scan(scope::Triggerscope4, frame::Matrix, covariance_matrix::Matrix{Float64}, x_channel::Int = 1, y_channel::Int = 2, range::Range = PLUSMINUS10)
+    clearall(scope)
+    setrange(scope, x_channel, range)
+    setrange(scope, y_channel, range)
+
+    for i in 1:2:50
+        current_row = round(Int, (size(frame, 2) ÷ 2) - ((size(frame, 2) ÷ 50) * i))
+        voltages1 = position_to_voltage([-size(frame, 1) ÷ 2, current_row], covariance_matrix)
+        progdac(scope, i, x_channel, voltages1[1])
+        progdac(scope, i, y_channel, voltages1[2])
+        voltages2 = position_to_voltage([size(frame, 1) ÷ 2, current_row], covariance_matrix)
+        progdac(scope, i+1, x_channel, voltages2[1])
+        progdac(scope, i+1, y_channel, voltages2[2])
+    end
+
+    timecycles(scope, 100)
+    trigmode(scope, CHANGE)
+
+    setdac(scope, x_channel, 0.0)
+    setdac(scope, y_channel, 0.0)
 end
 
 # To run:
 # Close each camera gui before running the next one.
-# camera = ThorcamDCXCamera()
+# camera = ThorCamCSCCamera()
 # scope4 = Triggerscope4(compause = 1e-4)
 # galvo_calibration_gui(camera, scope4)
+# saved_covariance_matrix =  [371.114 -0.0179705; -7.35754 279.314]
 # covariance_matrix = calibrate_galvo(camera, scope4; step_size = 0.01)
-# laser_mouse_tracking(scope4, camera, covariance_matrix)
+# laser_mouse_tracking(scope4, camera, saved_covariance_matrix)
+
+
+# shutdown(camera)

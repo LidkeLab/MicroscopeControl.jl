@@ -9,20 +9,21 @@ using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
+using MicroscopeControl.HardwareImplementations.ThorCamCSC
 using GLMakie, Polynomials
 include("./beam_characterization.jl")
 
-function position_to_voltage(position::Vector{Int64},covariance_matrix::Matrix{Float64})
-    voltages = inv(covariance_matrix) * position
+function position_to_voltage(position::Vector{Int64},calibration_matrix::Matrix{Float64})
+    voltages = inv(calibration_matrix) * position
     return round.(voltages, digits = 5)
 end
 
-function voltage_to_position(voltage::Vector{Float64}, covariance_matrix::Matrix{Float64})
-    position = covariance_matrix * voltage
+function voltage_to_position(voltage::Vector{Float64}, calibration_matrix::Matrix{Float64})
+    position = calibration_matrix * voltage
     return round.(Int, position)
 end
 
-function calibrate_galvo(camera::ThorcamDCXCamera, scope::Triggerscope4; step_size::Float64 = 0.01, x_channel = 1, y_channel = 2)
+function calibrate_galvo(camera, scope::Triggerscope4; step_size::Float64 = 0.01, x_channel = 1, y_channel = 2)
     # Dictionary for voltage ranges
     volt_ranges = Dict{Range, Tuple{Float64, Float64}}(
         PLUSMINUS10 => (-10.0, 10.0),
@@ -63,29 +64,29 @@ function calibrate_galvo(camera::ThorcamDCXCamera, scope::Triggerscope4; step_si
 
     # Graph the positions vs voltages and compute the covariance matrix
     coeffs_ax1, coeffs_ax2, coeffs_ax3, coeffs_ax4 = graph_pos_vs_volts(x_positions, y_positions, x_voltages, y_voltages)
-    covariance_matrix = [
+    calibration_matrix = [
         coeffs_ax1[2] coeffs_ax3[2];
         coeffs_ax4[2] coeffs_ax2[2]
     ]
 
-    return covariance_matrix
+    return calibration_matrix
 end
 
 # This is the function that moves an individual galvo through a range of voltages while tracking the position of the beam.
 function calibration_loop(
-    camera::ThorcamDCXCamera, 
+    camera, 
     scope::Triggerscope4, 
     max_voltage::Float64, # Set in the triggerscope
     min_voltage::Float64, # Set in the triggerscope
     positive::Bool; # Whether the calibration is for positive or negative voltages
-    step_size::Float64 = 0.01, # Step size for voltage increments
+    step_size::Float64 = 0.001, # Step size for voltage increments
     channel = 1, # DAC channel on triggerscope to use
 )
     frame_size = size(getlastframe(camera)')
     positions = []
     voltages = [] # create an array that is the same size as positions for graphing
     voltage_counter = 0.0 # keeps track of current voltage
-    margin = 0.05 # The margin of the frame size to stop the calibration loop
+    margin = 0.25 # The margin of the frame size to stop the calibration loop
     go = true
 
     # step in increments of step_size until voltage_counter reaches max_voltage or min_voltage or frame edge is reached
@@ -194,7 +195,7 @@ end
 
 
 # GUI for Galvo Calibration
-function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; framerate::Float64 = 15.0, exposure_time::Float64 = 0.01)
+function galvo_calibration_gui(camera, scope::Triggerscope4; frame_rate::Float64 = 30.0, exposure_time = 10000)
     # initalize triggerscope 
     initialize(scope)
     sleep(2)  # Allow time for instruments to initialize
@@ -227,7 +228,7 @@ function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; f
 
     # Async loop to update observables with live camera feed
     @async begin 
-        while camera.is_running == 1
+        while Bool(camera.is_running) == 1
             frame = getlastframe(camera)'
             if frame !== nothing
                 frame_obs[] = frame
@@ -235,15 +236,16 @@ function galvo_calibration_gui(camera::ThorcamDCXCamera, scope::Triggerscope4; f
                 center_x[], center_y[] = find_center(frame)
                 ax.title = "Live Camera Feed - Time: $(duration[]) seconds"
             end
-            sleep(1 / framerate)
+            sleep(1 / frame_rate)
         end
     end
 end
 
-#To run:
-#Close each camera gui before running the next one.
-# camera1 = ThorcamDCXCamera()
+# To run:
+# Close each camera gui before running the next one.
+# camera = ThorCamCSCCamera()
 # scope = Triggerscope4()
-# galvo_calibration_gui(camera1, scope)
-# covariance_matrix = calibrate_galvo(camera1, scope)
-# galvo_voltage_calc([0.0, 0.0], covariance_matrix)
+# galvo_calibration_gui(camera, scope)
+# calibration_matrix = calibrate_galvo(camera, scope)
+# galvo_voltage_calc([0.0, 0.0], calibration_matrix)
+# shutdown(camera)

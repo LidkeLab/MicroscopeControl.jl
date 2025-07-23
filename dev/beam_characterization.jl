@@ -10,9 +10,10 @@ using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using Statistics, Optim, GLMakie, ImageFiltering
+include("./dev_helper_funcs.jl")
 
 function beam_characterization(
-    camera::ThorcamDCXCamera, 
+    camera, 
     framerate::Float64 = 5.0, # framerate seems to be limited to ~15.0
     exposure_time::Float64 = 0.01,
 )
@@ -96,7 +97,7 @@ function beam_characterization(
         end
 
         # run the characterization function when the refresh button is clicked
-        if camera.is_running == 1
+        if Bool(camera.is_running) == 1
             loading_label.visible[] = true
             yield()  # let the GUI update   
             @async begin
@@ -144,7 +145,7 @@ function beam_characterization(
     # these tasks run every frame and would not update automatically otherwise.
     # they update the observables that the functions above rely on.
     @async begin
-        while camera.is_running == 1
+        while Bool(camera.is_running) == 1
             frame = getlastframe(camera)'
             # if the camera is on, update observables and titles
             if frame !== nothing
@@ -165,23 +166,6 @@ function beam_characterization(
         end
     end
     return fig, ax2d, ax3d, frame_obs
-end
-
-# pass clean up functions, such as shutdown(camera)
-function window_closer(fig, cleanups...)
-    on(events(fig).window_open) do is_open
-        if !is_open
-            println("Window closed - running cleanup...")
-            for cleanup in cleanups
-                try
-                    cleanup()
-                catch e
-                    println("Error during cleanup: $e")
-                end
-            end
-            println("Cleanup complete!")
-        end
-    end
 end
 
 # find the center of the donut by averaging the coordinates of the bright ring
@@ -383,4 +367,3 @@ end
 # To run:
 # camera = ThorcamDCXCamera() # define camera first
 # beam_characterization(camera)
-# shutdown(camera)

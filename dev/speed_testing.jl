@@ -1,3 +1,5 @@
+# Abbie Gatsch and Martin Zanazzi, Summer 2025
+# Make cool shapes with parametric equations and lasers!
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
@@ -38,7 +40,7 @@ function program_square(side_length::Float64, num_cycles::Int)
     setdac(scope4, 2, 0.0)
 end
 
-program_square(2.0, 500)
+program_square(0.6, 1900)
 arm(scope4)
 
 
@@ -58,12 +60,9 @@ function program_circle(radius::Float64, step_size::Float64, num_cycles::Int)
     setdac(scope4, 2, 0.0)
 end
 
-program_circle(2.0, π/24, 1000)
+program_circle(0.6, π/24, 1000)
 arm(scope4)
 clearall(scope4)
-
-
-
 
 function program_heart(scale::Float64, num_cycles::Int)
     clearall(scope4)
@@ -139,11 +138,13 @@ end
 program_para_eq(2.0, π/24, 0.0, 2π, 2000, x, y)
 arm(scope4)
 
+getstatus(scope4)
+
 setrange(scope4, 1, PLUSMINUS10)
 setrange(scope4, 2, PLUSMINUS10)
-shutdown(camera)
+shutdown(scope4)
 
-setdac(scope4, 1, 5.0)
-setdac(scope4, 2, 5.0) 
+setdac(scope4, 1, 0.0)
+setdac(scope4, 2,0.0) 
 setdac(scope4, 1, -5.0) 
 setdac(scope4, 2, -5.0)
