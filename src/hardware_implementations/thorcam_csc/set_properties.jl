@@ -111,3 +111,22 @@ end
 
 All ROI functions do not work yet
 =#
+
+
+function setroi(camera::ThorCamCSCCamera)
+    x_start = Cint(camera.roi.x_start)
+    y_start = Cint(camera.roi.y_start)
+    x_end = Cint(camera.roi.x_start + camera.roi.width - 1)
+    y_end = Cint(camera.roi.y_start + camera.roi.height - 1)
+    is_roi_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_roi(
+        camera.camera_handle::Ptr{Cvoid}, 
+        x_start::Cint,
+        y_start::Cint,
+        x_end::Cint,
+        y_end::Cint
+    )::Cint
+    if is_roi_set != 0
+        @error "ROI not set"
+    end
+    return is_roi_set
+end

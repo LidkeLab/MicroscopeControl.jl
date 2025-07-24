@@ -24,12 +24,32 @@ function disarmcamera(camera::ThorCamCSCCamera)
     return is_camera_disarmed
 end
 
+function getroisize(camera::ThorCamCSCCamera)
+    image_height = [Cint(2)]
+    err1 = @ccall "thorlabs_tsi_camera_sdk".tl_camera_get_image_height(camera.camera_handle::Ptr{Cvoid}, image_height::Ptr{Cint})::Cint
+
+    image_width = [Cint(2)]
+    err1 = @ccall "thorlabs_tsi_camera_sdk".tl_camera_get_image_width(camera.camera_handle::Ptr{Cvoid}, image_width::Ptr{Cint})::Cint
+
+    return (image_width[1], image_height[1])
+end
+
+function getsensorsize(camera::ThorCamCSCCamera)
+    sensor_height = [Cint(2)]
+    err1 = @ccall "thorlabs_tsi_camera_sdk".tl_camera_get_sensor_height(camera.camera_handle::Ptr{Cvoid}, sensor_height::Ptr{Cint})::Cint
+
+    sensor_width = [Cint(2)]
+    err1 = @ccall "thorlabs_tsi_camera_sdk".tl_camera_get_sensor_width(camera.camera_handle::Ptr{Cvoid}, sensor_width::Ptr{Cint})::Cint
+
+    return (sensor_width[1], sensor_height[1])
+end
+
 function getlastframeornothing(camera::ThorCamCSCCamera)    #Calls tl_camera_get_pending_frame_or_null, returns Nothing, Nothing if no image collected
     image_buffer_ref = Ref{Ptr{UInt16}}()
     frame_count = Ref{Cint}(Cint(0))
     metadata_ref = Ref{Ptr{Cchar}}()
     metadate_size_bytes = Ref{Cint}(Cint(0))
-    image = Vector{UInt16}(undef, 1440 * 1080)
+    image = Vector{UInt16}(undef, camera.roi.width * camera.roi.height)
 
     is_frame_collected = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_pending_frame_or_null(
         camera.camera_handle::Ptr{Cvoid}, 

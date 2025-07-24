@@ -1,5 +1,7 @@
 function CameraInterface.initialize(camera::ThorCamCSCCamera)
     #Set Camera Properties
+    sensor_size = getsensorsize(camera)
+    camera.roi = CameraROI(0, 0, sensor_size[1], sensor_size[2])
     ThorCamCSC.setexposuretime(camera)
     ThorCamCSC.setoperationmode(camera)
     ThorCamCSC.setpolltimeout(camera)
@@ -10,11 +12,11 @@ end
 function CameraInterface.getlastframe(camera::ThorCamCSCCamera)
     last_frame = ThorCamCSC.getlastframeornothing(camera)    #Gets last frame, loop insures that frame is collected
     if last_frame == Nothing 
-        return zeros(UInt16, 1440, 1080)   #returns all zeros if frame not collected
+        return zeros(UInt16, camera.roi.width, camera.roi.height)   #returns all zeros if frame not collected
         #return zeros(UInt16, 1080, 1440)
     else 
-        last_frame = reshape(last_frame, 1440, 1080)
-        return last_frame'
+        last_frame = reshape(last_frame, camera.roi.width, camera.roi.height)
+        return last_frame
         #return rotr90(last_frame)
     end
 end
@@ -22,6 +24,7 @@ end
 function CameraInterface.capture(camera::ThorCamCSCCamera)
     camera.capture_mode = SINGLE_FRAME
     #Set Camera Properties
+    setroi(camera)
     ThorCamCSC.setexposuretime(camera)
     ThorCamCSC.setoperationmode(camera)
     ThorCamCSC.setframespertrigger(camera)
@@ -42,6 +45,7 @@ end
 function CameraInterface.sequence(camera::ThorCamCSCCamera)
     camera.capture_mode = SEQUENCE
     #Set Camera Properties
+    setroi(camera)
     ThorCamCSC.setexposuretime(camera)
     ThorCamCSC.setoperationmode(camera)
     ThorCamCSC.setpolltimeout(camera)
@@ -62,6 +66,7 @@ function CameraInterface.sequence(camera::ThorCamCSCCamera, sequence_frames::Int
     camera.capture_mode = SEQUENCE
     camera.sequence_length = sequence_frames
     #Set Camera Properties
+    setroi(camera)
     ThorCamCSC.setexposuretime(camera)
     ThorCamCSC.setoperationmode(camera)
     ThorCamCSC.setpolltimeout(camera)
@@ -86,6 +91,7 @@ function CameraInterface.live(camera::ThorCamCSCCamera)
     camera.capture_mode = LIVE
 
      #Set Camera Properties
+    setroi(camera)
     ThorCamCSC.setexposuretime(camera)
     ThorCamCSC.setoperationmode(camera)
     ThorCamCSC.setpolltimeout(camera)
@@ -108,7 +114,7 @@ end
 
 function CameraInterface.getdata(camera::ThorCamCSCCamera)
     if camera.capture_mode == SEQUENCE
-        sequence_array = zeros(UInt16, 1440, 1080, camera.sequence_length)
+        sequence_array = zeros(UInt16, camera.roi.width, camera.roi.height, camera.sequence_length)
         #sequence_array = zeros(UInt16, 1080, 1440, camera.sequence_length)
         for i in 1:camera.sequence_length
             single_image = CameraInterface.getlastframe(camera)
