@@ -21,7 +21,7 @@ mutable struct ThorCamCSCCamera <: Camera
     number_of_frames_to_buffer::Cint
     operation_mode::Cint
     frames_per_trigger_zero_for_unlimited::Cint
-    frame_rate::Cint
+    frame_rate::Cdouble
     roi::CameraROI
     sequence_length::Int
     capture_mode::CaptureMode
@@ -29,6 +29,7 @@ mutable struct ThorCamCSCCamera <: Camera
     last_error::Cint
     camera_state::Cint  #TODO: Enums for these
     is_running::Int
+    gain::Cint
 end
 
 function ThorCamCSCCamera(;
@@ -48,7 +49,8 @@ function ThorCamCSCCamera(;
     trigger_mode::TriggerMode = SOFTWARE_TRIGGER,
     last_error::Cint = Cint(0),
     camera_state::Cint = Cint(0),
-    is_running::Int = 0
+    is_running::Int = 0,
+    gain::Cint = Cint(1)
 )
     is_init = thorcamsdkinit()
 
@@ -65,5 +67,5 @@ function ThorCamCSCCamera(;
     end
 
     #TODO: Open camera here, so that it doesn not need to be opened in other functions
-    ThorCamCSCCamera(camera_handle, exposure_time, poll_timeout, unique_id, max_id_length, camera_format, number_of_frames_to_buffer, operation_mode, frames_per_trigger_zero_for_unlimited, frame_rate, roi, sequence_length, capture_mode,trigger_mode, last_error, camera_state, is_running)
+    ThorCamCSCCamera(camera_handle, exposure_time, poll_timeout, unique_id, max_id_length, camera_format, number_of_frames_to_buffer, operation_mode, frames_per_trigger_zero_for_unlimited, frame_rate, roi, sequence_length, capture_mode,trigger_mode, last_error, camera_state, is_running, gain)
 end

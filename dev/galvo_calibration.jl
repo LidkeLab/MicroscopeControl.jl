@@ -12,6 +12,7 @@ using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using MicroscopeControl.HardwareImplementations.ThorCamCSC
 using GLMakie, Polynomials
 include("./beam_characterization.jl")
+include("./dev_helper_funcs.jl")
 
 function position_to_voltage(position::Vector{Int64},calibration_matrix::Matrix{Float64})
     voltages = inv(calibration_matrix) * position
@@ -23,7 +24,7 @@ function voltage_to_position(voltage::Vector{Float64}, calibration_matrix::Matri
     return round.(Int, position)
 end
 
-function calibrate_galvo(camera, scope::Triggerscope4; step_size::Float64 = 0.01, x_channel = 1, y_channel = 2)
+function calibrate_galvo(camera, scope::Triggerscope4; step_size::Float64 = 0.01, x_channel = 1, y_channel = 2, frame_margin = 0.1)
     # Dictionary for voltage ranges
     volt_ranges = Dict{Range, Tuple{Float64, Float64}}(
         PLUSMINUS10 => (-10.0, 10.0),
@@ -41,19 +42,19 @@ function calibrate_galvo(camera, scope::Triggerscope4; step_size::Float64 = 0.01
     # Run four calibration loops one for the positive and negative voltages of each channel
     x_pos_positions, x_pos_voltages = calibration_loop(
         camera, scope, x_max_volts, x_min_volts, true; 
-        step_size = step_size, channel = x_channel)
+        step_size = step_size, channel = x_channel, margin = frame_margin)
 
     x_neg_positions, x_neg_voltages = calibration_loop(
         camera, scope, x_max_volts, x_min_volts, false; 
-        step_size = step_size, channel = x_channel)
+        step_size = step_size, channel = x_channel, margin = frame_margin)
 
     y_pos_positions, y_pos_voltages = calibration_loop(
         camera, scope, y_max_volts, y_min_volts, true; 
-        step_size = step_size, channel = y_channel)
+        step_size = step_size, channel = y_channel, margin = frame_margin)
 
     y_neg_positions, y_neg_voltages = calibration_loop(
         camera, scope, y_max_volts, y_min_volts, false; 
-        step_size = step_size, channel = y_channel)
+        step_size = step_size, channel = y_channel, margin = frame_margin)
 
     # Combine the positions and voltages for both channels
     # Reverse the negative positions and voltages to maintain order
@@ -81,12 +82,12 @@ function calibration_loop(
     positive::Bool; # Whether the calibration is for positive or negative voltages
     step_size::Float64 = 0.001, # Step size for voltage increments
     channel = 1, # DAC channel on triggerscope to use
+    margin = 0.1 # Margin of the frame size to stop the calibration loop
 )
     frame_size = size(getlastframe(camera)')
     positions = []
     voltages = [] # create an array that is the same size as positions for graphing
     voltage_counter = 0.0 # keeps track of current voltage
-    margin = 0.25 # The margin of the frame size to stop the calibration loop
     go = true
 
     # step in increments of step_size until voltage_counter reaches max_voltage or min_voltage or frame edge is reached
@@ -195,47 +196,24 @@ end
 
 
 # GUI for Galvo Calibration
-function galvo_calibration_gui(camera, scope::Triggerscope4; frame_rate::Float64 = 30.0, exposure_time = 10000)
+function galvo_calibration_gui(camera, scope::Triggerscope4; frame_rate::Float64 = 80.0, exposure_time = 10000, gain = Int32(480))
     # initalize triggerscope 
     initialize(scope)
     sleep(2)  # Allow time for instruments to initialize
     scope_setup(scope; compause=0.07)
 
-    # initalize camera
-    initialize(camera)    
-    camera.exposure_time = exposure_time
-    live(camera)
-    initial_frame = getlastframe(camera)'
-    start = time()
-
-    # initalize figure and axis
-    fig1 = Figure(size = (1000, 750), title = "Galvo Calibration")
-    ax = Axis(fig1[1, 1], title = "Live Camera Feed"; aspect = DataAspect(), yreversed = true)
-
-    # Create observables for the frame, duration, and center coordinates
-    frame_obs = Observable(initial_frame)
-    duration = Observable(0.0)
+    fig, ax, frame_obs = live_camera_display(camera, frame_rate = frame_rate, exposure_time = exposure_time, gain = gain)
+   
     center_x = Observable(0.0)
     center_y = Observable(0.0)
 
-    # Create heatmap for camera view and scatter for center point
-    heatmap!(ax, frame_obs, colormap = :inferno)
+    # Create scatter for center point
     scatter!(ax, center_x, center_y, color=:teal, markersize=10)
 
-    # Create separate window and call window_closer to shutdown scope and camera on close
-    display(GLMakie.Screen(), fig1)
-    window_closer(fig1, () -> shutdown(camera), () -> shutdown(scope))
-
-    # Async loop to update observables with live camera feed
+    # Async loop to update center with live camera feed
     @async begin 
         while Bool(camera.is_running) == 1
-            frame = getlastframe(camera)'
-            if frame !== nothing
-                frame_obs[] = frame
-                duration[] = round(time() - start, digits = 2)
-                center_x[], center_y[] = find_center(frame)
-                ax.title = "Live Camera Feed - Time: $(duration[]) seconds"
-            end
+            center_x[], center_y[] = find_center(frame_obs[])
             sleep(1 / frame_rate)
         end
     end
@@ -246,6 +224,7 @@ end
 # camera = ThorCamCSCCamera()
 # scope = Triggerscope4()
 # galvo_calibration_gui(camera, scope)
-# calibration_matrix = calibrate_galvo(camera, scope)
+# calibration_matrix = calibrate_galvo(camera, scope, frame_margin = 0.25)
+# saved_calibration_matrix_CSC = [1017.56 24.7616; 6.11555 746.693]
 # galvo_voltage_calc([0.0, 0.0], calibration_matrix)
 # shutdown(camera)

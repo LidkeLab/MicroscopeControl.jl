@@ -6,12 +6,23 @@ using MicroscopeControl.HardwareImplementations.ThorCamCSC
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using GLMakie
 
-function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time = 10000) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
+function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::Int64 = 10000, gain::Int32 = Int32(1), roi::CameraROI = CameraROI(0, 0, 1440, 1080)) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
     # initalize camera
     initialize(camera)    
+
     camera.exposure_time = exposure_time
+    camera.frame_rate = frame_rate
+    camera.roi = roi
+    camera.gain = gain
+
+
     live(camera)
+
+    @info "Camera initialized with exposure time: $(getexposuretime(camera)[1]) μs, frame rate: $(getframerate(camera)[1]) Hz, ROI: $(getroisize(camera)) pixels, gain: $(getgain(camera)[1] / 10) dB "
+    println()
+
     initial_frame = getlastframe(camera)'
+
     start = time()
 
     # initalize figure and axis

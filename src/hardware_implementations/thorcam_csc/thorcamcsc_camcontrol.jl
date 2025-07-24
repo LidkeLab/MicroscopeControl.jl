@@ -71,7 +71,6 @@ function getlastframeornothing(camera::ThorCamCSCCamera)    #Calls tl_camera_get
     else
         return Nothing
     end
-
     return image
 end
 
@@ -83,4 +82,43 @@ function issuesoftwaretrigger(camera::ThorCamCSCCamera)
     return is_software_trigger_issued
 end
 
+function getframerate(camera::ThorCamCSCCamera)
+    frame_rate_ref = Ref{Cdouble}(camera.frame_rate)
+    is_framerate_get = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_frame_rate_control_value(
+        camera.camera_handle::Ptr{Cvoid}, 
+        frame_rate_ref::Ref{Cdouble}
+    )::Cint
 
+    if is_framerate_get != 0
+        @error "Frame rate not set"
+    end
+
+    camera.frame_rate = frame_rate_ref[]
+    return camera.frame_rate, is_framerate_get
+end
+
+function getexposuretime(camera::ThorCamCSCCamera)
+    exposure_time_ref = Ref{Clonglong}(camera.exposure_time)
+    is_exposure_time_get = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_exposure_time(
+        camera.camera_handle::Ptr{Cvoid}, 
+        exposure_time_ref::Ref{Clonglong}
+    )::Cint
+    if is_exposure_time_get != 0
+        @error "Exposure time not set"
+    end
+    camera.exposure_time = exposure_time_ref[]
+    return camera.exposure_time, is_exposure_time_get
+end
+
+function getgain(camera::ThorCamCSCCamera)
+    gain_ref = Ref{Cint}(camera.gain)
+    is_gain_get = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_gain(
+        camera.camera_handle::Ptr{Cvoid}, 
+        gain_ref::Ref{Cint}
+    )::Cint
+    if is_gain_get != 0
+        @error "Gain not set"
+    end
+    camera.gain = gain_ref[]
+    return camera.gain, is_gain_get
+end

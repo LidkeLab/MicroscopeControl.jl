@@ -16,7 +16,7 @@ function CameraInterface.getlastframe(camera::ThorCamCSCCamera)
         #return zeros(UInt16, 1080, 1440)
     else 
         last_frame = reshape(last_frame, camera.roi.width, camera.roi.height)
-        return last_frame
+        return last_frame'
         #return rotr90(last_frame)
     end
 end
@@ -95,9 +95,9 @@ function CameraInterface.live(camera::ThorCamCSCCamera)
     ThorCamCSC.setexposuretime(camera)
     ThorCamCSC.setoperationmode(camera)
     ThorCamCSC.setpolltimeout(camera)
-    # ThorCamCSC.setroi(camera)
     ThorCamCSC.setframespertrigger!(camera, Cint(0))
-    #ThorCamCSC.setgain(camera, Cint(480))
+    setframerate(camera)
+    setgain(camera)
  
     ThorCamCSC.armcamera(camera)
 

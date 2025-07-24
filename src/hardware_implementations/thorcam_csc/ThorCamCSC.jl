@@ -8,8 +8,9 @@ import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
 import ...MicroscopeControl: export_state, initialize, shutdown
 
 export ThorCamCSCCamera, gui, shutdown, initialize
-export getlastframe, capture, live, sequence, abort, getdata
-export setexposuretime!, set_triggermode, setroi, setroi!, setgain
+export capture, live, sequence, abort
+export setexposuretime!, setexposuretime, set_triggermode, setroi, setroi!, setgain, setframerate
+export getgain, getroisize, getdata, getlastframe, getframerate, getexposuretime
 
 # include statements
 

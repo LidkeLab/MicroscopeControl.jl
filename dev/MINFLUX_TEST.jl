@@ -13,6 +13,7 @@ using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using GLMakie
 include("./galvo_calibration.jl")
 include("./dev_helper_funcs.jl")
+include("./beam_characterization.jl")
 
 function find_scan_pattern(r::Int, x_start::Int, y_start::Int)
     pos1 = (x_start, y_start)
@@ -23,31 +24,52 @@ function find_scan_pattern(r::Int, x_start::Int, y_start::Int)
 end
 
 #moves the galvo to each position and returns the intensity values
-function galvo_scan_pattern(positions::Tuple{Tuple{Int, Int}}, scope::Triggerscope4, camera, calibration_matrix::Matrix{Float64})
+function galvo_scan_pattern(positions::NTuple{4, Tuple{Int, Int}}, scope::Triggerscope4, camera, calibration_matrix::Matrix{Float64}; r = 40)
     intensity::Vector{Float64} = []
+    x, y = positions[1]
+    getroisize(camera)
+    mask = zeros(Float64, camera.roi.width, camera.roi.height)
+    mask[(x-r:x+r), (y-r:y+r)] .= 1
 
     for pos in positions
-        volts = position_to_voltage(pos, calibration_matrix)
+        volts = position_to_voltage(collect(pos) .- camera.roi.width ÷ 2, calibration_matrix)
         setdac(scope, 1, volts[1])
         setdac(scope, 2, volts[2])
 
-        sleep(2 / camera.frame_rate)
+        sleep(1 / camera.frame_rate)
         frame = getlastframe(camera)'
+        # bg = round(Int16, set_baseline(frame, frac = 0.5))
+        # for pix in frame
+        #     if pix < bg + 1
+        #         pix = bg
+        #     end
+        # end
+        # frame .-= bg
+        frame .*= mask
         sum_intensity = sum(frame)
         push!(intensity, sum_intensity)
     end
-
+    # println(size(intensity), typeof(intensity))
     return intensity
 end
+
+# positions = find_scan_pattern(7, 200, 200)
+# scope = Triggerscope4(compause = 0.1)
+# camera2 = ThorCamCSCCamera()
+# initialize(scope)
+# live(camera2)
+# abort(camera2)
+# galvo_scan_pattern(positions, scope, camera2, saved_calibration_matrix_CSC_1, r = 20)
+
 
 function estimate_position(intensity::Vector{Float64}, positions::NTuple{4, Tuple{Int, Int}})
     numerator = zeros(Float64, 2)
     for i in 1:4
-        weight = 1 / (intensity[i] .^ 4)
+        weight = 1 / (intensity[i] .^ 6)
         pos_vec = collect(positions[i])
         numerator .+= weight .* pos_vec
     end
-    denominator = sum(1 / (intensity[i] .^ 4) for i in 1:4)
+    denominator = sum(1 / (intensity[i] .^ 6) for i in 1:4)
     if denominator == 0
         return nothing
     end
@@ -154,34 +176,53 @@ function test_track(
     scope::Triggerscope4, 
     camera::ThorCamCSCCamera, 
     calibration_matrix::Matrix{Float64}; 
-    screen_size = 200,
-    framerate = 100
+    screen_size::Int = 400,
+    r::Int = 40
 )
-    initialize(camera)
-    center_x = camera.camera_format.x_pixels ÷ 2
-    center_y = camera.camera_format.y_pixels ÷ 2
+    clearall(scope)
+    setrange(scope, 1, PLUSMINUS10)
+    setrange(scope, 2, PLUSMINUS10)
+    setdac(scope, 1, 0.0)
+    setdac(scope, 2, 0.0)
+
+    center_y = camera.camera_format.x_pixels ÷ 2
+    center_x = camera.camera_format.y_pixels ÷ 2
+    println("Camera format: $(camera.camera_format.x_pixels) x $(camera.camera_format.y_pixels)")
     # A smaller roi allows for a faster frame rate
     camera.roi = CameraROI(center_y - (screen_size ÷ 2), center_x - (screen_size ÷ 2), screen_size, screen_size)
-    camera.exposure_time = 10000 # time in micro seconds
-    camera.gain = 480
 
-    fig, ax, frame = live_camera_display(camera)
+    frame_rate = 150.0
+    fig, ax, frame = live_camera_display(camera, gain = Int32(450), frame_rate = frame_rate, exposure_time = 10000, roi = camera.roi)
 
-    colsize!(fig.layout, 1, Relative(0.5))
-    colsize!(fig.layout, 2, Relative(0.5))
+    info_box = GridLayout(fig[2, 1], tellwidth=false, tellheight=false)
 
-    info_box = GridLayout(fig[1, 2])
-    moving_indicator = Label(info_box[1, 1], text="Not moving")
-    tracking_tog = Toggle(info_box[2, 1], active = false)
-    last_x = Observable{Int}(0)
-    last_y = Observable{Int}(0)
+    Label(info_box[1, 1], text="Enable Tracking:")
+    tracking_tog = Toggle(info_box[1, 2], active=false)
+    moving_indicator = Label(info_box[1, 3], text="Not Moving")
+
+    rowsize!(fig.layout, 1, Relative(0.9))
+    rowsize!(fig.layout, 2, Relative(0.1))
+
+    last_x = Observable{Int}(screen_size ÷ 2)
+    last_y = Observable{Int}(screen_size ÷ 2)
+    mask = Observable{Matrix{Float64}}(zeros(Float64, screen_size, screen_size))
+
+    # predicted_x = lift(last_x) do x
+    #     return x + (screen_size ÷ 2)
+    # end
+
+    # predicted_y = lift(last_y) do y
+    #     return y + (screen_size ÷ 2)
+    # end
+
+    scatter!(ax, last_x, last_y, markersize = 20, color = :teal)
 
     @async begin
         while Bool(camera.is_running) == 1
             if tracking_tog.active[]
                 try
-                    positions = find_scan_pattern(7, last_x[], last_y[])
-                    intensities = galvo_scan_pattern(positions, scope, camera, calibration_matrix)
+                    positions = find_scan_pattern(12, last_x[], last_y[])
+                    intensities = galvo_scan_pattern(positions, scope, camera, calibration_matrix, r = r)
                     new_pos = estimate_position(intensities, positions)
                     
                     if new_pos[1] != last_x[] && new_pos[2] != last_y[]
@@ -197,52 +238,31 @@ function test_track(
                     last_x[] = new_pos[1]
                     last_y[] = new_pos[2]
 
-                    volts = position_to_voltage([last_x[], last_y[]], calibration_matrix)
+                    volts = position_to_voltage([last_x[] - screen_size ÷ 2, last_y[] - screen_size ÷ 2], calibration_matrix)
                     println("Estimated position: ($(last_x[]), $(last_y[]))")
                     setdac(scope, 1, volts[1])
                     setdac(scope, 2, volts[2])
-                catch
+                catch e
                     @warn "Error estimating position: $e"
                     setrange(scope, 1, PLUSMINUS10)
                     sleep(0.2)
                     setrange(scope, 2, PLUSMINUS10)
                 end
             end
-            sleep(1 / framerate)
+            sleep(1 / frame_rate)
         end
     end
 end
 
-# calibration_matrix = [371.114 -0.0179705; -7.35754 279.314] # maybe for thorcam CSC
-# scope = Triggerscope4(compause = 1e-4)
+# for real use with microscope
+camera1 = ThorCamCSCCamera()
+scope = Triggerscope4(compause = 2e-4)
+saved_calibration_matrix_CSC_1 = [1017.56 24.7616; 6.11555 746.693]
+test_track(scope, camera1, saved_calibration_matrix_CSC_1)
 
-# center_x = camera.camera_format.x_pixels ÷ 2
-# center_y = camera.camera_format.y_pixels ÷ 2
-# # A smaller roi allows for a faster frame rate
-# screen_size = 200
-# # camera.roi = CameraROI(center_y - (screen_size ÷ 2), center_x - (screen_size ÷ 2), screen_size, screen_size)
-# camera.exposure_time = 10000 # time in micro seconds
-# # ThorCamCSC.setroi!(camera, Cint(1), Cint(1441), Cint(1081), Cint(1))
-# initialize(camera)
-# live(camera)
-# getlastframe(camera)
-# shutdown(camera)
+live_camera_display(camera1, gain = Int32(480), frame_rate = 80.0, exposure_time = 10000)
 
-
-camera = ThorCamCSCCamera()
-setgain(camera, Int32(480))
-fig, ax, frame_obs = live_camera_display(camera)
-# Setting the ROI does not work. The function setroi returns 0 for success, but Julia crashes when you do that before calling live_camera_display.
-# Maybe because getlastframe() and getlastframeornothing() are hard coded for 1440 x 1080? -Martin
-
-
-# test_track(scope, camera, calibration_matrix)
-
+# a simulated MINFLUX tracker using the characterization camera
+# camera = ThorcamDCXCamera()
 # simulation(scope, camera, calibration_matrix)
-
-
-# clearall(scope)
-# setrange(scope, 1, PLUSMINUS10)
-# setrange(scope, 2, PLUSMINUS10)
-# setdac(scope, 1, 0.0)
-# setdac(scope, 2, 0.0)
+shutdown(scope)
