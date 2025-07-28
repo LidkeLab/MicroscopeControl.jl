@@ -57,7 +57,6 @@ end
 
 function ObjPositionerInterface.home(positioner::MclZPositioner)
     positioner.targ_z = 0.0
-    status = Vector{Cuchar}(undef, 1)
     # get number of microsteps away from zero
     current_pos = md1_read_encoder(positioner)[1]
 
@@ -66,22 +65,22 @@ function ObjPositionerInterface.home(positioner::MclZPositioner)
 end
 
 function ObjPositionerInterface.getposition(positioner::MclZPositioner)
-    pos = Vector{Cdouble}(undef, 1)  # allocate memory
+    pos = Ref{Cdouble}()
     call = @ccall madlibpath.MCL_MD1ReadEncoder(
-        pos::Ptr{Cdouble},
+        pos::Ref{Cdouble},
         positioner.handle::Cint
     )::Cint
     if call != 0 
         # fatal error, do not want to read bad memory
         error("Failed to get position. Error code: $(HardwareReturn[call])")
     end
-    return pos[1]
+    return pos[]
 end
 
 function ObjPositionerInterface.stopmotion(positioner::MclZPositioner)
-    status = Vector{Cuchar}(undef, 1) # allocate memory as array of bytes
+    status = Ref{Cuchar}()
     call = @ccall madlibpath.MCL_MicroDriveStop(
-        status::Ptr{Cuchar}, # passes pointer
+        status::Ref{Cuchar}, # passes pointer
         positioner.handle::Cint
     )::Cint
     if call != 0 

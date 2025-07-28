@@ -12,15 +12,15 @@ mess up their internal clock.
     - `ismoving::Bool`: Returns true 1 if moving, false 0 if not 
 """
 function microdrive_move_status(positioner::MclZPositioner)
-    ismoving = Vector{Cint}(undef, 1) # allocate mem
+    ismoving = Ref{Cint}() # allocate mem
     call = @ccall madlibpath.MCL_MicroDriveMoveStatus(
-        ismoving::Ptr{Cint},
+        ismoving::Ref{Cint},
         positioner.handle::Cint
     )::Cint
     if call != 0 
         @error "Failed to retrive move status. Error code: $(HardwareReturn[call])"
     end
-    return Bool(ismoving[1])
+    return Bool(ismoving[])
 end
 
 """
@@ -60,16 +60,16 @@ Reads the current state of the limit switches
             - Bit 2, Reverse Limit Switch
 """
 function microdrive_status(positioner::MclZPositioner)
-    status = Vector{Cuchar}(undef, 1) # allocate memory 
+    status = Ref{Cuchar}() # allocate memory 
     call = @ccall madlibpath.MCL_MicroDriveStatus(
-        status::Ptr{Cuchar},
+        status::Ref{Cuchar},
         positioner.handle::Cint
     )::Cint
 
     if call != 0 
         @error "Failed to retrive MicroDrive Status. Error code: $(HardwareReturn[call])"
     end
-    return status[1]
+    return status[]
 end
 
 """
@@ -95,15 +95,15 @@ Stops the stage from moving
 """
 function microdrive_stop(positioner::MclZPositioner)
     # same code as stop_motion, but also returns status
-    status = Vector{Cuchar}(undef, 1) # allocate memory as array of bytes
+    status = Ref{Cuchar}()
     call = @ccall madlibpath.MCL_MicroDriveStop(
-        status::Ptr{Cuchar}, # passes pointer
+        status::Ref{Cuchar}, # passes pointer
         positioner.handle::Cint
     )::Cint
     if call != 0 
         @error "Failed to stop motion. Error code: $(HardwareReturn[call])"
     end
-    return HardwareReturn[call], status
+    return HardwareReturn[call], status[]
 end
 
 """
@@ -118,16 +118,16 @@ step size, max velocity, and min velocity.
     - `status::Dict{String, Float64}`
 """
 function microdrive_information(positioner::MclZPositioner)
-    res = Vector{Cdouble}(undef, 1) 
-    step_size = Vector{Cdouble}(undef, 1)
-    max_velocity = Vector{Cdouble}(undef, 1)
-    min_velocity = Vector{Cdouble}(undef, 1)
+    res = Ref{Cdouble}() 
+    step_size = Ref{Cdouble}()
+    max_velocity = Ref{Cdouble}()
+    min_velocity = Ref{Cdouble}()
 
     call = @ccall madlibpath.MCL_MicroDriveInformation(
-        res::Ptr{Cdouble},
-        step_size::Ptr{Cdouble},
-        max_velocity::Ptr{Cdouble},
-        min_velocity::Ptr{Cdouble},
+        res::Ref{Cdouble},
+        step_size::Ref{Cdouble},
+        max_velocity::Ref{Cdouble},
+        min_velocity::Ref{Cdouble},
         positioner.handle::Cint
     )::Cint
 
@@ -136,10 +136,10 @@ function microdrive_information(positioner::MclZPositioner)
     end
 
     status = Dict{String, Float64}(
-        "Resolution"=> res[1],
-        "Step Size" => step_size[1],
-        "Maximum Velocity" => max_velocity[1],
-        "Minimum Velocity" => min_velocity[1]
+        "Resolution"=> res[],
+        "Step Size" => step_size[],
+        "Maximum Velocity" => max_velocity[],
+        "Minimum Velocity" => min_velocity[]
     )
     return status
 end

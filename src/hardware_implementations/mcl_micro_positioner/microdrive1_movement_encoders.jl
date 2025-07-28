@@ -72,12 +72,12 @@ Makes the current position of the positioner the zero point
     
 """
 function md1_reset_encoder(positioner::MclZPositioner)
-    status = Vector{Cuchar}(undef, 1)  # allocate memory for status byte
+    status = Ref{Cuchar}()  # allocate memory for status byte
     call = @ccall madlibpath.MCL_MD1ResetEncoder(
-        status::Ptr{Cuchar},  # status parameter
+        status::Ref{Cuchar},  # status parameter
         positioner.handle::Cint  # handle parameter
     )::Cint
-    return status[1], HardwareReturn[call]
+    return status[], HardwareReturn[call]
 end
 
 """
@@ -92,12 +92,12 @@ Reads the postion of the positioner from the encoder
     - "MCL_SUCCESS" or relevant error code
 """
 function md1_read_encoder(positioner::MclZPositioner)
-    position = Vector{Cdouble}(undef, 1)  # allocate memory for position
+    position = Ref{Cdouble}()
     call = @ccall madlibpath.MCL_MD1ReadEncoder(
-        position::Ptr{Cdouble},  # position parameter
+        position::Ref{Cdouble},  # position parameter
         positioner.handle::Cint  # handle parameter
     )::Cint
-    return position[1], HardwareReturn[call]   # return the actual position value
+    return position[], HardwareReturn[call]   # return the actual position value
 end
 
 """
@@ -112,10 +112,10 @@ Reads the number of microsteps taken since the beginning of the program
     - "MCL_SUCCESS" or relevant error code
 """
 function md1_current_microstep_pos(positioner::MclZPositioner)
-    microsteps = Vector{Cint}(undef, 1)  # allocate memory for microstep count
+    microsteps = Ref{Cint}()
     call = @ccall madlibpath.MCL_MD1CurrentMicroStepPosition(
-        microsteps::Ptr{Cint},  # microSteps parameter
+        microsteps::Ref{Cint},  # microSteps parameter
         positioner.handle::Cint  # handle parameter
     )::Cint
-    return microsteps[1], HardwareReturn[call]
+    return microsteps[], HardwareReturn[call]
 end

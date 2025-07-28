@@ -28,12 +28,12 @@ Retrives Firmware version number and profile information
     - `profile::Int16`: The profile number
 """
 function mcl_get_firmware_version(positioner::MclZPositioner)
-    version = Vector{Cshort}(undef, 1)
-    profile = Vector{Cshort}(undef, 1)
+    version = Ref{Cshort}()
+    profile = Ref{Cshort}()
 
     call = @ccall madlibpath.MCL_GetFirmwareVersion(
-        version::Ptr{Cshort},
-        profile::Ptr{Cshort},
+        version::Ref{Cshort},
+        profile::Ref{Cshort},
         positioner.handle::Cint
     )::Cint
 
@@ -41,7 +41,7 @@ function mcl_get_firmware_version(positioner::MclZPositioner)
         @error "Failed to retrive MicroDrive information. Error code: $(HardwareReturn[call])"
     end
 
-    return version[1], profile[1]
+    return string(version[]) * "." * string(profile[])
 end
 
 """
@@ -85,16 +85,16 @@ Retrives the version of the firmware.
     - `version::String`: The Firmware Version Number
 """
 function mcl_dll_version(positioner::MclZPositioner)
-    version = Vector{Cshort}(undef, 1)
-    revision = Vector{Cshort}(undef, 1)
+    version = Ref{Cshort}()
+    revision = Ref{Cshort}()
 
     @ccall madlibpath.MCL_DLLVersion(
-        version::Ptr{Cshort},
-        revision::Ptr{Cshort},
+        version::Ref{Cshort},
+        revision::Ref{Cshort},
         positioner.handle::Cint
     )::Cvoid
 
-    return string(version[1]) * "." * string(Int32(revision[1]))
+    return string(version[]) * "." * string(Int32(revision[]))
 end
 
 """
@@ -108,10 +108,10 @@ Returns the product ID.
     - `id::Int`: The product ID
 """
 function mcl_get_product_id(positioner::MclZPositioner)
-    id = Vector{Cushort}(undef, 1)
+    id = Ref{Cushort}()
 
     call = @ccall madlibpath.MCL_GetProductID(
-        id::Ptr{Cushort},
+        id::Ref{Cushort},
         positioner.handle::Cint
     )::Cint
 
@@ -119,5 +119,5 @@ function mcl_get_product_id(positioner::MclZPositioner)
         @error "Failed to Retrive device information"
     end
 
-    return id[1]
+    return id[]
 end
