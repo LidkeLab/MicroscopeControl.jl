@@ -36,7 +36,8 @@ function move_to_z(stage::MCLStage, z::Float64)
     @info "Z stage moving to position: " * string(z)
 
     # Move Z stage to position
-    errcodez = singlewriteZ(stage, z)
+    # errcodez = singlewriteZ(stage, z)
+    errcodez = singlewrite(stage, 3, z)
 
     return errcodez
 end
@@ -45,7 +46,8 @@ function get_z_position(stage::MCLStage)
     @info "Getting Z stage position"
 
     # Get Z stage position
-    z = singlereadZ(stage)
+    # z = singlereadZ(stage)
+    z = singleread(stage, 3)
 
     return z
 end
