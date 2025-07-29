@@ -49,18 +49,8 @@ function galvo_scan_pattern(positions::NTuple{4, Tuple{Int, Int}}, scope::Trigge
         sum_intensity = sum(frame)
         push!(intensity, sum_intensity)
     end
-    # println(size(intensity), typeof(intensity))
     return intensity
 end
-
-# positions = find_scan_pattern(7, 200, 200)
-# scope = Triggerscope4(compause = 0.1)
-# camera2 = ThorCamCSCCamera()
-# initialize(scope)
-# live(camera2)
-# abort(camera2)
-# galvo_scan_pattern(positions, scope, camera2, saved_calibration_matrix_CSC_1, r = 20)
-
 
 function estimate_position(intensity::Vector{Float64}, positions::NTuple{4, Tuple{Int, Int}})
     numerator = zeros(Float64, 2)
@@ -171,7 +161,6 @@ function simulation(
     end
 end
 
-#Not working yet
 function test_track(
     scope::Triggerscope4, 
     camera::ThorCamCSCCamera, 
@@ -206,14 +195,6 @@ function test_track(
     last_x = Observable{Int}(screen_size ÷ 2)
     last_y = Observable{Int}(screen_size ÷ 2)
     mask = Observable{Matrix{Float64}}(zeros(Float64, screen_size, screen_size))
-
-    # predicted_x = lift(last_x) do x
-    #     return x + (screen_size ÷ 2)
-    # end
-
-    # predicted_y = lift(last_y) do y
-    #     return y + (screen_size ÷ 2)
-    # end
 
     scatter!(ax, last_x, last_y, markersize = 20, color = :teal)
 
@@ -260,9 +241,6 @@ scope = Triggerscope4(compause = 2e-4)
 saved_calibration_matrix_CSC_1 = [1017.56 24.7616; 6.11555 746.693]
 test_track(scope, camera1, saved_calibration_matrix_CSC_1)
 
-live_camera_display(camera1, gain = Int32(480), frame_rate = 80.0, exposure_time = 10000)
-
 # a simulated MINFLUX tracker using the characterization camera
 # camera = ThorcamDCXCamera()
 # simulation(scope, camera, calibration_matrix)
-shutdown(scope)

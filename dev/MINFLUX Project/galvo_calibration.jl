@@ -226,5 +226,3 @@ end
 # galvo_calibration_gui(camera, scope)
 # calibration_matrix = calibrate_galvo(camera, scope, frame_margin = 0.25)
 # saved_calibration_matrix_CSC = [1017.56 24.7616; 6.11555 746.693]
-# galvo_voltage_calc([0.0, 0.0], calibration_matrix)
-# shutdown(camera)
