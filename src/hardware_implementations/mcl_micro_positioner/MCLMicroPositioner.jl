@@ -1,3 +1,8 @@
+# Written by Martin Zanazzi and Abbie Gatsch Summer 2025
+# This is the module file for the Mad City Labs MicroPositioner
+# It was made with objectives in mind, so MclZPositioner inherets from ZPositioner
+# instead of just Stage, though much of the code can be used on a stage controled by 
+# a MCL Micropositioner as well. 
 module MCLMicroPositioner
 using ..MicroscopeControl
 using ..MicroscopeControl.HardwareInterfaces.ObjPositionerInterface
