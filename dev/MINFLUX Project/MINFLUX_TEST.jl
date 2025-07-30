@@ -23,7 +23,7 @@ function find_scan_pattern(r::Int, x_start::Int, y_start::Int)
     return (pos1, pos2, pos3, pos4)
 end
 
-#moves the galvo to each position and returns the intensity values
+# Moves the galvo to each position and returns the intensity values
 function galvo_scan_pattern(positions::NTuple{4, Tuple{Int, Int}}, scope::Triggerscope4, camera, calibration_matrix::Matrix{Float64}; r = 40)
     intensity::Vector{Float64} = []
     x, y = positions[1]
@@ -38,13 +38,6 @@ function galvo_scan_pattern(positions::NTuple{4, Tuple{Int, Int}}, scope::Trigge
 
         sleep(1 / camera.frame_rate)
         frame = getlastframe(camera)'
-        # bg = round(Int16, set_baseline(frame, frac = 0.5))
-        # for pix in frame
-        #     if pix < bg + 1
-        #         pix = bg
-        #     end
-        # end
-        # frame .-= bg
         frame .*= mask
         sum_intensity = sum(frame)
         push!(intensity, sum_intensity)
@@ -67,7 +60,7 @@ function estimate_position(intensity::Vector{Float64}, positions::NTuple{4, Tupl
 end
 
 # Simulates MINFLUX tracking by masking the frame of the camera with a frame of 0s and 1s, with the only 1s being a specified radius away from the mouse to simulate a bead.
-# The smaller the screen size, the faster the frame rate, leading to significantly quicker tracking.
+# The smaller the screen size, the faster the frame rate, leading to significantly quicker tracking. This program uses the beam characterization camera.
 function simulation(
     scope::Triggerscope4, 
     camera, 

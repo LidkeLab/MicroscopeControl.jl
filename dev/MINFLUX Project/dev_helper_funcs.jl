@@ -75,4 +75,3 @@ end
 # camera = ThorCamCSCCamera()
 # setgain(camera, Int32(480))
 # live_camera_display(camera)
-# shutdown(camera)

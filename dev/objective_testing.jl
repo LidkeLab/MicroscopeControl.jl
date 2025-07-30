@@ -1,5 +1,5 @@
 # Abbie Gatsch and Martin Zanazzi, Summer 2025
-# 
+
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner

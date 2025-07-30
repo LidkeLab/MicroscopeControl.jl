@@ -191,6 +191,3 @@ end
 # saved_covariance_matrix =  [371.114 -0.0179705; -7.35754 279.314]
 # covariance_matrix = calibrate_galvo(camera, scope4; step_size = 0.01)
 # laser_mouse_tracking(scope4, camera, saved_covariance_matrix)
-
-
-# shutdown(camera)
