@@ -163,11 +163,7 @@ function test_track(
     r::Int = 40
 )
     initialize(scope)
-    clearall(scope)
-    setrange(scope, 1, PLUSMINUS10)
-    setrange(scope, 2, PLUSMINUS10)
-    setdac(scope, 1, 0.0)
-    setdac(scope, 2, 0.0)
+    zero_galvos(scope)
 
     center_y = camera.camera_format.x_pixels ÷ 2
     center_x = camera.camera_format.y_pixels ÷ 2
@@ -184,6 +180,15 @@ function test_track(
     Label(info_box[1, 1], text="Enable Tracking:")
     tracking_tog = Toggle(info_box[1, 2], active=false)
     moving_indicator = Label(info_box[1, 3], text="Not Moving")
+
+    zero_button = Button(info_box[1, 4], label="Zero Galvos")
+    on(zero_button.clicks) do _
+        tracking_tog.active[] = false
+        sleep(0.1) # wait for tracking loop to end
+        zero_galvos(scope)
+        last_x[] = screen_size ÷ 2
+        last_y[] = screen_size ÷ 2
+    end
 
     rowsize!(fig.layout, 1, Relative(0.9))
     rowsize!(fig.layout, 2, Relative(0.1))
@@ -239,6 +244,7 @@ scope = Triggerscope4(compause = 2e-4)
 positioner = MclZPositioner()
 saved_calibration_matrix_CSC_1 = [1017.56 24.7616; 6.11555 746.693]
 test_track(scope, camera1, positioner, saved_calibration_matrix_CSC_1)
+
 
 shutdown(scope)
 shutdown(positioner)

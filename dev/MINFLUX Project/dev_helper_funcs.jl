@@ -155,6 +155,14 @@ function make_objective_gui!(positioner, fig::Figure)
     return obj_box
 end
 
+function zero_galvos(scope::Triggerscope4)
+    clearall(scope)
+    setrange(scope, 1, PLUSMINUS10)
+    setrange(scope, 2, PLUSMINUS10)
+    setdac(scope, 1, 0.0)
+    setdac(scope, 2, 0.0)
+end
+
 # camera = ThorCamCSCCamera()
 # setgain(camera, Int32(480))
 # live_camera_display(camera)
