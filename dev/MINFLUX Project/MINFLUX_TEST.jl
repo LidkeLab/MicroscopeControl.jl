@@ -156,11 +156,13 @@ end
 
 function test_track(
     scope::Triggerscope4, 
-    camera::ThorCamCSCCamera, 
+    camera::ThorCamCSCCamera,
+    positioner::MclZPositioner,
     calibration_matrix::Matrix{Float64}; 
     screen_size::Int = 400,
     r::Int = 40
 )
+    initialize(scope)
     clearall(scope)
     setrange(scope, 1, PLUSMINUS10)
     setrange(scope, 2, PLUSMINUS10)
@@ -175,6 +177,7 @@ function test_track(
 
     frame_rate = 150.0
     fig, ax, frame = live_camera_display(camera, gain = Int32(450), frame_rate = frame_rate, exposure_time = 10000, roi = camera.roi)
+    make_objective_gui!(positioner, fig)
 
     info_box = GridLayout(fig[2, 1], tellwidth=false, tellheight=false)
 
@@ -184,6 +187,8 @@ function test_track(
 
     rowsize!(fig.layout, 1, Relative(0.9))
     rowsize!(fig.layout, 2, Relative(0.1))
+    colsize!(fig.layout, 1, Relative(0.7))
+    colsize!(fig.layout, 2, Relative(0.3))
 
     last_x = Observable{Int}(screen_size ÷ 2)
     last_y = Observable{Int}(screen_size ÷ 2)
@@ -231,8 +236,12 @@ end
 # for real use with microscope
 camera1 = ThorCamCSCCamera()
 scope = Triggerscope4(compause = 2e-4)
+positioner = MclZPositioner()
 saved_calibration_matrix_CSC_1 = [1017.56 24.7616; 6.11555 746.693]
-test_track(scope, camera1, saved_calibration_matrix_CSC_1)
+test_track(scope, camera1, positioner, saved_calibration_matrix_CSC_1)
+
+shutdown(scope)
+shutdown(positioner)
 
 # a simulated MINFLUX tracker using the characterization camera
 # camera = ThorcamDCXCamera()

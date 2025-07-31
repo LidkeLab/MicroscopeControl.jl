@@ -8,7 +8,7 @@ function gui(positioner::Zpositioner)
         return
     end
 
-    fig = Figure(resolution=(600, 400))
+    fig = Figure(size=(600, 400))
     
     # Set position observables
     targ_pos = Observable(0.0)
@@ -49,9 +49,7 @@ function gui(positioner::Zpositioner)
             move(positioner, x)
         end
     end
-
-    # get position
-
+    
     # Reset positioner
     reset_button = Button(fig, label="reset")
     on(reset_button.clicks) do mb
