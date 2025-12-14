@@ -30,6 +30,7 @@ using .HardwareImplementations.CrystaLaserControl
 using .HardwareImplementations.VortranLaserControl
 using .HardwareImplementations.OK_XEM
 using .HardwareImplementations.ThorCamDCx
+using .HardwareImplementations.XEM_DAC
 # using .HardwareImplementations.Triggerscope
 # using .HardwareImplementations.MCLMicroPositioner
 
@@ -65,6 +66,10 @@ export showdevices, showchannels, createtask, setvoltage, readvoltage, deletetas
 # Re-export FPGA implementations
 export XEM
 export setexposure, enable, setupIO
+
+# Re-export XEM_DAC implementations
+export XEM_DAC
+export start, stop, setvoltageA, setvoltageB, setvoltageC, setvoltageD, setvoltageAll
 
 # Re-export triggerscope implementations
 # export Triggerscope4

@@ -22,6 +22,7 @@ include("crysta_laser_561/CrystaLaserControl.jl")
 include("vortran_laser_488/VortranLaserControl.jl")
 include("ok_xem/OK_XEM.jl")
 include("meadowlark_slm/Meadowlark.jl")
+include("xem_dac/XEM_DAC.jl")
 # include("triggerscope/Triggerscope.jl")
 # include("mcl_micro_positioner/MCLMicroPositioner.jl")
 

@@ -94,3 +94,27 @@ function shutdown(fpga::XEM)
     okFrontPanel_Destruct(fpga.devicehandle)
     return nothing
 end
+
+
+function setwirein(fpga::XEM, epaddr::UInt8, value::UInt32)
+    err = okFrontPanel_SetWireInValue(fpga.devicehandle, epaddr, value, 0xFFFF)
+    if err != ok_ErrorCode(0)
+        println("Failed to set wire in value: "*string(err))
+        return
+    end
+    err = okFrontPanel_UpdateWireIns(fpga.devicehandle)
+    if err != ok_ErrorCode(0)
+        println("Failed to update wire ins: "*string(err))
+        return
+    end
+    return nothing
+end
+
+function activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32)
+    err = okFrontPanel_ActivateTriggerIn(fpga.devicehandle, epaddr, bitmask)
+    if err != ok_ErrorCode(0)
+        println("Failed to activate trigger in: "*string(err))
+        return
+    end
+    return nothing
+end
