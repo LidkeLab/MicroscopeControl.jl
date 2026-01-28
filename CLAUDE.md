@@ -5,11 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Test Commands
 
 ```bash
-# Run tests
+# Run all tests
 julia --project -e 'using Pkg; Pkg.test()'
 
 # Run tests with coverage
 julia --project -e 'using Pkg; Pkg.test(coverage=true)'
+
+# Run specific test interactively (useful for debugging)
+julia --project -e 'using MicroscopeControl, Test; @testset "Simulated Camera" begin cam=SimCamera(); @test initialize(cam)===nothing end'
 
 # Load package in REPL for development
 julia --project -e 'using Pkg; Pkg.instantiate(); using MicroscopeControl'
@@ -18,7 +21,7 @@ julia --project -e 'using Pkg; Pkg.instantiate(); using MicroscopeControl'
 julia -e 'using Pkg; Pkg.develop(url="https://github.com/LidkeLab/MicroscopeControl.jl.git")'
 ```
 
-Tests use simulated devices only (`SimCamera`, `SimStage`, `SimLight`) - no hardware required.
+Tests use simulated devices only (`SimCamera`, `SimStage`, `SimLight`) - no hardware required. Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
 
 ## Architecture
 
@@ -44,9 +47,13 @@ MicroscopeControl.jl uses a **three-layer architecture** leveraging Julia's mult
 All hardware inherits from `AbstractInstrument` (defined in `instrument.jl`):
 - `initialize(device)` - setup hardware connection
 - `shutdown(device)` - close hardware connection
-- `export_state(device)` - returns `(attributes::Dict, data, children::Dict)`
+- `export_state(device)` - returns `(attributes::Dict, data, children::Dict)` for HDF5 serialization
 
 Interfaces define method signatures with `@error "not implemented"` stubs. Implementations provide concrete methods that dispatch on the device type.
+
+### Data Persistence
+
+`h5_file_saving.jl` provides `save_h5(filename, device)` and `save_attributes_and_data(group, device)` for saving device state to HDF5 files using the `export_state` tuple format.
 
 ### Adding New Hardware
 
@@ -77,3 +84,11 @@ Hardware implementations use `ccall` for vendor SDKs:
 - `pi_n472/functions_GCS2.jl` - PI GCS2 protocol
 - `tcube_laser/tcubeapi.jl` - Thorlabs TCube
 - `ok_xem/functions_okFP.jl` - Opal Kelly FrontPanel
+- `mcl_stage/*.jl` - Mad City Labs NanoDrive
+- Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
+
+### Work in Progress
+
+Some hardware modules are commented out in `MicroscopeControl.jl` while under development:
+- `Triggerscope` - external trigger synchronization
+- `MCLMicroPositioner` - Mad City Labs microdrive positioner
