@@ -41,7 +41,7 @@ info
 function CrystaLaser(;
     unique_id::String="CrystaLaser",
     properties::LightSourceProperties=LightSourceProperties("mW", 0.0, false, 0.0, 100.0),
-    laser_color::String="561"
+    laser_color::String="561", min_voltage=0.7 ,max_voltage=2.7785
     )
     
     J = 1 # 561
@@ -53,7 +53,6 @@ function CrystaLaser(;
     if !isdefined(Main, :channelsDO)
         channelsDO = NIDAQcard.showchannels(daq,"DO",devs[1])
     end
-    min_voltage=0.7
-    max_voltage=2.7785
+    
     CrystaLaser(unique_id, properties, laser_color, daq , min_voltage, max_voltage, channelsAO, channelsDO)
 end

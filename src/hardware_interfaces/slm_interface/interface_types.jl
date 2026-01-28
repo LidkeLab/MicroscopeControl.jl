@@ -1,6 +1,6 @@
 
 
-abstract type SLM <: AbstractInstrument end
+abstract type SLM end
 
 mutable struct Pupil
     x_center::Float64
@@ -10,7 +10,7 @@ mutable struct Pupil
 end
 
 
-
+#=
 mutable struct SimSLM <: SLM
     width::Int
     height::Int
@@ -20,5 +20,5 @@ mutable struct SimSLM <: SLM
     offset::Array{Float64,2}
     pupil::Pupil
 end
-
+=#
 

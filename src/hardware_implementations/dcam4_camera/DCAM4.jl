@@ -14,9 +14,10 @@ using GLMakie
 import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
 import ...MicroscopeControl: export_state, initialize, shutdown
 
-export DCAM4Camera, gui, start_sequence, start_live #, initialize, shutdown
+export DCAM4Camera, gui, start_sequence, start_live
 export getlastframe, capture, live, sequence, abort, getdata
 export setexposuretime, settriggermode, setroi!, setexposuretime!
+export dcamprop_getvalue, DCAM_IDPROP_INTERNALFRAMERATE, CameraROI, dcamapi_uninit
 # export export_state
 
 include("dcamerr.jl")

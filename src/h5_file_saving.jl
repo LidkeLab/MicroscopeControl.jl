@@ -1,4 +1,4 @@
-"""
+"""                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
     save_attributes_and_data(filename::String, group::String, attributes::Dict, data::Any, children::Dict{String,Any})
 
 Saves hierarchical data to an HDF5 file.
@@ -21,6 +21,18 @@ function save_attributes_and_data(filename::String, group::String, attributes::D
     end
 end
 
+"""
+    save_group_recursive(h5parent, group_name::String, attributes::Dict, data, children)
+
+Recursively saves hierarchical data to an HDF5 file.
+
+# Arguments
+- `h5parent`: Parent HDF5 group
+- `group_name::String`: Name of the HDF5 group
+- `attributes::Dict`: Dictionary of attributes to save
+- `data::Any`: Data to save in the group
+- `children::Dict{String,Any}`: Dictionary of child groups
+"""
 function save_group_recursive(h5parent, group_name::String, attributes::Dict, data, children)
     h5group = create_group(h5parent, group_name)
 
@@ -42,27 +54,15 @@ function save_group_recursive(h5parent, group_name::String, attributes::Dict, da
     end
 end
 
+"""
+    save_h5(filename::String, state_data)
 
-# Example method to emulate exportState in Julia
-# function export_state()
-#     attributes = Dict("Attribute1" => "Value1", "Attribute2" => 123)
-#     data = Dict("Data1" => [1, 2, 3], "Data2" => "Some string data")
-#     children = Dict(
-#         "Child1" => Dict(
-#             "Attributes" => Dict("ChildAttribute1" => 456),
-#             "Data" => Dict("ChildData1" => [4, 5, 6]),
-#             "Children" => Dict()
-#         ),
-#         "Child2" => Dict(
-#             "Attributes" => Dict("ChildAttribute2" => true),
-#             "Data" => Dict("ChildData2" => "Nested child data"),
-#             "Children" => Dict()
-#         )
-#     )
+Save the state data to an HDF5 file.
 
-#     return attributes, data, children
-# end
-
+# Arguments
+- `filename::String`: Path to the HDF5 file
+- `state_data`: Tuple of dictionaries containing the attributes, data, and children of the instrument.
+"""
 function save_h5(filename::String, state_data)
     @async begin
         # Name the startigng group as "Main"
@@ -75,31 +75,3 @@ function save_h5(filename::String, state_data)
         println("Data and attributes successfully saved to $filename")
     end
 end
-
-
-
-
-
-# Example
-# function export_state(instrument::SomeInstrument)
-#     # Metadata about the instrument
-#     attributes = Dict(
-#         "model" => "XYZ-123",
-#         "serial" => "ABC456",
-#         "is_active" => true
-#     )
-
-#     # Actual measurement data
-#     data = [1.0, 2.0, 3.0]  # or any other data type
-
-#     # Nested components (e.g., DAQ, stage, etc.)
-#     children = Dict(
-#         "daq" => Dict(
-#             "Attributes" => Dict("port" => "COM1"),
-#             "Data" => [4.0, 5.0],
-#             "Children" => Dict()
-#         )
-#     )
-
-#     return attributes, data, children
-# end

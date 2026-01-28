@@ -59,3 +59,26 @@ function StageInterface.servo(stage::PIStage, xtoggle::Bool, ytoggle::Bool)
     servo(stage, xtoggle, ytoggle)
 end
 
+"""
+    export_state(stage::PIStage)
+"""
+function export_state(stage::PIStage)
+    attributes = Dict{String, Any}(
+        "stage_label" => stage.stagelabel,
+        "units" => stage.units,
+        "dimensions" => stage.dimensions,
+        "connected" => stage.connectionstatus,
+        "id" => stage.id,
+        "position_x" => stage.real_x,
+        "position_y" => stage.real_y,
+        "target_x" => stage.targ_x,
+        "target_y" => stage.targ_y,
+        "range_x" => collect(stage.range_x),  # Convert tuple to array
+        "range_y" => collect(stage.range_y)   # Convert tuple to array
+    )
+    
+    data = nothing
+    children = Dict{String, Any}()
+
+    return attributes, data, children
+end

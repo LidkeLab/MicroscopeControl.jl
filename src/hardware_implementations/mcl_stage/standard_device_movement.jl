@@ -34,6 +34,21 @@ function singleread(stage::MCLStage, axis::Int)
 end
 
 """
+singlereadZ(stage::MCLStage)
+
+Reads the location of the Z axis
+# Arguments
+- `stage::MCLStage`: The stage whose handle is to be released.
+# Description
+This function reads the location of the Z axis and updates the structure's real location for that axis.
+"""
+function singlereadZ(stage::MCLStage)
+    position = @ccall madlibpath.MCL_SingleReadZ(stage.id::Cint)::Cdouble
+    stage.real_z = position
+    return position
+end
+
+"""
 singlewrite(stage::MCLStage, axis::Int, position::Float64)
 
 Moves the stage to a given location on a specific axis
@@ -51,19 +66,35 @@ function singlewrite(stage::MCLStage, axis::Int, position::Float64)
     if axis == 1
         errcode = @ccall madlibpath.MCL_SingleWriteN(position::Cdouble, Cint(1)::Cint, stage.id::Cint)::Cint
         stage.targ_x = position
-        return errcode
+        return HardwareReturn[errcode]
     elseif axis == 2
         errcode = @ccall madlibpath.MCL_SingleWriteN(position::Cdouble, Cint(2)::Cint, stage.id::Cint)::Cint
         stage.targ_y = position
-        return errcode
+        return HardwareReturn[errcode]
     elseif axis == 3
         errcode = @ccall madlibpath.MCL_SingleWriteN(position::Cdouble, Cint(3)::Cint, stage.id::Cint)::Cint
         stage.targ_z = position
-        return errcode
+        return HardwareReturn[errcode]
     else
         @error "Invalid axis"
         return false
     end
+end
+
+"""
+singlewriteZ(stage::MCLStage)
+
+Sets the position of the Z axis
+# Arguments
+- `stage::MCLStage`: The stage whose handle is to be released.
+- `position::Float64`: The position to move to.
+# Description
+This function sets the location of the Z axis and updates the structure's target location for that axis.
+"""
+function singlewriteZ(stage::MCLStage, position::Float64)
+    errcode = @ccall madlibpath.MCL_SingleWriteZ(position::Cdouble, stage.id::Cint)::Cint
+    stage.targ_z = position
+    return HardwareReturn[errcode]
 end
 
 """
@@ -100,5 +131,22 @@ function monitor(stage::MCLStage, axis::Int, position::Float64)
         @error "Invalid axis"
         return false
     end
+end
+
+"""
+monitorZ(stage::MCLStage)
+
+Sets the position of the Z axis
+# Arguments
+- `stage::MCLStage`: The stage whose handle is to be released.
+- `position::Float64`: The position to move to.
+# Description
+Commands the Nano-Drive to move the Z axis to a position and then reads the current position of the axis.
+"""
+function monitorZ(stage::MCLStage, position::Float64)
+    location = @ccall madlibpath.MCL_MonitorZ(position::Cdouble, stage.id::Cint)::Cint
+    stage.targ_z = position
+    stage.real_z = location
+    return location
 end
 

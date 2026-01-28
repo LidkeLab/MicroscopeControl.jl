@@ -1,10 +1,12 @@
 
+"""
+This module is a container for all hardware interfaces
+"""
 module HardwareInterfaces
 
 using ..MicroscopeControl
-# import ..MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
-# export AbstractInstrument 
-# export export_state, initialize, shutdown
+import ..MicroscopeControl: AbstractInstrument
+# import ..MicroscopeControl: export_state, initialize, shutdown
 
 
 include("camera_interface/CameraInterface.jl")
@@ -13,4 +15,6 @@ include("stage_interface/StageInterface.jl")
 
 include("lightsource_interface/LightSourceInterface.jl")
 include("daq_interface/DAQInterface.jl")
+# include("triggerscope_interface/TrigInterface.jl")
+# include("objective_positioner_interface/ObjPositionerInterface.jl")
 end

@@ -143,16 +143,6 @@ end
 
 """
     export_state(daq::NIdaq)
-
-Export the state of the daq.
-
-# Arguments
-- `daq::NIdaq`: A NIdaq type.
-
-# Returns
-- `attributes::Dict`: A dictionary of attributes.
-- `data`: The data of the daq.
-- `children::Dict`: A dictionary of children.
 """
 function export_state(daq::NIdaq)
     attributes = Dict("unique_id" => daq.unique_id)

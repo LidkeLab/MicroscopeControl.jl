@@ -11,7 +11,7 @@ module StageInterface
     include("interface_functions.jl")
     include("gui.jl")
 
-    # export initialize, shutdown, move, getposition, stopmotion, driftcorrection, servo, getrange,home
+    # export initialize, shutdown
     export move, getposition, stopmotion, driftcorrection, servo, getrange,home
     export gui
     export Stage, Dimensions

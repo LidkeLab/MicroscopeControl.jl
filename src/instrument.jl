@@ -1,3 +1,6 @@
+"""
+    AbstractInstrument is an abstract type that all instruments should inherit from.
+"""
 abstract type AbstractInstrument end
 
 """
@@ -15,10 +18,26 @@ function export_state(instrument::AbstractInstrument)
     @error "Export state not implemented for this instrument"
 end
 
+"""
+    initialize(instrument::AbstractInstrument)
+
+Initialize the instrument.
+
+# Arguments
+- `instrument::AbstractInstrument`: The instrument to initialize.
+"""
 function initialize(instrument::AbstractInstrument)
     @error "Initialize not implemented for this instrument"
 end
 
+"""
+    shutdown(instrument::AbstractInstrument)
+
+Shuts down the instrument.
+
+# Arguments
+- `instrument::AbstractInstrument`: The instrument to shut down.
+"""
 function shutdown(instrument::AbstractInstrument)
     @error "Shutdown not implemented for this instrument"
 end
