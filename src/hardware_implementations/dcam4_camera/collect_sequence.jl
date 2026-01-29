@@ -40,16 +40,17 @@ function collect_sequence(nframes::Int=100; timeout_milisec::Int32=Int32(1000))
     end
 
     #Setup display
-    img = Observable(rand(Gray{N0f8}, im_height, im_width))
-    imgplot = image(@lift(rotr90($img)),
-        axis=(aspect=DataAspect(),),
-        figure=(figure_padding=0, resolution=size(img[]) ./ 2))
+    # Camera data is (H, W), Makie needs (W, H) with yreversed for proper image display
+    img = Observable(rand(Gray{N0f8}, im_width, im_height))
+    imgplot = image(img,
+        axis=(aspect=DataAspect(), yreversed=true),
+        figure=(figure_padding=0, size=(im_width, im_height) .÷ 2))
     # Create an Observable for the text
     text_data = Observable("Initial Text")
     neon_green = RGB(0.2, 1, 0.2)
 
-    # Add the Observable text to the plot
-    text!(imgplot.axis, text_data, position=(im_width / 10, im_height * 9/10), color = neon_green, textsize = 50)
+    # Add the Observable text to the plot (position adjusted for yreversed)
+    text!(imgplot.axis, text_data, position=(im_width / 10, im_height / 10), color = neon_green, fontsize = 50)
 
     hidedecorations!(imgplot.axis)
     display(imgplot)
@@ -76,10 +77,11 @@ function collect_sequence(nframes::Int=100; timeout_milisec::Int32=Int32(1000))
             return err
         end
 
-        framedata = dcambuf_getlastframe(hdcam)
+        framedata = dcambuf_getlastframe(hdcam)  # Returns (H, W)
         max_val = maximum(framedata)
         min_val = minimum(framedata)
-        img[] = Gray{N0f8}.(framedata .* (1 / max_val))
+        # Permute from (H, W) to (W, H) for Makie display
+        img[] = Gray{N0f8}.(permutedims(framedata) .* (1 / max_val))
         text_data[] = "[$min_val $max_val]"
         sleep(1 / fps)
 

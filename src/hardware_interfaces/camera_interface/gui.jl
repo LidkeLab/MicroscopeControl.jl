@@ -27,52 +27,46 @@ end
 
 function create_display(camera, display_function)
     # Setup display
+    # Camera data is (H, W) where data[row, col] = data[y, x]
+    # Makie image() maps first dim → x, second dim → y
+    # So we need permutedims to get (W, H) and yreversed for top-left origin
     im_height = camera.roi.height
     im_width = camera.roi.width
     println("Creating display with dimensions: $im_width x $im_height")
+
+    # Create observable with (W, H) layout for Makie
     img = Observable(rand(Gray{N0f8}, im_width, im_height))
 
     imgplot = image(img,
-        axis=(aspect=DataAspect(),),
-        figure=(figure_padding=0, resolution=(im_width, im_height)), interpolate=false)
+        axis=(aspect=DataAspect(), yreversed=true),
+        figure=(figure_padding=0, size=(im_width, im_height)), interpolate=false)
     # Create an Observable for the text
     text_data = Observable("Initial Text")
     neon_green = RGB(0.2, 1, 0.2)
 
-    # Add the Observable text to the plot
-    text!(imgplot.axis, text_data, position=(im_width / 10, im_height * 9 / 10), color=neon_green, fontsize=50)
+    # Add the Observable text to the plot (position in data coords, adjusted for yreversed)
+    text!(imgplot.axis, text_data, position=(im_width / 10, im_height / 10), color=neon_green, fontsize=50)
 
     hidedecorations!(imgplot.axis)
 
     # Display the plot and store the Scene
     scene = display(GLMakie.Screen(), imgplot)
 
-    # Add a listener to the `window_open` Observable
-    # on(events(scene).window_open) do is_open
-    #     if !is_open
-    #         println("The window has been closed!")
-    #         # Add your callback logic here
-    #     end
-    # end
-
     # Start live imaging or sequence based on display_function
-    #@sync begin
-        #display_function(camera)
-        fps = 60
-        display_function(camera)
+    fps = 60
+    display_function(camera)
 
-        @async begin
-            while camera.is_running == 1
-
-                framedata = getlastframe(camera)
-                max_val = maximum(framedata)
-                min_val = minimum(framedata)
-                img[] = Gray{N0f8}.(framedata .* (1 / max_val))
-                text_data[] = "[$min_val $max_val]"
-                sleep(1 / fps)
-            end
+    @async begin
+        while camera.is_running == 1
+            framedata = getlastframe(camera)  # Returns (H, W)
+            max_val = maximum(framedata)
+            min_val = minimum(framedata)
+            # Permute from (H, W) to (W, H) for Makie display
+            img[] = Gray{N0f8}.(permutedims(framedata) .* (1 / max_val))
+            text_data[] = "[$min_val $max_val]"
+            sleep(1 / fps)
         end
-    #end
+    end
 end
 
 """
@@ -126,26 +120,25 @@ end
 
 function start_capture(camera::Camera)
     # Start a capture
-
     println(typeof(camera))
-    framedata = capture(camera)
+    framedata = capture(camera)  # Returns (H, W)
 
-    # Create an Observable for the text
     max_val = maximum(framedata)
     min_val = minimum(framedata)
-    img = Gray{N0f8}.(framedata .* (1 / max_val))
+    # Permute from (H, W) to (W, H) for Makie display
+    img = Gray{N0f8}.(permutedims(framedata) .* (1 / max_val))
 
-    imgplot = image(rotr90(img),
-        axis=(aspect=DataAspect(),),
-        figure=(figure_padding=0, resolution=size(img)))
-
-    # Add [min max] text to image
-    text_data = "[$min_val $max_val]"
     im_height = camera.roi.height
     im_width = camera.roi.width
 
+    imgplot = image(img,
+        axis=(aspect=DataAspect(), yreversed=true),
+        figure=(figure_padding=0, size=(im_width, im_height)))
+
+    # Add [min max] text to image (position adjusted for yreversed)
+    text_data = "[$min_val $max_val]"
     neon_green = RGB(0.2, 1, 0.2)
-    text!(imgplot.axis, text_data, position=(im_width / 10, im_height * 9 / 10), color=neon_green, fontsize=50)
+    text!(imgplot.axis, text_data, position=(im_width / 10, im_height / 10), color=neon_green, fontsize=50)
 
     hidedecorations!(imgplot.axis)
     display(GLMakie.Screen(), imgplot)

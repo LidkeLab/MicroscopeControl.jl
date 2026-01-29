@@ -31,14 +31,15 @@ function initialize(camera::ThorcamDCXCamera)
 
     camera.camera_format = CameraFormat(maxWidth, maxHeight, pixelSize, 1, "CMOS")
 
-    bitsPixel_ptr = zeros(INT, 1)
-    colorMode_ptr = zeros(INT, 1)
-    success = is_GetColorDepth(hcam, bitsPixel_ptr, colorMode_ptr)
+    # Set to 8-bit mono mode for grayscale camera
+    success = is_SetColorMode(hcam, IS_CM_MONO8)
+    if success != IS_SUCCESS
+        @error("Failed to set color mode to MONO8")
+    end
 
-    camera.bits_pixel = bitsPixel_ptr[1]
-    camera.bytes_pixel = INT(bitsPixel_ptr[1] / 8)
-
-    success = is_SetColorMode(hcam, IS_CM_RGBA8_PACKED)
+    camera.bits_pixel = 8
+    camera.bytes_pixel = 1
+    println("Color mode set to MONO8: bits_pixel=", camera.bits_pixel, ", bytes_pixel=", camera.bytes_pixel)
 
     pixel_clock_range = zeros(UINT,3)
     success = is_PixelClock(hcam,IS_PIXELCLOCK_CMD_GET_RANGE,pixel_clock_range,sizeof(pixel_clock_range))
@@ -93,16 +94,16 @@ function CameraInterface.getlastframe(camera::ThorcamDCXCamera)
     Width = INT(camera.roi.width)
     Height = INT(camera.roi.height)
 
-    img_vector = zeros(Cchar, Width * Height * camera.bytes_pixel);
-    success = is_CopyImageMem(camera.camera_handle,camera.pImage_Mem[1][], camera.pImage_Id[1][], img_vector)
+    img_vector = zeros(UInt8, Width * Height)
+    success = is_CopyImageMem(camera.camera_handle, camera.pImage_Mem[1][], camera.pImage_Id[1][], img_vector)
     if success != IS_SUCCESS
         @error("Failed to copy image memory")
         return
     end
 
     # Reshape and permute to column-major Julia (H, W) convention
-    data = reshape(img_vector, (camera.bytes_pixel, Width, Height))
-    data = permutedims(data[1,:,:], (2, 1))
+    # SDK returns row-major (W, H), permute to (H, W)
+    data = permutedims(reshape(img_vector, (Width, Height)), (2, 1))
 
     return data
 end
@@ -193,10 +194,10 @@ function CameraInterface.getdata(camera::ThorcamDCXCamera)
     Height = camera.roi.height
     data = zeros(UInt8, Height, Width, camera.sequence_length)  # (H, W, N) convention
     for i in 1:camera.sequence_length
-        img_vector = zeros(Cchar, Width * Height * camera.bytes_pixel)
+        img_vector = zeros(UInt8, Width * Height)
         success = is_CopyImageMem(camera.camera_handle, camera.pImage_Mem[i][], camera.pImage_Id[i][], img_vector)
-        img = reshape(img_vector, (camera.bytes_pixel, Width, Height))
-        data[:,:,i] = permutedims(img[1,:,:], (2, 1))  # Permute to (H, W)
+        # SDK returns row-major (W, H), permute to (H, W)
+        data[:,:,i] = permutedims(reshape(img_vector, (Width, Height)), (2, 1))
     end
 
     # release Memory

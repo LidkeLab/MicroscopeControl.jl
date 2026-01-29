@@ -97,8 +97,10 @@ Hardware implementations use `ccall` for vendor SDKs:
 # CORRECT: permutedims(reshape(buffer, (W, H)), (2, 1)) -> (H, W)
 ```
 
-**Display (CairoMakie heatmap):** `heatmap()` maps dim1→x, dim2→y. For `(H, W)` data:
+**Display (Makie image/heatmap):** Both `image()` and `heatmap()` map dim1→x, dim2→y. For `(H, W)` data:
 ```julia
+# Both work the same way:
+image(permutedims(data); axis=(yreversed=true,))    # W→x, H→y, origin top-left
 heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-left
 ```
 
