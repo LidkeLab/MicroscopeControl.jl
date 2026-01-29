@@ -8,7 +8,8 @@ using HDF5
 # To export the abstract types and methods for all the instruments
 include("instrument.jl")
 export AbstractInstrument
-export export_state, initialize, shutdown
+export AbstractSystem, AbstractSystemState
+export export_state, initialize, shutdown, get_state, set_state
 
 # Including the hardware interfaces and implementations and the HDF5 file saving methods
 include("hardware_interfaces/HardwareInterfaces.jl")
