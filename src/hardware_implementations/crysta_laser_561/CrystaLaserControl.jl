@@ -5,7 +5,7 @@ A Module for controlling a laser through a NIDAQ card.
 """
 module CrystaLaserControl
 
-using NIDAQ
+using NIDAQmx
 
 using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface
 using ...MicroscopeControl.HardwareImplementations.NIDAQcard

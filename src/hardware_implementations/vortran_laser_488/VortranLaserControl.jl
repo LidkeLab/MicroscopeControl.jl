@@ -5,7 +5,7 @@ A Module for controlling a laser through a NIDAQ card.
 """
 module VortranLaserControl
 
-using NIDAQ
+using NIDAQmx
 using ...MicroscopeControl
 
 import ...MicroscopeControl: export_state, initialize, shutdown

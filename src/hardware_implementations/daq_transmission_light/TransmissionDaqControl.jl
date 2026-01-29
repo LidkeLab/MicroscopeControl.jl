@@ -6,7 +6,7 @@ Citation: Ali Kazemi Nasaban Shotorban & Sheng Liu, Lidke Lab, UNM
 """
 module TransmissionDaqControl
 
-using NIDAQ
+using NIDAQmx
 
 using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface
 using ...MicroscopeControl.HardwareImplementations.NIDAQcard
