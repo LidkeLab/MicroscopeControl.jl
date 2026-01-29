@@ -48,7 +48,8 @@ function capturesingleframe(exposure_time, operation_mode, frames_per_trigger)
     #Display Image
 
     fig = Figure()
-    image_single_frame = reshape(single_image, 1440, 1080)
+    # Reshape and permute to (H, W) convention
+    image_single_frame = permutedims(reshape(single_image, 1440, 1080), (2, 1))
     reinterpret(N0f16, image_single_frame)
     GLMakie.image(fig[1,1], image_single_frame, interpolate=false)
     fig

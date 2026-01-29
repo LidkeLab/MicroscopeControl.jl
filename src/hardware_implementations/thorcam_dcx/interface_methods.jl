@@ -100,8 +100,9 @@ function CameraInterface.getlastframe(camera::ThorcamDCXCamera)
         return
     end
 
-    data = reshape(img_vector, (camera.bytes_pixel,Width, Height));
-    data = data[1,:,:]
+    # Reshape and permute to column-major Julia (H, W) convention
+    data = reshape(img_vector, (camera.bytes_pixel, Width, Height))
+    data = permutedims(data[1,:,:], (2, 1))
 
     return data
 end
@@ -190,12 +191,12 @@ end
 function CameraInterface.getdata(camera::ThorcamDCXCamera)
     Width = camera.roi.width
     Height = camera.roi.height
-    data = zeros(UInt8, Width, Height, camera.sequence_length)
+    data = zeros(UInt8, Height, Width, camera.sequence_length)  # (H, W, N) convention
     for i in 1:camera.sequence_length
         img_vector = zeros(Cchar, Width * Height * camera.bytes_pixel)
         success = is_CopyImageMem(camera.camera_handle, camera.pImage_Mem[i][], camera.pImage_Id[i][], img_vector)
         img = reshape(img_vector, (camera.bytes_pixel, Width, Height))
-        data[:,:,i] = img[1,:,:]
+        data[:,:,i] = permutedims(img[1,:,:], (2, 1))  # Permute to (H, W)
     end
 
     # release Memory
