@@ -1,13 +1,12 @@
 
 function CameraInterface.getlastframe(camera::ThorCamCSCCamera)
     last_frame = ThorCamCSC.getlastframeornothing(camera)    #Gets last frame, loop insures that frame is collected
-    if last_frame == Nothing 
-        return zeros(UInt16, 1440, 1080)   #returns all zeros if frame not collected
-        #return zeros(UInt16, 1080, 1440)
-    else 
-        last_frame = reshape(last_frame, 1440, 1080)
+    if last_frame == Nothing
+        return zeros(UInt16, 1080, 1440)   # (H, W) convention
+    else
+        # Reshape from row-major C buffer and permute to column-major Julia (H, W)
+        last_frame = permutedims(reshape(last_frame, 1440, 1080), (2, 1))
         return last_frame
-        #return rotr90(last_frame)
     end
 end
 
@@ -97,8 +96,7 @@ end
 
 function CameraInterface.getdata(camera::ThorCamCSCCamera)
     if camera.capture_mode == SEQUENCE
-        sequence_array = zeros(UInt16, 1440, 1080, camera.sequence_length)
-        #sequence_array = zeros(UInt16, 1080, 1440, camera.sequence_length)
+        sequence_array = zeros(UInt16, 1080, 1440, camera.sequence_length)  # (H, W, N) convention
         for i in 1:sequence_frames
             single_image = CameraInterface.getlastframe(camera)
             sequence_array[:,:, i] = single_image
