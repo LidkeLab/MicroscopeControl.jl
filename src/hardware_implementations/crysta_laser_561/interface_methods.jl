@@ -3,9 +3,6 @@
 """
 function initialize(light::CrystaLaser)
     light.properties.is_on = false
-    daq = light.daq
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
     return nothing
 end
 
@@ -19,18 +16,21 @@ Set the power of the laser by setting the voltage of the NIDAQ card.
 - `voltage::Float64`: The voltage to set the laser to.
 """
 function LightSourceInterface.setpower(light::CrystaLaser, voltage::Float64)
-    daq = light.daq
-    min_voltage = light.min_voltage
-    max_voltage = light.max_voltage
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
+    if isempty(light.channelsAO)
+        @warn "CrystaLaser: no AO channels available for setpower"
+        return
+    end
     if voltage < light.min_voltage || voltage > light.max_voltage
         @error "The voltage should be between $(light.min_voltage) and $(light.max_voltage)"
         return
     end
-    t = NIDAQcard.createtask(daq,"AO",channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    try
+        t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+        NIDAQcard.setvoltage(light.daq, t, voltage)
+        NIDAQcard.deletetask(light.daq, t)
+    catch e
+        @warn "CrystaLaser setpower failed: $e"
+    end
 end
 
 """
@@ -38,16 +38,17 @@ end
 """
 function LightSourceInterface.light_on(light::CrystaLaser)
     light.properties.is_on = true
-    # power = 20.0
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
-    # voltage = (power-10)/90*(light.max_voltage-light.min_voltage)+light.min_voltage
-    # light.properties.power = power
-    voltage = 1.0
-    daq = light.daq
-    t = NIDAQcard.createtask(daq,"AO",light.channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    if isempty(light.channelsAO)
+        @warn "CrystaLaser: no AO channels available for light_on"
+        return
+    end
+    try
+        t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+        NIDAQcard.setvoltage(light.daq, t, 1.0)
+        NIDAQcard.deletetask(light.daq, t)
+    catch e
+        @warn "CrystaLaser light_on failed: $e"
+    end
 end
 
 """
@@ -55,13 +56,17 @@ end
 """
 function LightSourceInterface.light_off(light::CrystaLaser)
     light.properties.is_on = false
-    daq = light.daq
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
-    voltage::Float64 = 0.0
-    t = NIDAQcard.createtask(daq,"AO",light.channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    if isempty(light.channelsAO)
+        @warn "CrystaLaser: no AO channels available for light_off"
+        return
+    end
+    try
+        t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+        NIDAQcard.setvoltage(light.daq, t, 0.0)
+        NIDAQcard.deletetask(light.daq, t)
+    catch e
+        @warn "CrystaLaser light_off failed: $e"
+    end
 end
 
 """
@@ -69,13 +74,16 @@ end
 """
 function shutdown(light::CrystaLaser)
     light.properties.is_on = false
-    daq = light.daq
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
-    voltage::Float64 = 0.0
-    t = NIDAQcard.createtask(daq,"AO",light.channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    if isempty(light.channelsAO)
+        return
+    end
+    try
+        t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+        NIDAQcard.setvoltage(light.daq, t, 0.0)
+        NIDAQcard.deletetask(light.daq, t)
+    catch e
+        @warn "CrystaLaser shutdown failed: $e"
+    end
 end
 
 """
