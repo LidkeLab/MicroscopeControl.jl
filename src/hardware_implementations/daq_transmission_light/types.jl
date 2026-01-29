@@ -24,15 +24,26 @@ end
 
 function DaqTrLight(;
     unique_id::String="DaqTrLight",
-    properties::LightSourceProperties=LightSourceProperties("mW", 0.0, false, 0.0, 100.0)
+    properties::LightSourceProperties=LightSourceProperties("mW", 0.0, false, 0.0, 100.0),
+    device_index::Int=2
     )
-    
     daq = NIdaq()
-    devs = NIDAQcard.showdevices(daq)
-    channelsAO = NIDAQcard.showchannels(daq,"AO",devs[2])
-    channelsDO = NIDAQcard.showchannels(daq,"DO",devs[2])
-    min_voltage::Float64=0.0
-    max_voltage::Float64=5.0
+    channelsAO = String[]
+    channelsDO = String[]
+    min_voltage::Float64 = 0.0
+    max_voltage::Float64 = 5.0
+
+    try
+        devs = NIDAQcard.showdevices(daq)
+        if length(devs) >= device_index && devs[device_index] != ""
+            channelsAO = NIDAQcard.showchannels(daq, "AO", devs[device_index])
+            channelsDO = NIDAQcard.showchannels(daq, "DO", devs[device_index])
+        else
+            @warn "NI-DAQ device index $device_index not available for DaqTrLight (found $(length(devs)) devices)"
+        end
+    catch e
+        @warn "Failed to initialize NI-DAQ for DaqTrLight: $e"
+    end
 
     DaqTrLight(unique_id, properties, daq, min_voltage, max_voltage, channelsAO, channelsDO)
 end
