@@ -5,12 +5,12 @@ A dictionary defines functions of corresponding channel types.
 `channeltype`: "AI","AO","DI","DO","CI","CO"
 """
 channelfunctions = Dict{String,Function}(
-    "AI" => NIDAQmx.ai_channels,
-    "AO" => NIDAQmx.ao_channels,
-    "DI" => NIDAQmx.di_lines,
-    "DO" => NIDAQmx.do_lines,
-    "CI" => NIDAQmx.ci_channels,
-    "CO" => NIDAQmx.co_channels,
+    "AI" => DAQmx.ai_channels,
+    "AO" => DAQmx.ao_channels,
+    "DI" => DAQmx.di_lines,
+    "DO" => DAQmx.do_lines,
+    "CI" => DAQmx.ci_channels,
+    "CO" => DAQmx.co_channels,
 )
 
 """
@@ -20,10 +20,10 @@ A dictionary defines types of corresponding task types.
 `tasktype`: "AI","AO","DI","DO"
 """
 taskfunctions = Dict{String,Type}(
-    "AI" => NIDAQmx.AITask,
-    "AO" => NIDAQmx.AOTask,
-    "DI" => NIDAQmx.DITask,
-    "DO" => NIDAQmx.DOTask,
+    "AI" => DAQmx.AITask,
+    "AO" => DAQmx.AOTask,
+    "DI" => DAQmx.DITask,
+    "DO" => DAQmx.DOTask,
 )
 
 """
@@ -35,7 +35,7 @@ List available devices.
 - `daq::NIdaq`: A NIdaq type.
 """
 function DAQInterface.showdevices(daq::NIdaq)
-    NIDAQmx.device_names()
+    DAQmx.device_names()
 end
 
 """
@@ -63,7 +63,7 @@ Create a task of a given task type and channel.
 - `channel::String`: A channel name, obtained from `showchannels`.
 
 # Returns
-- `t::NIDAQmx.Task`: A NIDAQmx Task type.
+- `t::DAQmx.Task`: A DAQmx Task type.
 """
 function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String)
     # Extract device name from channel (e.g., "Dev1/ao0" -> "Dev1")
@@ -71,57 +71,57 @@ function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String)
 
     if tasktype == "AI"
         # Query device's AI voltage range
-        ranges = NIDAQmx.ai_voltage_ranges(device)
+        ranges = DAQmx.ai_voltage_ranges(device)
         if isempty(ranges)
             # Use default range if none available
-            return NIDAQmx.AITask(channel)
+            return DAQmx.AITask(channel)
         end
         # Use the widest range (last row)
         min_val, max_val = ranges[end, :]
-        task = NIDAQmx.AITask()
-        NIDAQmx.add_ai_voltage!(task, channel; min_val=min_val, max_val=max_val)
+        task = DAQmx.AITask()
+        DAQmx.add_ai_voltage!(task, channel; min_val=min_val, max_val=max_val)
         return task
     elseif tasktype == "AO"
         # Query device's AO voltage range
-        ranges = NIDAQmx.ao_voltage_ranges(device)
+        ranges = DAQmx.ao_voltage_ranges(device)
         if isempty(ranges)
             # Use default range if none available
-            return NIDAQmx.AOTask(channel)
+            return DAQmx.AOTask(channel)
         end
         # Use the first (typically only) range
         min_val, max_val = ranges[1, :]
-        task = NIDAQmx.AOTask()
-        NIDAQmx.add_ao_voltage!(task, channel; min_val=min_val, max_val=max_val)
+        task = DAQmx.AOTask()
+        DAQmx.add_ao_voltage!(task, channel; min_val=min_val, max_val=max_val)
         return task
     elseif tasktype == "DI"
-        return NIDAQmx.DITask(channel)
+        return DAQmx.DITask(channel)
     elseif tasktype == "DO"
-        return NIDAQmx.DOTask(channel)
+        return DAQmx.DOTask(channel)
     else
         error("Unknown task type: $tasktype")
     end
 end
 
 """
-    addchannel!(daq::NIdaq, t::NIDAQmx.Task, tasktype::String, channel::String)
+    addchannel!(daq::NIdaq, t::DAQmx.Task, tasktype::String, channel::String)
 
 Add a channel to an existing task.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.Task`: A NIDAQmx Task.
+- `t::DAQmx.Task`: A DAQmx Task.
 - `tasktype::String`: A task type. Options are "AI","AO","DI","DO".
 - `channel::String`: A channel name, obtained from `showchannels`.
 """
-function DAQInterface.addchannel!(daq::NIdaq, t::NIDAQmx.Task, tasktype::String, channel::String)
+function DAQInterface.addchannel!(daq::NIdaq, t::DAQmx.Task, tasktype::String, channel::String)
     if tasktype == "AI"
-        NIDAQmx.add_ai_voltage!(t, channel)
+        DAQmx.add_ai_voltage!(t, channel)
     elseif tasktype == "AO"
-        NIDAQmx.add_ao_voltage!(t, channel)
+        DAQmx.add_ao_voltage!(t, channel)
     elseif tasktype == "DI"
-        NIDAQmx.add_di_chan!(t, channel)
+        DAQmx.add_di_chan!(t, channel)
     elseif tasktype == "DO"
-        NIDAQmx.add_do_chan!(t, channel)
+        DAQmx.add_do_chan!(t, channel)
     else
         error("Unknown task type: $tasktype")
     end
@@ -130,124 +130,124 @@ end
 
 
 """
-    setvoltage(daq::NIdaq,t::NIDAQmx.AOTask,voltage::Float64)
+    setvoltage(daq::NIdaq,t::DAQmx.AOTask,voltage::Float64)
 
 Set the voltage of an analog output task.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.AOTask`: A NIDAQmx AOTask type.
+- `t::DAQmx.AOTask`: A DAQmx AOTask type.
 - `voltage::Float64`: The voltage to set the task to, unit: volt.
 
 # Returns
 - `ret::Int`: The number of samples written to the task.
 """
-function DAQInterface.setvoltage(daq::NIdaq, t::NIDAQmx.AOTask, voltage::Float64)
-    NIDAQmx.write_scalar(t, voltage; auto_start=true)
+function DAQInterface.setvoltage(daq::NIdaq, t::DAQmx.AOTask, voltage::Float64)
+    DAQmx.write_scalar(t, voltage; auto_start=true)
     return 1
 end
 
 """
-    setvoltage(daq::NIdaq,t::NIDAQmx.DOTask,voltage::Float64)
+    setvoltage(daq::NIdaq,t::DAQmx.DOTask,voltage::Float64)
 
 Set the voltage of a digital output task.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.DOTask`: A NIDAQmx DOTask type.
+- `t::DAQmx.DOTask`: A DAQmx DOTask type.
 - `voltage::Float64`: The voltage to set (0 or 1).
 
 # Returns
 - `ret::Int`: The number of samples written to the task.
 """
-function DAQInterface.setvoltage(daq::NIdaq, t::NIDAQmx.DOTask, voltage::Float64)
-    NIDAQmx.write_scalar(t, UInt32(voltage); auto_start=true)
+function DAQInterface.setvoltage(daq::NIdaq, t::DAQmx.DOTask, voltage::Float64)
+    DAQmx.write_scalar(t, UInt32(voltage); auto_start=true)
     return 1
 end
 
 """
-    setvoltage(daq::NIdaq,t::NIDAQmx.AOTask,voltage::Array{Float64})
+    setvoltage(daq::NIdaq,t::DAQmx.AOTask,voltage::Array{Float64})
 
 Set the voltage of an analog output task with an array of values.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.AOTask`: A NIDAQmx AOTask type.
+- `t::DAQmx.AOTask`: A DAQmx AOTask type.
 - `voltage::Array{Float64}`: The voltages to set, unit: volt.
 
 # Returns
 - `ret::Int`: The number of samples written to the task.
 """
-function DAQInterface.setvoltage(daq::NIdaq, t::NIDAQmx.AOTask, voltage::Array{Float64})
+function DAQInterface.setvoltage(daq::NIdaq, t::DAQmx.AOTask, voltage::Array{Float64})
     write(t, voltage; auto_start=true)
 end
 
 """
-    setvoltage(daq::NIdaq,t::NIDAQmx.DOTask,voltage::Array{Float64})
+    setvoltage(daq::NIdaq,t::DAQmx.DOTask,voltage::Array{Float64})
 
 Set the voltage of a digital output task with an array of values.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.DOTask`: A NIDAQmx DOTask type.
+- `t::DAQmx.DOTask`: A DAQmx DOTask type.
 - `voltage::Array{Float64}`: The voltages to set (0 or 1).
 
 # Returns
 - `ret::Int`: The number of samples written to the task.
 """
-function DAQInterface.setvoltage(daq::NIdaq, t::NIDAQmx.DOTask, voltage::Array{Float64})
+function DAQInterface.setvoltage(daq::NIdaq, t::DAQmx.DOTask, voltage::Array{Float64})
     write(t, UInt8.(voltage); auto_start=true)
 end
 
 """
-    readvoltage(daq::NIdaq,t::NIDAQmx.AITask)
+    readvoltage(daq::NIdaq,t::DAQmx.AITask)
 
 Read the voltage of an analog input task.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.AITask`: A NIDAQmx AITask type.
+- `t::DAQmx.AITask`: A DAQmx AITask type.
 
 # Returns
 - `voltage::Float64`: The voltage read from the task, unit: volt.
 """
-function DAQInterface.readvoltage(daq::NIdaq, t::NIDAQmx.AITask)
-    NIDAQmx.start!(t)
-    voltage = NIDAQmx.read_scalar(t)
-    NIDAQmx.stop!(t)
+function DAQInterface.readvoltage(daq::NIdaq, t::DAQmx.AITask)
+    DAQmx.start!(t)
+    voltage = DAQmx.read_scalar(t)
+    DAQmx.stop!(t)
     return voltage
 end
 
 """
-    readvoltage(daq::NIdaq,t::NIDAQmx.DITask)
+    readvoltage(daq::NIdaq,t::DAQmx.DITask)
 
 Read the voltage of a digital input task.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.DITask`: A NIDAQmx DITask type.
+- `t::DAQmx.DITask`: A DAQmx DITask type.
 
 # Returns
 - `voltage::Float64`: The voltage read from the task (0 or 1).
 """
-function DAQInterface.readvoltage(daq::NIdaq, t::NIDAQmx.DITask)
-    NIDAQmx.start!(t)
-    voltage = Float64(NIDAQmx.read_scalar(t))
-    NIDAQmx.stop!(t)
+function DAQInterface.readvoltage(daq::NIdaq, t::DAQmx.DITask)
+    DAQmx.start!(t)
+    voltage = Float64(DAQmx.read_scalar(t))
+    DAQmx.stop!(t)
     return voltage
 end
 
 """
-    deletetask(daq::NIdaq,t::NIDAQmx.Task)
+    deletetask(daq::NIdaq,t::DAQmx.Task)
 
 Delete a task.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
-- `t::NIDAQmx.Task`: A NIDAQmx Task type.
+- `t::DAQmx.Task`: A DAQmx Task type.
 """
-function DAQInterface.deletetask(daq::NIdaq, t::NIDAQmx.Task)
-    NIDAQmx.clear!(t)
+function DAQInterface.deletetask(daq::NIdaq, t::DAQmx.Task)
+    DAQmx.clear!(t)
 end
 
 """
