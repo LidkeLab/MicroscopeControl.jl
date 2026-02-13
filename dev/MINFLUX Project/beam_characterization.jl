@@ -160,6 +160,9 @@ function beam_characterization(
         ideal_z .- frame_obs
     end
 
+    # min/max intensity label for saturation checking
+    intensity_label = Label(fig[1, 1, Top()], "Min: 0  Max: 0", fontsize = 14, halign = :left, padding = (5, 0, 0, 0))
+
     # draw on figure
     heatmap!(ax2d, frame_obs, colormap = :inferno) # live camera view
     scatter!(ax2d, cx, cy, color=:teal, markersize=10) # center dot
@@ -184,6 +187,7 @@ function beam_characterization(
                 frame_obs[] = frame
                 duration = round(time() - start, digits = 2)
                 ax2d.title = "Live Camera Feed - Time: $duration seconds"
+                intensity_label.text = "Min: $(minimum(frame))  Max: $(maximum(frame))"
                 approx_r2_label.text = "Approximate Fit R^2: $(round(coeff_of_determination(ideal_z[], frame_obs[]), digits = 4))"
 
                 if beam_type[] == :donut
