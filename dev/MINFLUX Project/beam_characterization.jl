@@ -145,7 +145,7 @@ function beam_characterization(
     # save current frame and characterization data to HDF5
     on(save_button.clicks) do n
         timestamp = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
-        filename = "beam_characterization_$timestamp.h5"
+        filename = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom\\beam_characterization_$timestamp.h5"
         @async begin
             try
                 h5open(filename, "w") do h5file
