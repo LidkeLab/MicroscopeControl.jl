@@ -168,6 +168,21 @@ function beam_characterization(
         min_pc = Float64(minimum(frame_data))
         max_pc = Float64(maximum(frame_data))
 
+        # compute beam quality metrics
+        ext_ratio_val = 0.0
+        fwhm_x_val = 0.0
+        fwhm_y_val = 0.0
+        ellipticity_val = 0.0
+        if beam_type[] == :donut
+            try
+                _, _, high_xs, high_ys = find_center_donut(frame_data)
+                ext_ratio_val = extinction_ratio(frame_data, cx_val, cy_val, high_xs, high_ys)
+            catch; end
+        else
+            fwhm_x_val, fwhm_y_val = compute_fwhm(frame_data, cx_val, cy_val)
+            ellipticity_val = max(fwhm_x_val, fwhm_y_val) / max(min(fwhm_x_val, fwhm_y_val), 1.0)
+        end
+
         @async begin
             # save HDF5 data
             try
@@ -192,6 +207,14 @@ function beam_characterization(
                     attrs(h5file)["min_photon_count"] = min_pc
                     attrs(h5file)["max_photon_count"] = max_pc
                     attrs(h5file)["timestamp"] = timestamp
+                    # beam quality metrics
+                    if beam_type[] == :donut
+                        attrs(h5file)["extinction_ratio"] = ext_ratio_val
+                    else
+                        attrs(h5file)["fwhm_x"] = fwhm_x_val
+                        attrs(h5file)["fwhm_y"] = fwhm_y_val
+                        attrs(h5file)["ellipticity"] = ellipticity_val
+                    end
                 end
                 println("Saved HDF5 data to $h5_path")
             catch e
