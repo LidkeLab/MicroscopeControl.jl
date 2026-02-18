@@ -10,7 +10,7 @@
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
-using Statistics, Optim, GLMakie, ImageFiltering
+using Statistics, Optim, GLMakie, ImageFiltering, HDF5, Dates
 include("./dev_helper_funcs.jl")
 
 function beam_characterization(
@@ -63,7 +63,8 @@ function beam_characterization(
     Label(toggle_box[2, 3], "Optimized Fit Curve")
     optimized_toggle = Toggle(toggle_box[2, 4], active = false)
     loading_label = Label(toggle_box[3, 1:4], "Loading...", visible = false)
-    refresh_optim = Button(toggle_box[4, 1:4], label = "Refresh Optimizers") # poly fit for ext ratio and optimization
+    refresh_optim = Button(toggle_box[4, 1:2], label = "Refresh Optimizers") # poly fit for ext ratio and optimization
+    save_button = Button(toggle_box[4, 3:4], label = "Save HDF5")
     approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
     optim_r2_label = Label(data_box[2, 1], "Optimized Fit R^2*: N/A")
     metric_label = Label(data_box[3, 1], "Extinction Ratio*: N/A")
@@ -133,6 +134,46 @@ function beam_characterization(
                     metric_label.text = "FWHM*: $(round(fwhm_x, digits=1))x$(round(fwhm_y, digits=1))px  Ellipticity: $(round(ellip, digits=3))"
                 end
                 loading_label.visible[] = false
+            end
+        end
+    end
+
+    # save current frame and characterization data to HDF5
+    on(save_button.clicks) do n
+        timestamp = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
+        filename = "beam_characterization_$timestamp.h5"
+        @async begin
+            try
+                h5open(filename, "w") do h5file
+                    # save raw frame
+                    write(h5file, "frame", frame_obs[])
+                    # save ideal fit
+                    write(h5file, "ideal_fit", ideal_z[])
+                    # save optimized fit if available
+                    if any(optimized[] .!= 0)
+                        write(h5file, "optimized_fit", optimized[])
+                    end
+                    # save difference image
+                    write(h5file, "difference", diff_img[])
+                    # save line profiles
+                    write(h5file, "x_profile", x_prof[])
+                    write(h5file, "y_profile", y_prof[])
+                    # save metadata as attributes
+                    attrs(h5file)["beam_type"] = string(beam_type[])
+                    attrs(h5file)["center_x"] = cx[]
+                    attrs(h5file)["center_y"] = cy[]
+                    attrs(h5file)["C"] = C[]
+                    attrs(h5file)["omega"] = ω[]
+                    attrs(h5file)["approx_r_squared"] = coeff_of_determination(ideal_z[], frame_obs[])
+                    attrs(h5file)["optim_r_squared"] = r_squared[]
+                    attrs(h5file)["exposure_time"] = camera.exposure_time
+                    attrs(h5file)["min_photon_count"] = minimum(frame_obs[])
+                    attrs(h5file)["max_photon_count"] = maximum(frame_obs[])
+                    attrs(h5file)["timestamp"] = timestamp
+                end
+                println("Saved beam characterization data to $filename")
+            catch e
+                @error "Failed to save HDF5 file" exception = e
             end
         end
     end
