@@ -67,6 +67,8 @@ function beam_characterization(
     loading_label = Label(toggle_box[3, 1:4], "Loading...", visible = false)
     refresh_optim = Button(toggle_box[4, 1:2], label = "Refresh Optimizers") # poly fit for ext ratio and optimization
     save_button = Button(toggle_box[4, 3:4], label = "Save Data & Image")
+    Label(toggle_box[5, 1], "Filename:")
+    filename_textbox = Textbox(toggle_box[5, 2:4], placeholder = "beam_characterization", stored_string = "beam_characterization")
     approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
     optim_r2_label = Label(data_box[2, 1], "Optimized Fit R^2*: N/A")
     metric_label = Label(data_box[3, 1], "Extinction Ratio*: N/A")
@@ -147,8 +149,12 @@ function beam_characterization(
     # save current frame, characterization data to HDF5, and screenshot to PNG
     on(save_button.clicks) do n
         timestamp = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
-        h5_path = joinpath(save_dir, "beam_characterization_$timestamp.h5")
-        img_path = joinpath(save_dir, "beam_characterization_$timestamp.png")
+        base_name = filename_textbox.stored_string[]
+        if isempty(base_name)
+            base_name = "beam_characterization"
+        end
+        h5_path = joinpath(save_dir, "$(base_name)_$timestamp.h5")
+        img_path = joinpath(save_dir, "$(base_name)_$timestamp.png")
 
         # snapshot all data as plain Arrays (collect ensures no lazy/Adjoint types)
         frame_data = collect(Float64, frame_obs[])
