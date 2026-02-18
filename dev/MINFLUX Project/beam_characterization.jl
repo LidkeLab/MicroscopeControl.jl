@@ -70,15 +70,6 @@ function beam_characterization(
     metric_label = Label(data_box[3, 1], "Extinction Ratio*: N/A")
     Label(data_box[4, 1], "* = optimized values. Refresh to update.")
 
-    # update metric label when beam type changes
-    on(beam_type) do bt
-        if bt == :gaussian
-            metric_label.text = "FWHM & Ellipticity*: N/A"
-        else
-            metric_label.text = "Extinction Ratio*: N/A"
-        end
-    end
-
     #create frame observable
     frame_obs = Observable(initial_frame)
 
@@ -108,6 +99,19 @@ function beam_characterization(
     x_prof_optim = Observable(zeros(nx)) # x profile of the optimized frame
     y_prof_optim = Observable(zeros(ny)) # y profile of the optimized frame
     ext_ratio = Observable(0.0) # extinction ratio
+
+    # update labels and reset optimized data when beam type changes
+    on(beam_type) do bt
+        if bt == :gaussian
+            metric_label.text = "FWHM & Ellipticity*: N/A"
+        else
+            metric_label.text = "Extinction Ratio*: N/A"
+        end
+        # reset optimized fit so stale data from the other beam type is not displayed
+        optimized[] = zeros(size(frame_obs[]))
+        r_squared[] = 0.0
+        optim_r2_label.text = "Optimized Fit R^2*: N/A"
+    end
 
     # update the observables that depend on optimizers
     on(refresh_optim.clicks) do n
