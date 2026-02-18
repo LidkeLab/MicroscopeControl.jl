@@ -149,46 +149,62 @@ function beam_characterization(
         timestamp = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
         h5_path = joinpath(save_dir, "beam_characterization_$timestamp.h5")
         img_path = joinpath(save_dir, "beam_characterization_$timestamp.png")
+
+        # snapshot all data as plain Arrays (collect ensures no lazy/Adjoint types)
+        frame_data = collect(Float64, frame_obs[])
+        ideal_data = collect(Float64, ideal_z[])
+        optim_data = collect(Float64, optimized[])
+        diff_data = collect(Float64, diff_img[])
+        xprof_data = collect(Float64, x_prof[])
+        yprof_data = collect(Float64, y_prof[])
+        bt = string(beam_type[])
+        cx_val = Float64(cx[])
+        cy_val = Float64(cy[])
+        C_val = Float64(C[])
+        ω_val = Float64(ω[])
+        approx_r2 = coeff_of_determination(ideal_data, frame_data)
+        optim_r2 = Float64(r_squared[])
+        exp_time = Float64(camera.exposure_time)
+        min_pc = Float64(minimum(frame_data))
+        max_pc = Float64(maximum(frame_data))
+
         @async begin
             # save HDF5 data
             try
                 h5open(h5_path, "w") do h5file
-                    # save raw frame
-                    write(h5file, "frame", frame_obs[])
-                    # save ideal fit
-                    write(h5file, "ideal_fit", ideal_z[])
-                    # save optimized fit if available
-                    if any(optimized[] .!= 0)
-                        write(h5file, "optimized_fit", optimized[])
+                    write(h5file, "frame", frame_data)
+                    write(h5file, "ideal_fit", ideal_data)
+                    if any(optim_data .!= 0)
+                        write(h5file, "optimized_fit", optim_data)
                     end
-                    # save difference image
-                    write(h5file, "difference", diff_img[])
-                    # save line profiles
-                    write(h5file, "x_profile", x_prof[])
-                    write(h5file, "y_profile", y_prof[])
+                    write(h5file, "difference", diff_data)
+                    write(h5file, "x_profile", xprof_data)
+                    write(h5file, "y_profile", yprof_data)
                     # save metadata as attributes
-                    attrs(h5file)["beam_type"] = string(beam_type[])
-                    attrs(h5file)["center_x"] = cx[]
-                    attrs(h5file)["center_y"] = cy[]
-                    attrs(h5file)["C"] = C[]
-                    attrs(h5file)["omega"] = ω[]
-                    attrs(h5file)["approx_r_squared"] = coeff_of_determination(ideal_z[], frame_obs[])
-                    attrs(h5file)["optim_r_squared"] = r_squared[]
-                    attrs(h5file)["exposure_time"] = camera.exposure_time
-                    attrs(h5file)["min_photon_count"] = minimum(frame_obs[])
-                    attrs(h5file)["max_photon_count"] = maximum(frame_obs[])
+                    attrs(h5file)["beam_type"] = bt
+                    attrs(h5file)["center_x"] = cx_val
+                    attrs(h5file)["center_y"] = cy_val
+                    attrs(h5file)["C"] = C_val
+                    attrs(h5file)["omega"] = ω_val
+                    attrs(h5file)["approx_r_squared"] = approx_r2
+                    attrs(h5file)["optim_r_squared"] = optim_r2
+                    attrs(h5file)["exposure_time"] = exp_time
+                    attrs(h5file)["min_photon_count"] = min_pc
+                    attrs(h5file)["max_photon_count"] = max_pc
                     attrs(h5file)["timestamp"] = timestamp
                 end
                 println("Saved HDF5 data to $h5_path")
             catch e
-                @error "Failed to save HDF5 file" exception = e
+                @error "Failed to save HDF5 file"
+                showerror(stdout, e, catch_backtrace())
             end
             # save PNG screenshot of the figure
             try
                 save(img_path, fig)
                 println("Saved screenshot to $img_path")
             catch e
-                @error "Failed to save image" exception = e
+                @error "Failed to save image"
+                showerror(stdout, e, catch_backtrace())
             end
         end
     end
