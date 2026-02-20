@@ -73,7 +73,7 @@ function beam_characterization(
     optim_r2_label = Label(data_box[2, 1], "Optimized Fit R^2*: N/A")
     metric_label = Label(data_box[3, 1], "Extinction Ratio*: N/A")
     Label(data_box[4, 1], "* = optimized values. Refresh to update.")
-    Label(data_box[5, 1], "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh", fontsize = 11)
+    Label(data_box[5, 1], "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh  Ctrl+N=Filename", fontsize = 11)
 
     #create frame observable
     frame_obs = Observable(initial_frame)
@@ -263,6 +263,10 @@ function beam_characterization(
             # Ctrl+R → trigger refresh optimizers
             if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.r
                 notify(refresh_optim.clicks)
+            end
+            # Ctrl+N → focus filename textbox for typing
+            if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.n
+                filename_textbox.focused[] = true
             end
         end
         return Consume(false)
