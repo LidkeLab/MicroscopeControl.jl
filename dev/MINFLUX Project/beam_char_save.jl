@@ -73,6 +73,7 @@ function beam_characterization(
     optim_r2_label = Label(data_box[2, 1], "Optimized Fit R^2*: N/A")
     metric_label = Label(data_box[3, 1], "Extinction Ratio*: N/A")
     Label(data_box[4, 1], "* = optimized values. Refresh to update.")
+    Label(data_box[5, 1], "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh", fontsize = 11)
 
     #create frame observable
     frame_obs = Observable(initial_frame)
@@ -241,6 +242,31 @@ function beam_characterization(
     # display figure and run window close manager
     display(fig)
     window_closer(fig, () -> shutdown(camera))
+
+    # keyboard shortcuts
+    on(events(fig).keyboardbutton) do event
+        if event.action == Keyboard.press
+            # Ctrl+S → trigger save
+            if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.s
+                notify(save_button.clicks)
+            end
+            # Ctrl+M → toggle beam mode (Donut ↔ Gaussian)
+            if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.m
+                if beam_type[] == :donut
+                    beam_menu.selection[] = "Gaussian"
+                    beam_type[] = :gaussian
+                else
+                    beam_menu.selection[] = "Donut"
+                    beam_type[] = :donut
+                end
+            end
+            # Ctrl+R → trigger refresh optimizers
+            if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.r
+                notify(refresh_optim.clicks)
+            end
+        end
+        return Consume(false)
+    end
 
     # update observables when the beam changes
     r_grid = lift(cx, cy) do cx, cy
