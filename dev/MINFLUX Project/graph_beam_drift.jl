@@ -27,15 +27,15 @@ function load_series(dir::String, tag::String)
         h5open(f, "r") do h5
             a = attrs(h5)
             (
-                position    = haskey(a, "position")    ? Float64(read(a["position"]))    : 0.0,
-                center_x    = haskey(a, "center_x")    ? Float64(read(a["center_x"]))    : NaN,
-                center_y    = haskey(a, "center_y")    ? Float64(read(a["center_y"]))    : NaN,
-                fwhm_x      = haskey(a, "fwhm_x")      ? Float64(read(a["fwhm_x"]))      : NaN,
-                fwhm_y      = haskey(a, "fwhm_y")      ? Float64(read(a["fwhm_y"]))       : NaN,
-                ellipticity = haskey(a, "ellipticity") ? Float64(read(a["ellipticity"])) : NaN,
-                ext_ratio   = haskey(a, "extinction_ratio") ? Float64(read(a["extinction_ratio"])) : NaN,
-                beam_type   = haskey(a, "beam_type")   ? String(read(a["beam_type"]))    : "unknown",
-                timestamp   = haskey(a, "timestamp")   ? String(read(a["timestamp"]))    : "",
+                position    = haskey(a, "position")          ? Float64(a["position"])          : 0.0,
+                center_x    = haskey(a, "center_x")          ? Float64(a["center_x"])          : NaN,
+                center_y    = haskey(a, "center_y")          ? Float64(a["center_y"])          : NaN,
+                fwhm_x      = haskey(a, "fwhm_x")            ? Float64(a["fwhm_x"])            : NaN,
+                fwhm_y      = haskey(a, "fwhm_y")            ? Float64(a["fwhm_y"])            : NaN,
+                ellipticity = haskey(a, "ellipticity")       ? Float64(a["ellipticity"])       : NaN,
+                ext_ratio   = haskey(a, "extinction_ratio")  ? Float64(a["extinction_ratio"])  : NaN,
+                beam_type   = haskey(a, "beam_type")         ? String(a["beam_type"])          : "unknown",
+                timestamp   = haskey(a, "timestamp")         ? String(a["timestamp"])          : "",
                 filename    = basename(f),
             )
         end
