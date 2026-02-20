@@ -69,6 +69,8 @@ function beam_characterization(
     save_button = Button(toggle_box[4, 3:4], label = "Save Data & Image")
     Label(toggle_box[5, 1], "Filename:")
     filename_textbox = Textbox(toggle_box[5, 2:4], placeholder = "beam_characterization", stored_string = "beam_characterization")
+    Label(toggle_box[6, 1], "Position:")
+    position_textbox = Textbox(toggle_box[6, 2:4], placeholder = "0.0", stored_string = "0.0")
     approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
     optim_r2_label = Label(data_box[2, 1], "Optimized Fit R^2*: N/A")
     metric_label = Label(data_box[3, 1], "Extinction Ratio*: N/A")
@@ -174,6 +176,8 @@ function beam_characterization(
         exp_time = Float64(camera.exposure_time)
         min_pc = Float64(minimum(frame_data))
         max_pc = Float64(maximum(frame_data))
+        position_val = tryparse(Float64, position_textbox.stored_string[])
+        position_val = isnothing(position_val) ? 0.0 : position_val
 
         # compute beam quality metrics
         ext_ratio_val = 0.0
@@ -214,6 +218,7 @@ function beam_characterization(
                     attrs(h5file)["min_photon_count"] = min_pc
                     attrs(h5file)["max_photon_count"] = max_pc
                     attrs(h5file)["timestamp"] = timestamp
+                    attrs(h5file)["position"] = position_val
                     # beam quality metrics
                     if beam_type[] == :donut
                         attrs(h5file)["extinction_ratio"] = ext_ratio_val
