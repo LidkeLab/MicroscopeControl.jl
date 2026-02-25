@@ -1,6 +1,13 @@
 # voltage_supply_beam_char.jl
 # Based on beam_char_save.jl — adds HVA200 high-voltage amplifier control to the GUI.
 #
+# ── Package installation (run once in Julia REPL) ────────────────────────────
+# using Pkg
+# Pkg.activate("path/to/MicroscopeControl.jl/dev/implementation")
+# Pkg.add(url="https://github.com/LidkeLab/DAQMX.jl", rev="under_dev_v1")
+# Pkg.instantiate()
+# ─────────────────────────────────────────────────────────────────────────────
+#
 # HVA200 hardware (via NIDAQ Dev2):
 #   Gain: 20x  →  1 V DAQ input = 20 V HVA output
 #   Monitor output ≈ DAQ input  (1/20 of actual output)
