@@ -14,3 +14,9 @@ MicroscopeControl = "aa70d9ae-4a1e-49fd-870a-8ccfd99f4c3e"
 Optim            = "429524aa-4258-5aef-a3af-852621145aeb"
 Revise           = "295af30f-e4ad-537b-8983-00126c2a3abe"
 Statistics       = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+# DAQmx is not in the general registry — must be fetched from GitHub.
+# Julia 1.11+ resolves this automatically via [sources].
+# For older Julia: Pkg.add(url="https://github.com/LidkeLab/DAQMX.jl", rev="under_dev_v1")
+[sources]
+DAQmx = {url = "https://github.com/LidkeLab/DAQMX.jl", rev = "under_dev_v1"}
