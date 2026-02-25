@@ -47,12 +47,11 @@ function beam_characterization(
     start = time()
     initial_frame = getlastframe(camera)'
 
-    # ── HVA200 DAQmx tasks ───────────────────────────────────────────────────
-    ao0 = AOTask("Dev2/ao0")   # HVA1 input
-    ao1 = AOTask("Dev2/ao1")   # HVA2 input
-    ai3 = AITask("Dev2/ai3")   # HVA1 monitor
-    ai2 = AITask("Dev2/ai2")   # HVA2 monitor
-    start!(ao0); start!(ao1); start!(ai3); start!(ai2)
+    # ── HVA200 task handles (created on demand, one channel at a time) ──────────
+    # Tasks are created/started/stopped/cleared inside the Apply Voltage handler
+    # so only one AI channel is ever active at a time (avoids -50103 resource conflict).
+    last_ao = Ref{Any}(nothing)   # last AOTask created
+    last_ai = Ref{Any}(nothing)   # last AITask created
 
     # ── Figure / layout ──────────────────────────────────────────────────────
     fig = Figure(size = (1000, 750), title = "Beam Characterization")
@@ -203,15 +202,22 @@ function beam_characterization(
 
         @async begin
             try
+                # Create only the tasks for the selected channel (one AI at a time)
                 if selected_channel == "HVA1"
-                    write_scalar(ao0, v_daq)
-                    sleep(0.2)
-                    mon = read_scalar(ai3)
+                    ao = AOTask("Dev2/ao0")
+                    ai = AITask("Dev2/ai3")
                 else  # HVA2
-                    write_scalar(ao1, v_daq)
-                    sleep(0.2)
-                    mon = read_scalar(ai2)
+                    ao = AOTask("Dev2/ao1")
+                    ai = AITask("Dev2/ai2")
                 end
+                last_ao[] = ao;  last_ai[] = ai   # store for window_closer safety
+                start!(ao);  start!(ai)
+                write_scalar(ao, v_daq)
+                sleep(0.2)
+                mon = read_scalar(ai)
+                stop!(ao);   stop!(ai)
+                clear!(ao);  clear!(ai)
+                last_ao[] = nothing;  last_ai[] = nothing
                 actual = mon * 20.0
                 current_hva_monitor[] = actual
                 monitor_label.text = "Monitor: $(round(actual, digits=2)) V"
@@ -327,13 +333,11 @@ function beam_characterization(
     display(fig)
     window_closer(fig, () -> begin
         shutdown(camera)
-        # zero HVA outputs safely before closing
+        # Stop/clear any tasks left open if the window closed mid-flight
         try
-            write_scalar(ao0, 0.0)
-            write_scalar(ao1, 0.0)
+            if last_ao[] !== nothing; stop!(last_ao[]); clear!(last_ao[]); end
+            if last_ai[] !== nothing; stop!(last_ai[]); clear!(last_ai[]); end
         catch; end
-        stop!(ao0);  stop!(ao1);  stop!(ai3);  stop!(ai2)
-        clear!(ao0); clear!(ao1); clear!(ai3); clear!(ai2)
     end)
 
     # ── Keyboard shortcuts ────────────────────────────────────────────────────
