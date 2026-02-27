@@ -1,5 +1,4 @@
 #Functions to control camera operations
-#=
 function armcamera(camera::ThorCamCSCCamera, num_frames::Cint = Cint(2))
     number_of_frames_to_buffer = Cint(num_frames)
     is_camera_armed = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_arm(camera.camera_handle::Ptr{Cvoid}, number_of_frames_to_buffer::Cint)::Cint
@@ -15,7 +14,7 @@ function armcamera(camera::ThorCamCSCCamera)
         @error "Camera not armed"
     end
     return is_camera_armed
-end=#
+end
 
 function disarmcamera(camera::ThorCamCSCCamera)
     is_camera_disarmed = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_disarm(camera.camera_handle::Ptr{Cvoid})::Cint
