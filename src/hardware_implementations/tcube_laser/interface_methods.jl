@@ -69,16 +69,18 @@ function tcube_refresh(light::TCubeLaser)
 end
 
 
-function setupIO(light::TCubeLaser)
-    devs = NIDAQcard.showdevices(light.daq)
-    channelsAO = NIDAQcard.showchannels(light.daq, "AO", devs[2])
-    task_mod = NIDAQcard.createtask(light.daq, "AO", channelsAO[2])
-    light.task_mod = task_mod
+function setupIO(_light::TCubeLaser)
+    # Channel is set at construction time via ao_channel field.
+    # DAQmx tasks are created on demand in set_modvoltage.
     return nothing
 end
 
 function set_modvoltage(light::TCubeLaser, voltage::Float64)
-    NIDAQcard.setvoltage(light.daq, light.task_mod, voltage)
+    ao = AOTask(light.ao_channel)
+    start!(ao)
+    write_scalar(ao, voltage)
+    stop!(ao)
+    clear!(ao)
     return nothing
 end
 
@@ -100,15 +102,14 @@ function export_state(light::TCubeLaser)
 
     attributes = Dict(
         "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,
+        "ao_channel" => light.ao_channel,
         "min_current" => light.min_current, "max_current" => light.max_current,
         "max_setcurrent" => light.max_setcurrent, "max_setpoint" => light.max_setpoint,
         "power_unit" => light.properties.power_unit, "power" => light.properties.power, "is_on" => light.properties.is_on,
         "min_power" => light.properties.min_power, "max_power" => light.properties.max_power
     )
     data = nothing
-    children = Dict(
-        "daq" => export_state(light.daq) # export_state function from NIDAQcard module
-    )
+    children = Dict()
 
     return attributes, data, children
 end
