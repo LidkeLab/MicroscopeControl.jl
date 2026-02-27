@@ -11,7 +11,7 @@ module TCubeLaserControl
 using ...MicroscopeControl
 
 using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface
-using DAQmx
+using ...MicroscopeControl.HardwareImplementations.NIDAQcard
 
 import ...MicroscopeControl: export_state, initialize, shutdown
 import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: gui as red_laser_gui

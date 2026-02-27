@@ -18,7 +18,8 @@ mutable struct TCubeLaser <: LightSource
     max_setcurrent::Float64
     max_setpoint::Float64
     serialNo::String
-    ao_channel::String   # DAQmx AO channel for modulation, e.g. "Dev1/ao0"
+    task_mod
+    daq::NIdaq
 end
 
 
@@ -30,8 +31,9 @@ function TCubeLaser(serialNo::String;
     max_current::Float64=160.0, #220.0 is the max of the TCube
     max_setcurrent::Float64=220.0,
     max_setpoint::Float64=32767.0,
-    ao_channel::String="Dev1/ao0"
+    task_mod=0,
+    daq::NIdaq=NIdaq()
 )
-    TCubeLaser(unique_id, properties, laser_color, min_current, max_current,
-               max_setcurrent, max_setpoint, serialNo, ao_channel)
+
+    TCubeLaser(unique_id, properties, laser_color, min_current, max_current, max_setcurrent, max_setpoint, serialNo, task_mod, daq)
 end
