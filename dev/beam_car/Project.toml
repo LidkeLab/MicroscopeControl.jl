@@ -1,4 +1,5 @@
 [deps]
+DAQmx = "bc903ccc-f951-4f60-9748-ff64248ad6aa"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
