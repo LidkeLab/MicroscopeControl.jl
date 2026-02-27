@@ -361,7 +361,7 @@ uuid = "bc903ccc-f951-4f60-9748-ff64248ad6aa"
 version = "0.1.0"
 
 [[deps.NIDAQ]]
-path = "../../NIDAQ"
+path = "C:\\Users\\lidkelab\\.julia\\dev\\NIDAQ"
 uuid = "66b72792-1abf-55ab-8064-6e9051317175"
 version = "0.6.0"
 
