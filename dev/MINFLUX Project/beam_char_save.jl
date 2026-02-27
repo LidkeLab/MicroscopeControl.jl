@@ -11,7 +11,7 @@
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.ThorCamDCx
-using Statistics, Optim, GLMakie, ImageFiltering, HDF5, Dates
+using Statistics, GLMakie, Optim, ImageFiltering, HDF5, Dates
 include("./dev_helper_funcs.jl")
 
 function beam_characterization(
