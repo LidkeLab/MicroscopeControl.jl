@@ -199,6 +199,7 @@ function beam_characterization(
             try
                 h5open(h5_path, "w") do h5file
                     write(h5file, "frame", frame_data)
+                    write(h5file, "live_view", frame_data)
                     write(h5file, "ideal_fit", ideal_data)
                     if any(optim_data .!= 0)
                         write(h5file, "optimized_fit", optim_data)
