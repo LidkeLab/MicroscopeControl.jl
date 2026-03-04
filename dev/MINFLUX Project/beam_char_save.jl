@@ -18,7 +18,7 @@ function beam_characterization(
     camera,
     framerate::Float64 = 5.0, # framerate seems to be limited to ~15.0
     exposure_time::Float64 = 0.01,
-    save_dir::String = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom",
+    save_dir::String = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom\\movig EDO1\\MAR_3",
 )
 
     # initalize the camera and start the screen
