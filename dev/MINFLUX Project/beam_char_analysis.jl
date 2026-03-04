@@ -117,7 +117,7 @@ function plot_analysis(groups)
         end
     end
 
-    for (label, meas) in sort(collect(groups))
+    for (label, meas) in sort(collect(groups); by = first)
         label == "Control" && continue  # already drawn as reference lines
         c, mk = palette[label]
         pos  = [m.position    for m in meas]
@@ -150,7 +150,7 @@ println("Loading HDF5 files from:\n  $DATA_DIR\n")
 groups = load_all(DATA_DIR)
 
 println("\nLoaded:")
-for (g, v) in sort(collect(groups))
+for (g, v) in sort(collect(groups); by = first)
     positions = [m.position for m in v]
     println("  $g: $(length(v)) files  pos=$(round(minimum(positions), digits=3))–$(round(maximum(positions), digits=3))")
 end
