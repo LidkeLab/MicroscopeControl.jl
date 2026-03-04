@@ -5,7 +5,7 @@
 
 using HDF5, GLMakie, Statistics
 
-const DATA_DIR = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom\\movig EDO1\\MAR_3"
+const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/movig EDO1/MAR_3"
 
 # ============================================================================
 # Gaussian fitting helpers (profile-based, fast)
@@ -154,5 +154,6 @@ for (g, v) in sort(collect(groups))
     positions = [m.position for m in v]
     println("  $g: $(length(v)) files  pos=$(round(minimum(positions), digits=3))–$(round(maximum(positions), digits=3))")
 end
+
 
 fig = plot_analysis(groups)
