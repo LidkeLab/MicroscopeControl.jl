@@ -169,17 +169,10 @@ function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
         return nothing
     end
 
-    data = Array{ElementType}(undef, Int(height), Int(width))
-    # If there was padding; but here we assume no padding and use reshape instead
-    # for y in 1:Int(height)
-    #     src_start = (y-1)*stride_elements + 1
-    #     src_end = src_start + Int(width) - 1
-    #     data[y, :] .= temp_buffer[src_start:src_end]
-    # end
-    data = reshape(temp_buffer, (Int(width), Int(height)))
+    # Reshape from row-major C buffer and permute to column-major Julia (H, W)
+    data = permutedims(reshape(temp_buffer, (Int(width), Int(height))), (2, 1))
 
-    return data 
-    # return permutedims(data, (2,1))  # Transpose for display if we don't use reshape
+    return data
 end
 
 function dcambuf_getlastframe(hdcam::Ptr{Cvoid})

@@ -87,6 +87,25 @@ Hardware implementations use `ccall` for vendor SDKs:
 - `mcl_stage/*.jl` - Mad City Labs NanoDrive
 - Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
 
+### Camera Image Data Convention
+
+**Convention:** Image data is stored and displayed as column-major `(H, W, N)` arrays where `data[row, col]` = `data[y, x]`.
+
+**At DLL boundary (getdata):** C SDKs return row-major buffers. Must permute after reshape:
+```julia
+# WRONG: reshape(buffer, (W, H)) - Julia reads column-first, data is transposed
+# CORRECT: permutedims(reshape(buffer, (W, H)), (2, 1)) -> (H, W)
+```
+
+**Display (Makie image/heatmap):** Both `image()` and `heatmap()` map dim1→x, dim2→y. For `(H, W)` data:
+```julia
+# Both work the same way:
+image(permutedims(data); axis=(yreversed=true,))    # W→x, H→y, origin top-left
+heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-left
+```
+
+**Saving (HDF5):** No transform needed if getdata follows convention. Save `(H, W, N)` directly.
+
 ### Work in Progress
 
 Some hardware modules are commented out in `MicroscopeControl.jl` while under development:

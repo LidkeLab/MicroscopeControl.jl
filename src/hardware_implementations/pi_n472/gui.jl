@@ -1,5 +1,5 @@
 function gui(stage::N472)
-    gui_fig = Figure(resolution=(600, 400))  #This is the Stage GUI Figure
+    gui_fig = Figure(size=(600, 400))  #This is the Stage GUI Figure
 
     # create buttons to control individual axis
     gui_fig[2,1] = buttongrid1 = GridLayout(3,3,halign=:left)

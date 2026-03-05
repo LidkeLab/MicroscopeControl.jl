@@ -10,7 +10,7 @@ function gui(light::LightSource)
     println(typeof(light))
 
     # Create the figure for the control window
-    control_fig = Figure(resolution = (700,300), title = light.unique_id)
+    control_fig = Figure(size = (700,300), title = light.unique_id)
 
     # Buttons and actions    
     # create a slider for the power

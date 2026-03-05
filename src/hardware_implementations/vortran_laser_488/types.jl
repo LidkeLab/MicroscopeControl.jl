@@ -29,16 +29,23 @@ function VortranLaser(;
     properties::LightSourceProperties=LightSourceProperties("mW", 0.0, false, 0.0, 100.0),
     laser_color::String="488"
     )
-    J = 2 # 488
-    if !isdefined(Main, :channelsAO)
-        daq = NIdaq()
+    daq = NIdaq()
+    channelsAO = String[]
+    channelsDO = String[]
+    min_voltage::Float64 = 0.0
+    max_voltage::Float64 = 5.0
+
+    try
         devs = NIDAQcard.showdevices(daq)
-        channelsAO = NIDAQcard.showchannels(daq,"AO",devs[1])
+        if !isempty(devs) && devs[1] != ""
+            channelsAO = NIDAQcard.showchannels(daq, "AO", devs[1])
+            channelsDO = NIDAQcard.showchannels(daq, "DO", devs[1])
+        else
+            @warn "No NI-DAQ devices found for VortranLaser"
+        end
+    catch e
+        @warn "Failed to initialize NI-DAQ for VortranLaser: $e"
     end
-    if !isdefined(Main, :channelsDO)
-        channelsDO = NIDAQcard.showchannels(daq,"DO",devs[1])
-    end
-    min_voltage::Float64=0.0
-    max_voltage::Float64=5.0
-    VortranLaser(unique_id, properties, laser_color, daq , min_voltage, max_voltage, channelsAO, channelsDO)
+
+    VortranLaser(unique_id, properties, laser_color, daq, min_voltage, max_voltage, channelsAO, channelsDO)
 end

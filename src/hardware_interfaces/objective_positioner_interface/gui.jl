@@ -8,7 +8,7 @@ function gui(positioner::Zpositioner)
         return
     end
 
-    fig = Figure(resolution=(600, 400))
+    fig = Figure(size=(600, 400))
     
     # Set position observables
     targ_pos = Observable(0.0)

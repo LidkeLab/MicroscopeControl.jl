@@ -41,18 +41,23 @@ info
 function CrystaLaser(;
     unique_id::String="CrystaLaser",
     properties::LightSourceProperties=LightSourceProperties("mW", 0.0, false, 0.0, 100.0),
-    laser_color::String="561", min_voltage=0.7 ,max_voltage=2.7785
+    laser_color::String="561", min_voltage=0.7, max_voltage=2.7785
     )
-    
-    J = 1 # 561
-    if !isdefined(Main, :channelsAO)
-        daq = NIdaq()
+    daq = NIdaq()
+    channelsAO = String[]
+    channelsDO = String[]
+
+    try
         devs = NIDAQcard.showdevices(daq)
-        channelsAO = NIDAQcard.showchannels(daq,"AO",devs[1])
+        if !isempty(devs) && devs[1] != ""
+            channelsAO = NIDAQcard.showchannels(daq, "AO", devs[1])
+            channelsDO = NIDAQcard.showchannels(daq, "DO", devs[1])
+        else
+            @warn "No NI-DAQ devices found for CrystaLaser"
+        end
+    catch e
+        @warn "Failed to initialize NI-DAQ for CrystaLaser: $e"
     end
-    if !isdefined(Main, :channelsDO)
-        channelsDO = NIDAQcard.showchannels(daq,"DO",devs[1])
-    end
-    
-    CrystaLaser(unique_id, properties, laser_color, daq , min_voltage, max_voltage, channelsAO, channelsDO)
+
+    CrystaLaser(unique_id, properties, laser_color, daq, min_voltage, max_voltage, channelsAO, channelsDO)
 end

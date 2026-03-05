@@ -186,7 +186,7 @@ function CameraInterface.getdata(camera::DCAM4Camera)
     if camera.capture_mode == SEQUENCE
         display("Getting sequence data")
         im_width, im_height = dcamprop_getsize(camera.camera_handle)
-        data = zeros(UInt16, im_width, im_height, camera.sequence_length)
+        data = zeros(UInt16, im_height, im_width, camera.sequence_length)  # (H, W, N) convention
         for i in 1:camera.sequence_length
             data[:, :, i] = dcambuf_getframe(camera.camera_handle, Int32(i - 1))
         end

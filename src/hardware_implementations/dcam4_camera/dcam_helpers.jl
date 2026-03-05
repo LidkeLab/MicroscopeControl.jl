@@ -94,7 +94,8 @@ function setexposuretime!(camera::DCAM4Camera)
         camera.last_error = err
     end    
     err, value = dcamprop_getvalue(hdcam, DCAM_IDPROP_EXPOSURETIME)
-    if exposure_time != value
+    # Only warn if difference is significant (>1% or >1ms)
+    if !isapprox(exposure_time, value; rtol=0.01, atol=0.001)
         @warn "Exposure time set to $(value) instead of $(exposure_time)"
     end
     camera.exposure_time = value

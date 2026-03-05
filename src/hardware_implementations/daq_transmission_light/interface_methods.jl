@@ -3,54 +3,52 @@ function initialize(light::DaqTrLight)
 end
 
 function LightSourceInterface.setpower(light::DaqTrLight, voltage::Float64)
-    daq = light.daq
-    min_voltage = light.min_voltage
-    max_voltage = light.max_voltage
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
+    if isempty(light.channelsAO)
+        @warn "No AO channels available for DaqTrLight"
+        return
+    end
     if voltage < light.min_voltage || voltage > light.max_voltage
         @error "The voltage should be between $(light.min_voltage) and $(light.max_voltage)"
         return
     end
-    t = NIDAQcard.createtask(daq,"AO",channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+    NIDAQcard.setvoltage(light.daq, t, voltage)
+    NIDAQcard.deletetask(light.daq, t)
 end
 
 function LightSourceInterface.light_on(light::DaqTrLight)
     light.properties.is_on = true
-    # power = 20.0
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
-    # voltage = (power-10)/90*(light.max_voltage-light.min_voltage)+light.min_voltage
-    # light.properties.power = power
+    if isempty(light.channelsAO)
+        @warn "No AO channels available for DaqTrLight"
+        return
+    end
     voltage = 1.0
-    daq = light.daq
-    t = NIDAQcard.createtask(daq,"AO",light.channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+    NIDAQcard.setvoltage(light.daq, t, voltage)
+    NIDAQcard.deletetask(light.daq, t)
 end
 
 function LightSourceInterface.light_off(light::DaqTrLight)
     light.properties.is_on = false
-    daq = light.daq
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
+    if isempty(light.channelsAO)
+        @warn "No AO channels available for DaqTrLight"
+        return
+    end
     voltage::Float64 = 0.0
-    t = NIDAQcard.createtask(daq,"AO",light.channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+    NIDAQcard.setvoltage(light.daq, t, voltage)
+    NIDAQcard.deletetask(light.daq, t)
 end
 
 function shutdown(light::DaqTrLight)
     light.properties.is_on = false
-    daq = light.daq
-    channelsAO = light.channelsAO
-    channelsDO = light.channelsDO
+    if isempty(light.channelsAO)
+        return
+    end
     voltage::Float64 = 0.0
-    t = NIDAQcard.createtask(daq,"AO",light.channelsAO[1])
-    NIDAQcard.setvoltage(daq,t, voltage)
-    NIDAQcard.deletetask(daq,t)
+    t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[1])
+    NIDAQcard.setvoltage(light.daq, t, voltage)
+    NIDAQcard.deletetask(light.daq, t)
 end
 
 """

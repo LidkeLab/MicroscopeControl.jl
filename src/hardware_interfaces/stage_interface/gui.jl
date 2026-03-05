@@ -35,7 +35,7 @@ end
 
 function gui1d(stage::Stage)
     #First we will create a figure to hold the GUI elements
-    stage_gui_fig = Figure(resolution=(600, 400))  #This is the Stage GUI Figure
+    stage_gui_fig = Figure(size=(600, 400))  #This is the Stage GUI Figure
 
     #Set up variables for motion that will be changed
     xstepsize = Observable(0.1)
@@ -258,7 +258,7 @@ end
 
 function gui2d(stage::Stage)
     #First we will create a figure to hold the GUI elements
-    stage_gui_fig = Figure(resolution=(1200, 600))  #This is the Stage GUI Figure
+    stage_gui_fig = Figure(size=(1200, 600))  #This is the Stage GUI Figure
 
     #=
     This function should flow as follows
@@ -553,7 +553,7 @@ end
 function gui3d(stage::Stage)
 
     #First we will create a figure to hold the GUI elements
-    stage_gui_fig = Figure(resolution=(1200, 600))  #This is the Stage GUI Figure
+    stage_gui_fig = Figure(size=(1200, 600))  #This is the Stage GUI Figure
 
     #Set up variables for motion that will be changed
     xstepsize = Observable(0.1)

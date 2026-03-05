@@ -39,6 +39,13 @@ function save_group_recursive(h5parent, group_name::String, attributes::Dict, da
     # Save data
     if !isnothing(data)
         write(h5group, "data", data)
+        # Add dimension convention metadata for image data
+        if ndims(data) >= 2
+            dset = h5group["data"]
+            attrs(dset)["dimension_order"] = ndims(data) == 2 ? "HW" : "HWN"
+            attrs(dset)["dimension_labels"] = ndims(data) == 2 ? ["height", "width"] : ["height", "width", "frames"]
+            attrs(dset)["memory_layout"] = "column_major_julia"
+        end
     end
 
     # Save attributes

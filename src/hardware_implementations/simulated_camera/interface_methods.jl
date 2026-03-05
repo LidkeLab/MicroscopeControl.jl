@@ -37,7 +37,7 @@ end
 
 function CameraInterface.getdata(camera::SimCamera)
     if camera.capture_mode == SEQUENCE
-        return rand(UInt16, camera.sequence_length, camera.roi.height, camera.roi.width)
+        return rand(UInt16, camera.roi.height, camera.roi.width, camera.sequence_length)  # (H, W, N) convention
     elseif camera.capture_mode == SINGLE_FRAME
         return rand(UInt16, camera.roi.height, camera.roi.width)
     elseif camera.capture_mode == LIVE
