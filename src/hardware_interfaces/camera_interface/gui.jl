@@ -25,7 +25,7 @@ function create_button(figure, row, column, label, action, camera)
 end
 
 
-function create_display(camera, display_function)
+function create_display(camera, display_function; on_close=nothing)
     # Setup display
     # Camera data is (H, W) where data[row, col] = data[y, x]
     # Makie image() maps first dim → x, second dim → y
@@ -51,6 +51,16 @@ function create_display(camera, display_function)
 
     # Display the plot and store the Scene
     scene = display(GLMakie.Screen(), imgplot)
+
+    # Abort camera when display window is closed, and call on_close callback
+    on(events(imgplot).window_open) do open
+        if !open
+            abort(camera)
+            if on_close !== nothing
+                on_close()
+            end
+        end
+    end
 
     # Start live imaging or sequence based on display_function
     fps = 60
@@ -114,8 +124,8 @@ function gui(camera::Camera)
     display(GLMakie.Screen(), control_fig)
 end
 
-function start_live(camera::Camera)
-    create_display(camera, live)
+function start_live(camera::Camera; on_close=nothing)
+    create_display(camera, live; on_close=on_close)
 end
 
 function start_capture(camera::Camera)
