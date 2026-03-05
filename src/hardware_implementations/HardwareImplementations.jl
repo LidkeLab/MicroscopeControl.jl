@@ -33,6 +33,10 @@ include("mcl_stage/MadCityLabs.jl")
 include("pi_N472/PI_N472.jl")
 @reexport using .PI_N472
 
+# DAQ implementation (must come before modules that depend on it)
+include("nidaq/NIDAQcard.jl")
+@reexport using .NIDAQcard
+
 # Light source implementations
 include("simulated_light/SimulatedLight.jl")
 @reexport using .SimulatedLight
@@ -48,10 +52,6 @@ include("crysta_laser_561/CrystaLaserControl.jl")
 
 include("vortran_laser_488/VortranLaserControl.jl")
 @reexport using .VortranLaserControl
-
-# DAQ implementation (must come before OK_XEM which depends on it)
-include("nidaq/NIDAQcard.jl")
-@reexport using .NIDAQcard
 
 # FPGA implementation (depends on NIDAQcard)
 include("ok_xem/OK_XEM.jl")
