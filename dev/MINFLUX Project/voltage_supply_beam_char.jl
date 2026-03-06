@@ -11,8 +11,8 @@
 # HVA200 hardware (via NIDAQ Dev2):
 #   Gain: 20x  →  1 V DAQ input = 20 V HVA output
 #   Monitor output ≈ DAQ input  (1/20 of actual output)
-#   HVA1: AO0 (write)  →  AI3 (monitor read)
-#   HVA2: AO1 (write)  →  AI2 (monitor read)
+#   HVA1: AO0 (write)  →  AI1 (DAQ loopback)  →  AI0 (monitor read)
+#   HVA2: AO1 (write)  →  AI3 (DAQ loopback)  →  AI2 (monitor read)
 #
 # New GUI controls (rows 7–9 of toggle_box):
 #   Row 7: HVA channel selector (HVA1 / HVA2)
@@ -204,14 +204,14 @@ function beam_characterization(
             try
                 ao0 = AOTask("Dev2/ao0")
                 ao1 = AOTask("Dev2/ao1")
-                ai  = AITask("Dev2/ai2, Dev2/ai3")   # ai2=HVA1 mon, ai3=HVA2 mon
+                ai  = AITask("Dev2/ai0, Dev2/ai2")   # ai0=HVA1 mon, ai2=HVA2 mon
                 last_ao0[] = ao0;  last_ao1[] = ao1;  last_ai[] = ai
                 start!(ao0);  start!(ao1);  start!(ai)
                 write_scalar(ao0, v1_daq)
                 write_scalar(ao1, v2_daq)
                 sleep(0.2)
                 data = read(ai)
-                # DAQmx returns (n_samples × n_channels): [1,1]=AI2=HVA1, [1,2]=AI3=HVA2
+                # DAQmx returns (n_samples × n_channels): [1,1]=AI0=HVA1, [1,2]=AI2=HVA2
                 mon1 = isa(data, Matrix) ? data[1, 1] : data[1]
                 mon2 = isa(data, Matrix) ? data[1, 2] : data[2]
                 stop!(ao0);  stop!(ao1);  stop!(ai)
