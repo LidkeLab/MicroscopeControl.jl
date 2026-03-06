@@ -640,3 +640,8 @@ end
 # To run:
 # camera = ThorcamDCXCamera()
 # beam_characterization(camera)
+#
+# If tasks are left reserved after a crash, clear them manually:
+# ao0 = AOTask("Dev2/ao0"); ao1 = AOTask("Dev2/ao1"); ai = AITask("Dev2/ai0, Dev2/ai2")
+# stop!(ao0); stop!(ao1); stop!(ai)
+# clear!(ao0); clear!(ao1); clear!(ai)
