@@ -47,11 +47,10 @@ function beam_characterization(
     start = time()
     initial_frame = getlastframe(camera)'
 
-    # ── HVA200 task handles (created on demand, one channel at a time) ──────────
-    # Tasks are created/started/stopped/cleared inside the Apply Voltage handler
-    # so only one AI channel is ever active at a time (avoids -50103 resource conflict).
-    last_ao = Ref{Any}(nothing)   # last AOTask created
-    last_ai = Ref{Any}(nothing)   # last AITask created
+    # ── HVA200 task handles (created on demand, both channels together) ─────────
+    last_ao0 = Ref{Any}(nothing)
+    last_ao1 = Ref{Any}(nothing)
+    last_ai  = Ref{Any}(nothing)
 
     # ── Figure / layout ──────────────────────────────────────────────────────
     fig = Figure(size = (1000, 750), title = "Beam Characterization")
@@ -106,19 +105,20 @@ function beam_characterization(
     position_textbox = Textbox(toggle_box[6, 2:4],
         placeholder = "0.0", stored_string = "0.0")
 
-    # ── HVA200 voltage control (rows 7–9) ────────────────────────────────────
-    Label(toggle_box[7, 1], "HVA Channel:")
-    hva_menu = Menu(toggle_box[7, 2:4], options = ["HVA1", "HVA2"])
+    # ── HVA200 voltage control (rows 7–10) ───────────────────────────────────
+    Label(toggle_box[7, 1], "HVA1 (V):")
+    hva1_textbox = Textbox(toggle_box[7, 2:4], placeholder = "0.0", stored_string = "0.0")
 
-    Label(toggle_box[8, 1], "Set Voltage (V):")
-    voltage_textbox = Textbox(toggle_box[8, 2:4],
-        placeholder = "0.0", stored_string = "0.0")
+    Label(toggle_box[8, 1], "HVA2 (V):")
+    hva2_textbox = Textbox(toggle_box[8, 2:4], placeholder = "0.0", stored_string = "0.0")
 
-    apply_voltage_button = Button(toggle_box[9, 1:2], label = "Apply Voltage")
-    monitor_label        = Label(toggle_box[9, 3:4], "Monitor: -- V")
+    apply_voltage_button = Button(toggle_box[9, 1:4], label = "Apply Voltage")
+    hva1_monitor_label   = Label(toggle_box[10, 1:2], "Mon HVA1: -- V")
+    hva2_monitor_label   = Label(toggle_box[10, 3:4], "Mon HVA2: -- V")
 
-    # Observable that tracks the last applied HVA output voltage (real scale)
-    current_hva_monitor = Observable(0.0)
+    # Observables tracking the last applied HVA output voltages (real scale ×20)
+    current_hva1_monitor = Observable(0.0)
+    current_hva2_monitor = Observable(0.0)
 
     # ── Data labels ──────────────────────────────────────────────────────────
     approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
@@ -192,39 +192,38 @@ function beam_characterization(
         end
     end
 
-    # ── Apply Voltage handler ─────────────────────────────────────────────────
+    # ── Apply Voltage handler (both channels simultaneously) ─────────────────
     on(apply_voltage_button.clicks) do _
-        v_real = tryparse(Float64, voltage_textbox.stored_string[])
-        v_real = isnothing(v_real) ? 0.0 : v_real
-        v_daq  = v_real / 20.0          # convert HVA output scale → DAQ input
-
-        selected_channel = hva_menu.selection[]
+        v1 = tryparse(Float64, hva1_textbox.stored_string[])
+        v2 = tryparse(Float64, hva2_textbox.stored_string[])
+        v1_daq = (isnothing(v1) ? 0.0 : v1) / 20.0   # HVA output → DAQ input
+        v2_daq = (isnothing(v2) ? 0.0 : v2) / 20.0
 
         @async begin
             try
-                # Create only the tasks for the selected channel (one AI at a time)
-                if selected_channel == "HVA1"
-                    ao = AOTask("Dev2/ao0")
-                    ai = AITask("Dev2/ai3")
-                else  # HVA2
-                    ao = AOTask("Dev2/ao1")
-                    ai = AITask("Dev2/ai2")
-                end
-                last_ao[] = ao;  last_ai[] = ai   # store for window_closer safety
-                start!(ao);  start!(ai)
-                write_scalar(ao, v_daq)
+                ao0 = AOTask("Dev2/ao0")
+                ao1 = AOTask("Dev2/ao1")
+                ai  = AITask("Dev2/ai2, Dev2/ai3")   # ai2=HVA1 mon, ai3=HVA2 mon
+                last_ao0[] = ao0;  last_ao1[] = ao1;  last_ai[] = ai
+                start!(ao0);  start!(ao1);  start!(ai)
+                write_scalar(ao0, v1_daq)
+                write_scalar(ao1, v2_daq)
                 sleep(0.2)
-                mon = read_scalar(ai)
-                stop!(ao);   stop!(ai)
-                clear!(ao);  clear!(ai)
-                last_ao[] = nothing;  last_ai[] = nothing
-                actual = mon * 20.0
-                current_hva_monitor[] = actual
-                monitor_label.text = "Monitor: $(round(actual, digits=2)) V"
+                data = read(ai)
+                mon1 = isa(data, Matrix) ? data[1, 1] : data[1]   # AI2 → HVA1
+                mon2 = isa(data, Matrix) ? data[2, 1] : data[2]   # AI3 → HVA2
+                stop!(ao0);  stop!(ao1);  stop!(ai)
+                clear!(ao0); clear!(ao1); clear!(ai)
+                last_ao0[] = nothing;  last_ao1[] = nothing;  last_ai[] = nothing
+                current_hva1_monitor[] = mon1 * 20.0
+                current_hva2_monitor[] = mon2 * 20.0
+                hva1_monitor_label.text = "Mon HVA1: $(round(mon1 * 20.0, digits=2)) V"
+                hva2_monitor_label.text = "Mon HVA2: $(round(mon2 * 20.0, digits=2)) V"
             catch e
                 @error "HVA200 voltage apply failed"
                 showerror(stdout, e, catch_backtrace())
-                monitor_label.text = "Monitor: ERROR"
+                hva1_monitor_label.text = "Mon HVA1: ERROR"
+                hva2_monitor_label.text = "Mon HVA2: ERROR"
             end
         end
     end
@@ -260,8 +259,8 @@ function beam_characterization(
         position_val = isnothing(position_val) ? 0.0 : position_val
 
         # HVA200 values at save time
-        hva_channel_val   = string(hva_menu.selection[])
-        hva_voltage_val   = Float64(current_hva_monitor[])
+        hva1_voltage_val = Float64(current_hva1_monitor[])
+        hva2_voltage_val = Float64(current_hva2_monitor[])
 
         # beam quality metrics
         ext_ratio_val  = 0.0
@@ -302,9 +301,9 @@ function beam_characterization(
                     attrs(h5file)["max_photon_count"]  = max_pc
                     attrs(h5file)["timestamp"]         = timestamp
                     attrs(h5file)["position"]          = position_val
-                    # HVA200 voltage
-                    attrs(h5file)["hva_channel"]        = hva_channel_val
-                    attrs(h5file)["hva_voltage_actual"] = hva_voltage_val
+                    # HVA200 voltages (real scale ×20)
+                    attrs(h5file)["hva1_voltage"] = hva1_voltage_val
+                    attrs(h5file)["hva2_voltage"] = hva2_voltage_val
                     # beam quality
                     if beam_type[] == :donut
                         attrs(h5file)["extinction_ratio"] = ext_ratio_val
@@ -333,10 +332,10 @@ function beam_characterization(
     display(fig)
     window_closer(fig, () -> begin
         shutdown(camera)
-        # Stop/clear any tasks left open if the window closed mid-flight
         try
-            if last_ao[] !== nothing; stop!(last_ao[]); clear!(last_ao[]); end
-            if last_ai[] !== nothing; stop!(last_ai[]); clear!(last_ai[]); end
+            if last_ao0[] !== nothing; stop!(last_ao0[]); clear!(last_ao0[]); end
+            if last_ao1[] !== nothing; stop!(last_ao1[]); clear!(last_ao1[]); end
+            if last_ai[]  !== nothing; stop!(last_ai[]);  clear!(last_ai[]);  end
         catch; end
     end)
 
