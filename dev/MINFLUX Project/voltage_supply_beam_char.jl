@@ -200,6 +200,7 @@ function beam_characterization(
         v2_daq = (isnothing(v2) ? 0.0 : v2) / 20.0
 
         @async begin
+            ao0 = nothing; ao1 = nothing; ai = nothing
             try
                 ao0 = AOTask("Dev2/ao0")
                 ao1 = AOTask("Dev2/ao1")
@@ -210,8 +211,9 @@ function beam_characterization(
                 write_scalar(ao1, v2_daq)
                 sleep(0.2)
                 data = read(ai)
-                mon1 = isa(data, Matrix) ? data[1, 1] : data[1]   # AI2 → HVA1
-                mon2 = isa(data, Matrix) ? data[2, 1] : data[2]   # AI3 → HVA2
+                # DAQmx returns (n_samples × n_channels): [1,1]=AI2=HVA1, [1,2]=AI3=HVA2
+                mon1 = isa(data, Matrix) ? data[1, 1] : data[1]
+                mon2 = isa(data, Matrix) ? data[1, 2] : data[2]
                 stop!(ao0);  stop!(ao1);  stop!(ai)
                 clear!(ao0); clear!(ao1); clear!(ai)
                 last_ao0[] = nothing;  last_ao1[] = nothing;  last_ai[] = nothing
@@ -224,6 +226,13 @@ function beam_characterization(
                 showerror(stdout, e, catch_backtrace())
                 hva1_monitor_label.text = "Mon HVA1: ERROR"
                 hva2_monitor_label.text = "Mon HVA2: ERROR"
+                # Always clean up so -50103 doesn't occur on retry
+                try
+                    if ao0 !== nothing; stop!(ao0); clear!(ao0); end
+                    if ao1 !== nothing; stop!(ao1); clear!(ao1); end
+                    if ai  !== nothing; stop!(ai);  clear!(ai);  end
+                catch; end
+                last_ao0[] = nothing;  last_ao1[] = nothing;  last_ai[] = nothing
             end
         end
     end
