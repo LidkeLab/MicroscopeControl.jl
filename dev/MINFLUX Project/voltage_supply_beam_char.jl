@@ -119,6 +119,8 @@ function beam_characterization(
     # Observables tracking the last applied HVA output voltages (real scale ×20)
     current_hva1_monitor = Observable(0.0)
     current_hva2_monitor = Observable(0.0)
+    current_ao0_read     = Observable(0.0)   # AI1 loopback: actual DAQ output to HVA1
+    current_ao1_read     = Observable(0.0)   # AI3 loopback: actual DAQ output to HVA2
 
     # ── Data labels ──────────────────────────────────────────────────────────
     approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
@@ -193,6 +195,14 @@ function beam_characterization(
     end
 
     # ── Apply Voltage handler (both channels simultaneously) ─────────────────
+    # Follows test_powersupply.jl TEST 3/4 pattern exactly:
+    #   AOTask with min/max range, AITask with Differential mode + min/max,
+    #   read all 4 AI channels, index in channel-string order.
+    # Channel order in AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3"):
+    #   data[1] = AI0 = HVA1 monitor  (×20 → HVA1 real output)
+    #   data[2] = AI1 = AO0 loopback  (DAQ raw output to HVA1)
+    #   data[3] = AI2 = HVA2 monitor  (×20 → HVA2 real output)
+    #   data[4] = AI3 = AO1 loopback  (DAQ raw output to HVA2)
     on(apply_voltage_button.clicks) do _
         v1 = tryparse(Float64, hva1_textbox.stored_string[])
         v2 = tryparse(Float64, hva2_textbox.stored_string[])
@@ -200,33 +210,44 @@ function beam_characterization(
         v2_daq = (isnothing(v2) ? 0.0 : v2) / 20.0
 
         @async begin
+            # Pre-cleanup: release any tasks left reserved from a previous attempt
+            try
+                if last_ao0[] !== nothing; stop!(last_ao0[]); clear!(last_ao0[]); last_ao0[] = nothing; end
+                if last_ao1[] !== nothing; stop!(last_ao1[]); clear!(last_ao1[]); last_ao1[] = nothing; end
+                if last_ai[]  !== nothing; stop!(last_ai[]);  clear!(last_ai[]);  last_ai[]  = nothing; end
+            catch; end
+
             ao0 = nothing; ao1 = nothing; ai = nothing
             try
-                ao0 = AOTask("Dev2/ao0")
-                ao1 = AOTask("Dev2/ao1")
-                ai  = AITask("Dev2/ai0, Dev2/ai2")   # ai0=HVA1 mon, ai2=HVA2 mon
+                ao0 = AOTask("Dev2/ao0", min_val = -10.0, max_val = 10.0)
+                ao1 = AOTask("Dev2/ao1", min_val = -10.0, max_val = 10.0)
+                ai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3",
+                             terminal_config = Differential, min_val = -10.0, max_val = 10.0)
                 last_ao0[] = ao0;  last_ao1[] = ao1;  last_ai[] = ai
                 start!(ao0);  start!(ao1);  start!(ai)
                 write_scalar(ao0, v1_daq)
                 write_scalar(ao1, v2_daq)
                 sleep(0.2)
                 data = read(ai)
-                # DAQmx returns (n_samples × n_channels): [1,1]=AI0=HVA1, [1,2]=AI2=HVA2
-                mon1 = isa(data, Matrix) ? data[1, 1] : data[1]
-                mon2 = isa(data, Matrix) ? data[1, 2] : data[2]
+                # data is Vector or Matrix (channels × samples); index by channel-string order
+                hva1_mon = isa(data, Matrix) ? data[1, 1] : data[1]   # AI0 → HVA1 monitor
+                ao0_loop = isa(data, Matrix) ? data[2, 1] : data[2]   # AI1 → AO0 loopback
+                hva2_mon = isa(data, Matrix) ? data[3, 1] : data[3]   # AI2 → HVA2 monitor
+                ao1_loop = isa(data, Matrix) ? data[4, 1] : data[4]   # AI3 → AO1 loopback
                 stop!(ao0);  stop!(ao1);  stop!(ai)
                 clear!(ao0); clear!(ao1); clear!(ai)
                 last_ao0[] = nothing;  last_ao1[] = nothing;  last_ai[] = nothing
-                current_hva1_monitor[] = mon1 * 20.0
-                current_hva2_monitor[] = mon2 * 20.0
-                hva1_monitor_label.text = "Mon HVA1: $(round(mon1 * 20.0, digits=2)) V"
-                hva2_monitor_label.text = "Mon HVA2: $(round(mon2 * 20.0, digits=2)) V"
+                current_hva1_monitor[] = hva1_mon * 20.0
+                current_hva2_monitor[] = hva2_mon * 20.0
+                current_ao0_read[]     = ao0_loop
+                current_ao1_read[]     = ao1_loop
+                hva1_monitor_label.text = "HVA1: $(round(hva1_mon * 20.0, digits=2)) V  DAQ: $(round(ao0_loop, digits=3)) V"
+                hva2_monitor_label.text = "HVA2: $(round(hva2_mon * 20.0, digits=2)) V  DAQ: $(round(ao1_loop, digits=3)) V"
             catch e
                 @error "HVA200 voltage apply failed"
                 showerror(stdout, e, catch_backtrace())
                 hva1_monitor_label.text = "Mon HVA1: ERROR"
                 hva2_monitor_label.text = "Mon HVA2: ERROR"
-                # Always clean up so -50103 doesn't occur on retry
                 try
                     if ao0 !== nothing; stop!(ao0); clear!(ao0); end
                     if ao1 !== nothing; stop!(ao1); clear!(ao1); end
@@ -268,8 +289,10 @@ function beam_characterization(
         position_val = isnothing(position_val) ? 0.0 : position_val
 
         # HVA200 values at save time
-        hva1_voltage_val = Float64(current_hva1_monitor[])
-        hva2_voltage_val = Float64(current_hva2_monitor[])
+        hva1_voltage_val = Float64(current_hva1_monitor[])   # AI0 × 20: HVA1 real output (V)
+        hva2_voltage_val = Float64(current_hva2_monitor[])   # AI2 × 20: HVA2 real output (V)
+        hva1_daq_val     = Float64(current_ao0_read[])       # AI1: raw DAQ output to HVA1 (V)
+        hva2_daq_val     = Float64(current_ao1_read[])       # AI3: raw DAQ output to HVA2 (V)
 
         # beam quality metrics
         ext_ratio_val  = 0.0
@@ -310,9 +333,11 @@ function beam_characterization(
                     attrs(h5file)["max_photon_count"]  = max_pc
                     attrs(h5file)["timestamp"]         = timestamp
                     attrs(h5file)["position"]          = position_val
-                    # HVA200 voltages (real scale ×20)
-                    attrs(h5file)["hva1_voltage"] = hva1_voltage_val
-                    attrs(h5file)["hva2_voltage"] = hva2_voltage_val
+                    # HVA200 voltages: monitor (real ×20) and raw DAQ loopback
+                    attrs(h5file)["hva1_voltage"]    = hva1_voltage_val  # HVA1 output (V)
+                    attrs(h5file)["hva2_voltage"]    = hva2_voltage_val  # HVA2 output (V)
+                    attrs(h5file)["hva1_daq_output"] = hva1_daq_val      # DAQ raw → HVA1 (V)
+                    attrs(h5file)["hva2_daq_output"] = hva2_daq_val      # DAQ raw → HVA2 (V)
                     # beam quality
                     if beam_type[] == :donut
                         attrs(h5file)["extinction_ratio"] = ext_ratio_val
@@ -642,6 +667,8 @@ end
 # beam_characterization(camera)
 #
 # If tasks are left reserved after a crash, clear them manually:
-# ao0 = AOTask("Dev2/ao0"); ao1 = AOTask("Dev2/ao1"); ai = AITask("Dev2/ai0, Dev2/ai2")
+# ao0 = AOTask("Dev2/ao0", min_val=-10.0, max_val=10.0)
+# ao1 = AOTask("Dev2/ao1", min_val=-10.0, max_val=10.0)
+# ai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3", terminal_config=Differential, min_val=-10.0, max_val=10.0)
 # stop!(ao0); stop!(ao1); stop!(ai)
 # clear!(ao0); clear!(ao1); clear!(ai)
