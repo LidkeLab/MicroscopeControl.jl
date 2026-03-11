@@ -111,8 +111,8 @@ function plot_angle(groups, dir)
         meas = get(groups, gkey, AngleMeasurement[])
         isempty(meas) && (@warn "No data for $gkey"; continue)
 
-        daq_v  = daq_fn.(meas)
-        mon_v  = mon_fn.(meas)
+        daq_v  =  daq_fn.(meas)
+        mon_v  = -mon_fn.(meas)   # monitor is inverted — negate to correct
         cx_abs = [m.center_x for m in meas]
         cy_abs = [m.center_y for m in meas]
         cx_del = cx_abs .- ref_x
@@ -154,10 +154,12 @@ function plot_angle(groups, dir)
         if !isempty(ctrl)
             cx_ctrl = mean(m.center_x for m in ctrl)
             cy_ctrl = mean(m.center_y for m in ctrl)
-            for (ax, yv) in ((ax1, cx_ctrl), (ax2, cy_ctrl), (ax3, cx_ctrl), (ax4, cy_ctrl))
-                scatter!(ax, [mean(daq_fn(m) for m in ctrl)], [yv];
-                         color = :gray30, marker = :diamond, markersize = 16)
-            end
+            ctrl_daq_v = mean( daq_fn(m) for m in ctrl)
+            ctrl_mon_v = mean(-mon_fn(m) for m in ctrl)
+            scatter!(ax1, [ctrl_daq_v], [cx_ctrl]; color = :gray30, marker = :diamond, markersize = 16)
+            scatter!(ax2, [ctrl_daq_v], [cy_ctrl]; color = :gray30, marker = :diamond, markersize = 16)
+            scatter!(ax3, [ctrl_mon_v], [cx_ctrl]; color = :gray30, marker = :diamond, markersize = 16)
+            scatter!(ax4, [ctrl_mon_v], [cy_ctrl]; color = :gray30, marker = :diamond, markersize = 16)
         end
 
         Legend(fig_abs[3, 1:2], legend_elems, legend_labels, "$prefix Channel";
@@ -188,8 +190,8 @@ function plot_angle(groups, dir)
 
         add_control_point!(ax5, ctrl, daq_fn)
         add_control_point!(ax6, ctrl, daq_fn)
-        add_control_point!(ax7, ctrl, mon_fn)
-        add_control_point!(ax8, ctrl, mon_fn)
+        add_control_point!(ax7, ctrl, m -> -mon_fn(m))
+        add_control_point!(ax8, ctrl, m -> -mon_fn(m))
 
         Legend(fig_del[3, 1:2], legend_elems, legend_labels, "$prefix Channel";
                orientation = :horizontal, framevisible = true)
