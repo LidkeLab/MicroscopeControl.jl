@@ -357,6 +357,61 @@ function plot_beam_quality(groups, dir)
 end
 
 # ============================================================================
+# Displacement distance vs voltage
+# ============================================================================
+
+function plot_distance_vs_voltage(groups, dir)
+    ctrl = get(groups, "Control", AngleMeasurement[])
+    ref_x = isempty(ctrl) ? 0.0 : mean(m.center_x for m in ctrl)
+    ref_y = isempty(ctrl) ? 0.0 : mean(m.center_y for m in ctrl)
+
+    palette = Dict("ODE1" => (:steelblue, :circle), "ODE2" => (:tomato, :rect))
+
+    for gkey in ("ODE1", "ODE2")
+        meas = get(groups, gkey, AngleMeasurement[])
+        isempty(meas) && continue
+
+        c, mk  = palette[gkey]
+        prefix = gkey == "ODE1" ? "HVA1" : "HVA2"
+        daq_fn = gkey == "ODE1" ? (m -> m.hva1_daq)      : (m -> m.hva2_daq)
+        mon_fn = gkey == "ODE1" ? (m -> -m.hva1_monitor)  : (m -> -m.hva2_monitor)
+
+        dist   = [sqrt((m.center_x - ref_x)^2 + (m.center_y - ref_y)^2) for m in meas]
+        daq_v  = daq_fn.(meas)
+        mon_v  = mon_fn.(meas)
+
+        ctrl_daq_v = isempty(ctrl) ? NaN : mean(daq_fn(m) for m in ctrl)
+        ctrl_mon_v = isempty(ctrl) ? NaN : mean(mon_fn(m) for m in ctrl)
+
+        fig = Figure(size = (900, 450))
+        Label(fig[0, 1:2], "$gkey — Beam Displacement Distance vs $prefix Voltage";
+              fontsize = 16, font = :bold, tellwidth = false)
+
+        ax_d = Axis(fig[1, 1], title = "Distance vs $prefix DAQ Output",
+                    xlabel = "$prefix DAQ Output (V)",
+                    ylabel = "Distance √(ΔX² + ΔY²) (px)")
+        ax_m = Axis(fig[1, 2], title = "Distance vs $prefix Monitor",
+                    xlabel = "$prefix Monitor (V)",
+                    ylabel = "Distance √(ΔX² + ΔY²) (px)")
+
+        scatterlines!(ax_d, daq_v, dist; color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_m, mon_v, dist; color = c, marker = mk, markersize = 10)
+
+        if !isnan(ctrl_daq_v)
+            scatter!(ax_d, [ctrl_daq_v], [0.0]; color = :gray30, marker = :diamond, markersize = 14)
+        end
+        if !isnan(ctrl_mon_v)
+            scatter!(ax_m, [ctrl_mon_v], [0.0]; color = :gray30, marker = :diamond, markersize = 14)
+        end
+
+        display(fig)
+        outpath = joinpath(dir, "$(gkey)_distance_vs_voltage.png")
+        save(outpath, fig)
+        println("Saved: $outpath")
+    end
+end
+
+# ============================================================================
 # Run
 # ============================================================================
 
@@ -376,3 +431,4 @@ end
 
 plot_angle(groups, DATA_DIR)
 plot_beam_quality(groups, DATA_DIR)
+plot_distance_vs_voltage(groups, DATA_DIR)
