@@ -164,25 +164,30 @@ function make_videos(groups, dir; framerate = 10)
         tag     = replace(label, " " => "_")
         outpath = joinpath(dir, "$(tag)_video.mp4")
 
-        # build a figure for rendering
-        fig = Figure(size = (600, 550))
+        # build a figure for rendering — tight layout, no extra rows
+        fig = Figure(size = (600, 600), backgroundcolor = :black)
         ax  = Axis(fig[1, 1], aspect = DataAspect(),
-                   title = "$label — pos = $(round(meas[1].position, digits=3))")
+                   backgroundcolor = :black)
         hidedecorations!(ax)
+        hidespines!(ax)
+        rowgap!(fig.layout, 0)
+        colgap!(fig.layout, 0)
 
         frame_obs = Observable(meas[1].frame)
         clim      = (0.0, maximum(maximum(m.frame) for m in meas))
-        heatmap!(ax, frame_obs; colormap = :grays, colorrange = clim)
+        heatmap!(ax, frame_obs; colormap = :inferno, colorrange = clim)
 
-        pos_label = Label(fig[2, 1],
-                          "Position: $(round(meas[1].position, digits=3))";
-                          fontsize = 18)
+        # position text overlay — top right corner, white on dark background
+        pos_obs = Observable("pos: $(round(meas[1].position, digits=3))")
+        text!(ax, pos_obs;
+              position = (0.98, 0.98), space = :relative,
+              align = (:right, :top), color = :white,
+              fontsize = 16, font = :bold)
 
         println("Recording $outpath  ($(length(meas)) frames @ $(framerate) fps)")
         record(fig, outpath, meas; framerate = framerate) do m
-            frame_obs[]        = m.frame
-            ax.title[]         = "$label — pos = $(round(m.position, digits=3))"
-            pos_label.text[]   = "Position: $(round(m.position, digits=3))"
+            frame_obs[] = m.frame
+            pos_obs[]   = "pos: $(round(m.position, digits=3))"
         end
         println("  Saved: $outpath")
     end
