@@ -47,10 +47,23 @@ function beam_characterization(
     start = time()
     initial_frame = getlastframe(camera)'
 
-    # ── HVA200 task handles (created on demand, both channels together) ─────────
-    last_ao0 = Ref{Any}(nothing)
-    last_ao1 = Ref{Any}(nothing)
-    last_ai  = Ref{Any}(nothing)
+    # ── HVA200 DAQ tasks (session-level: started once, held for entire session) ──
+    # Matches test_powersupply.jl TEST 4: all tasks created/started before any
+    # write or read, kept running until window close.
+    # Port map: AO0→HVA1  AO1→HVA2  AI0=HVA1 mon  AI1=AO0 loop  AI2=HVA2 mon  AI3=AO1 loop
+    local dao0, dao1, dai
+    daq_ok = false
+    try
+        dao0 = AOTask("Dev2/ao0", min_val = -10.0, max_val = 10.0)
+        dao1 = AOTask("Dev2/ao1", min_val = -10.0, max_val = 10.0)
+        dai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3",
+                      terminal_config = Differential, min_val = -10.0, max_val = 10.0)
+        start!(dao0); start!(dao1); start!(dai)
+        write_scalar(dao0, 0.0); write_scalar(dao1, 0.0)   # safe default
+        daq_ok = true
+    catch e
+        @warn "DAQ init failed — HVA200 controls disabled" exception=e
+    end
 
     # ── Figure / layout ──────────────────────────────────────────────────────
     fig = Figure(size = (1000, 750), title = "Beam Characterization")
@@ -194,51 +207,24 @@ function beam_characterization(
         end
     end
 
-    # ── Apply Voltage handler (both channels simultaneously) ─────────────────
-    # Pattern from test_powersupply.jl TEST 4:
-    #   AO tasks stay running to hold the voltage (cleared only on next Apply or window close).
-    #   AI task is a one-shot read: start → read → stop → clear.
-    # Port map (user-specified):
-    #   AO0 → HVA1 input  |  AI0 = HVA1 monitor  |  AI1 = AO0 loopback
-    #   AO1 → HVA2 input  |  AI2 = HVA2 monitor  |  AI3 = AO1 loopback
+    # ── Apply Voltage handler ─────────────────────────────────────────────────
+    # Tasks are already running (session-level); just write new values and read back.
     on(apply_voltage_button.clicks) do _
+        !daq_ok && return
         v1 = tryparse(Float64, hva1_textbox.stored_string[])
         v2 = tryparse(Float64, hva2_textbox.stored_string[])
         v1_daq = (isnothing(v1) ? 0.0 : v1) / 20.0   # HVA output → DAQ input
         v2_daq = (isnothing(v2) ? 0.0 : v2) / 20.0
-
         @async begin
-            # Stop any previously running AO tasks before applying new voltage
             try
-                if last_ao0[] !== nothing; stop!(last_ao0[]); clear!(last_ao0[]); last_ao0[] = nothing; end
-                if last_ao1[] !== nothing; stop!(last_ao1[]); clear!(last_ao1[]); last_ao1[] = nothing; end
-                if last_ai[]  !== nothing; stop!(last_ai[]);  clear!(last_ai[]);  last_ai[]  = nothing; end
-            catch; end
-
-            ao0 = nothing; ao1 = nothing; ai = nothing
-            try
-                # Start AO tasks and hold voltage (NOT stopped after read)
-                ao0 = AOTask("Dev2/ao0", min_val = -10.0, max_val = 10.0)
-                ao1 = AOTask("Dev2/ao1", min_val = -10.0, max_val = 10.0)
-                start!(ao0); start!(ao1)
-                write_scalar(ao0, v1_daq)
-                write_scalar(ao1, v2_daq)
-                last_ao0[] = ao0;  last_ao1[] = ao1   # kept alive to hold voltage
-
-                # Wait for HVA to settle, then one-shot AI read
-                sleep(0.2)
-                ai = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3",
-                            terminal_config = Differential, min_val = -10.0, max_val = 10.0)
-                start!(ai)
-                data = read(ai)
-                stop!(ai); clear!(ai)   # AI is one-shot; AO tasks remain running
-
-                # data is a Vector ordered by channel string
+                write_scalar(dao0, v1_daq)
+                write_scalar(dao1, v2_daq)
+                sleep(0.2)   # wait for HVA to settle
+                data = read(dai)
                 hva1_mon = data[1]   # AI0 → HVA1 monitor
                 ao0_loop = data[2]   # AI1 → AO0 loopback
                 hva2_mon = data[3]   # AI2 → HVA2 monitor
                 ao1_loop = data[4]   # AI3 → AO1 loopback
-
                 current_hva1_monitor[] = hva1_mon * 20.0
                 current_hva2_monitor[] = hva2_mon * 20.0
                 current_ao0_read[]     = ao0_loop
@@ -250,11 +236,6 @@ function beam_characterization(
                 showerror(stdout, e, catch_backtrace())
                 hva1_monitor_label.text = "Mon HVA1: ERROR"
                 hva2_monitor_label.text = "Mon HVA2: ERROR"
-                try
-                    if ao0 !== nothing; stop!(ao0); clear!(ao0); last_ao0[] = nothing; end
-                    if ao1 !== nothing; stop!(ao1); clear!(ao1); last_ao1[] = nothing; end
-                    if ai  !== nothing; stop!(ai);  clear!(ai);  end
-                catch; end
             end
         end
     end
@@ -367,11 +348,13 @@ function beam_characterization(
     display(fig)
     window_closer(fig, () -> begin
         shutdown(camera)
-        try
-            if last_ao0[] !== nothing; stop!(last_ao0[]); clear!(last_ao0[]); end
-            if last_ao1[] !== nothing; stop!(last_ao1[]); clear!(last_ao1[]); end
-            if last_ai[]  !== nothing; stop!(last_ai[]);  clear!(last_ai[]);  end
-        catch; end
+        if daq_ok
+            try
+                write_scalar(dao0, 0.0); write_scalar(dao1, 0.0)
+                stop!(dao0); stop!(dao1); stop!(dai)
+                clear!(dao0); clear!(dao1); clear!(dai)
+            catch; end
+        end
     end)
 
     # ── Keyboard shortcuts ────────────────────────────────────────────────────
@@ -667,7 +650,8 @@ end
 # camera = ThorcamDCXCamera()
 # beam_characterization(camera)
 #
-# If tasks are left reserved after a crash, clear them manually:
+# If tasks are left reserved after a crash, clear them manually in the REPL:
+# using DAQmx
 # ao0 = AOTask("Dev2/ao0", min_val=-10.0, max_val=10.0)
 # ao1 = AOTask("Dev2/ao1", min_val=-10.0, max_val=10.0)
 # ai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3", terminal_config=Differential, min_val=-10.0, max_val=10.0)
