@@ -129,11 +129,13 @@ function beam_characterization(
     hva1_monitor_label   = Label(toggle_box[10, 1:2], "Mon HVA1: -- V")
     hva2_monitor_label   = Label(toggle_box[10, 3:4], "Mon HVA2: -- V")
 
-    # Observables tracking the last applied HVA output voltages (real scale ×20)
-    current_hva1_monitor = Observable(0.0)
-    current_hva2_monitor = Observable(0.0)
-    current_ao0_read     = Observable(0.0)   # AI1 loopback: actual DAQ output to HVA1
-    current_ao1_read     = Observable(0.0)   # AI3 loopback: actual DAQ output to HVA2
+    # Observables tracking the last applied/read HVA values
+    current_hva1_setpoint = Observable(0.0)   # voltage applied by user (DAQ V)
+    current_hva2_setpoint = Observable(0.0)
+    current_hva1_monitor  = Observable(0.0)   # AI0 monitor reading
+    current_hva2_monitor  = Observable(0.0)   # AI2 monitor reading
+    current_ao0_read      = Observable(0.0)   # AI1 loopback: actual DAQ output to HVA1
+    current_ao1_read      = Observable(0.0)   # AI3 loopback: actual DAQ output to HVA2
 
     # ── Data labels ──────────────────────────────────────────────────────────
     approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
@@ -219,6 +221,8 @@ function beam_characterization(
             try
                 write_scalar(dao0, v1_daq)
                 write_scalar(dao1, v2_daq)
+                current_hva1_setpoint[] = v1_daq
+                current_hva2_setpoint[] = v2_daq
                 sleep(0.2)   # wait for HVA to settle
                 data = read(dai)
                 hva1_mon = data[1]   # AI0 → HVA1 monitor (= DAQ out / 20 ≈ v1_daq)
@@ -271,10 +275,12 @@ function beam_characterization(
         position_val = isnothing(position_val) ? 0.0 : position_val
 
         # HVA200 values at save time
-        hva1_monitor_val = Float64(current_hva1_monitor[])   # AI0: HVA1 monitor reading (V)
-        hva2_monitor_val = Float64(current_hva2_monitor[])   # AI2: HVA2 monitor reading (V)
-        hva1_daq_val     = Float64(current_ao0_read[])       # AI1: AO0 loopback (V)
-        hva2_daq_val     = Float64(current_ao1_read[])       # AI3: AO1 loopback (V)
+        hva1_setpoint_val = Float64(current_hva1_setpoint[])  # voltage applied to DAQ (V)
+        hva2_setpoint_val = Float64(current_hva2_setpoint[])
+        hva1_monitor_val  = Float64(current_hva1_monitor[])   # AI0: HVA1 monitor reading (V)
+        hva2_monitor_val  = Float64(current_hva2_monitor[])   # AI2: HVA2 monitor reading (V)
+        hva1_daq_val      = Float64(current_ao0_read[])       # AI1: AO0 loopback (V)
+        hva2_daq_val      = Float64(current_ao1_read[])       # AI3: AO1 loopback (V)
 
         # beam quality metrics
         ext_ratio_val  = 0.0
@@ -315,11 +321,13 @@ function beam_characterization(
                     attrs(h5file)["max_photon_count"]  = max_pc
                     attrs(h5file)["timestamp"]         = timestamp
                     attrs(h5file)["position"]          = position_val
-                    # HVA200 voltages: monitor (real ×20) and raw DAQ loopback
-                    attrs(h5file)["hva1_monitor"]    = hva1_monitor_val  # AI0 monitor (V)
-                    attrs(h5file)["hva2_monitor"]    = hva2_monitor_val  # AI2 monitor (V)
-                    attrs(h5file)["hva1_daq_output"] = hva1_daq_val      # AI1 loopback (V)
-                    attrs(h5file)["hva2_daq_output"] = hva2_daq_val      # AI3 loopback (V)
+                    # HVA200 voltages
+                    attrs(h5file)["hva1_setpoint"]   = hva1_setpoint_val  # applied DAQ V (user input)
+                    attrs(h5file)["hva2_setpoint"]   = hva2_setpoint_val
+                    attrs(h5file)["hva1_monitor"]    = hva1_monitor_val   # AI0 monitor reading (V)
+                    attrs(h5file)["hva2_monitor"]    = hva2_monitor_val   # AI2 monitor reading (V)
+                    attrs(h5file)["hva1_daq_output"] = hva1_daq_val       # AI1 loopback (V)
+                    attrs(h5file)["hva2_daq_output"] = hva2_daq_val       # AI3 loopback (V)
                     # beam quality
                     if beam_type[] == :donut
                         attrs(h5file)["extinction_ratio"] = ext_ratio_val
