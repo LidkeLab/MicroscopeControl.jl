@@ -164,7 +164,7 @@ function plot_angle(groups, dir)
         ]
         legend_labels = ["DAQ Output", "Monitor"]
         if !isempty(ctrl)
-            push!(legend_elems,  MarkerElement(color = :gray30, marker = :diamond, markersize = 16))
+            push!(legend_elems,  [MarkerElement(color = :gray30, marker = :diamond, markersize = 16)])
             push!(legend_labels, "Control")
         end
         Legend(fig[3, 1:2], legend_elems, legend_labels, "$prefix Channel";
