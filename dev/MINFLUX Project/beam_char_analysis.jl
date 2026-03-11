@@ -166,14 +166,13 @@ function make_videos(groups, dir; framerate = 10)
 
         # figure sized to the native frame resolution — fills entire video
         nx, ny = size(meas[1].frame)   # frame is (width, height)
-        fig = Figure(size = (nx, ny), backgroundcolor = :black)
+        fig = Figure(size = (nx, ny), backgroundcolor = :black, figure_padding = 0)
         ax  = Axis(fig[1, 1], aspect = DataAspect(),
                    backgroundcolor = :black)
         hidedecorations!(ax)
         hidespines!(ax)
         rowgap!(fig.layout, 0)
         colgap!(fig.layout, 0)
-        fig.layout.padding[] = (0, 0, 0, 0)
 
         frame_obs = Observable(meas[1].frame)
         clim      = (0.0, maximum(maximum(m.frame) for m in meas))
