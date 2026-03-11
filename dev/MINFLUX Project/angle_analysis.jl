@@ -111,57 +111,14 @@ function plot_angle(groups, dir)
         meas = get(groups, gkey, AngleMeasurement[])
         isempty(meas) && (@warn "No data for $gkey"; continue)
 
-        delta_x = [m.center_x - ref_x for m in meas]
-        delta_y = [m.center_y - ref_y for m in meas]
+        daq_v  = daq_fn.(meas)
+        mon_v  = mon_fn.(meas)
+        cx_abs = [m.center_x for m in meas]
+        cy_abs = [m.center_y for m in meas]
+        cx_del = cx_abs .- ref_x
+        cy_del = cy_abs .- ref_y
 
-        fig = Figure(size = (900, 750))
-
-        Label(fig[0, 1:2], "$gkey — Beam Center Displacement vs $prefix Voltage";
-              fontsize = 16, font = :bold, tellwidth = false)
-
-        # ── row 1: DAQ output ──────────────────────────────────────────────
-        ax_dx = Axis(fig[1, 1],
-                     title  = "$prefix DAQ Output vs ΔCenter X",
-                     xlabel = "$prefix DAQ Output (V)",
-                     ylabel = "ΔCenter X (px)")
-        ax_dy = Axis(fig[1, 2],
-                     title  = "$prefix DAQ Output vs ΔCenter Y",
-                     xlabel = "$prefix DAQ Output (V)",
-                     ylabel = "ΔCenter Y (px)")
-
-        daq_v = daq_fn.(meas)
-        scatterlines!(ax_dx, daq_v, delta_x;
-                      color = :steelblue, marker = :circle, markersize = 10,
-                      label = gkey)
-        scatterlines!(ax_dy, daq_v, delta_y;
-                      color = :steelblue, marker = :circle, markersize = 10,
-                      label = gkey)
-
-        add_control_point!(ax_dx, ctrl, daq_fn)
-        add_control_point!(ax_dy, ctrl, daq_fn)
-
-        # ── row 2: Monitor ────────────────────────────────────────────────
-        ax_mx = Axis(fig[2, 1],
-                     title  = "$prefix Monitor vs ΔCenter X",
-                     xlabel = "$prefix Monitor (V)",
-                     ylabel = "ΔCenter X (px)")
-        ax_my = Axis(fig[2, 2],
-                     title  = "$prefix Monitor vs ΔCenter Y",
-                     xlabel = "$prefix Monitor (V)",
-                     ylabel = "ΔCenter Y (px)")
-
-        mon_v = mon_fn.(meas)
-        scatterlines!(ax_mx, mon_v, delta_x;
-                      color = :tomato, marker = :circle, markersize = 10,
-                      label = gkey)
-        scatterlines!(ax_my, mon_v, delta_y;
-                      color = :tomato, marker = :circle, markersize = 10,
-                      label = gkey)
-
-        add_control_point!(ax_mx, ctrl, mon_fn)
-        add_control_point!(ax_my, ctrl, mon_fn)
-
-        # ── legend ────────────────────────────────────────────────────────
+        # shared legend elements
         legend_elems = [
             [MarkerElement(color = :steelblue, marker = :circle, markersize = 10),
              LineElement(color = :steelblue)],
@@ -173,13 +130,73 @@ function plot_angle(groups, dir)
             push!(legend_elems,  [MarkerElement(color = :gray30, marker = :diamond, markersize = 16)])
             push!(legend_labels, "Control")
         end
-        Legend(fig[3, 1:2], legend_elems, legend_labels, "$prefix Channel";
-               orientation = :horizontal, framevisible = true)
 
-        display(fig)
-        outpath = joinpath(dir, "$(gkey)_angle_plot.png")
-        save(outpath, fig)
-        println("Saved: $outpath")
+        # ── Figure 1: absolute center ──────────────────────────────────────
+        fig_abs = Figure(size = (900, 750))
+        Label(fig_abs[0, 1:2], "$gkey — Absolute Beam Center vs $prefix Voltage";
+              fontsize = 16, font = :bold, tellwidth = false)
+
+        ax1 = Axis(fig_abs[1, 1], title = "$prefix DAQ vs Center X",
+                   xlabel = "$prefix DAQ Output (V)", ylabel = "Center X (px)")
+        ax2 = Axis(fig_abs[1, 2], title = "$prefix DAQ vs Center Y",
+                   xlabel = "$prefix DAQ Output (V)", ylabel = "Center Y (px)")
+        ax3 = Axis(fig_abs[2, 1], title = "$prefix Monitor vs Center X",
+                   xlabel = "$prefix Monitor (V)", ylabel = "Center X (px)")
+        ax4 = Axis(fig_abs[2, 2], title = "$prefix Monitor vs Center Y",
+                   xlabel = "$prefix Monitor (V)", ylabel = "Center Y (px)")
+
+        scatterlines!(ax1, daq_v, cx_abs; color = :steelblue, marker = :circle, markersize = 10)
+        scatterlines!(ax2, daq_v, cy_abs; color = :steelblue, marker = :circle, markersize = 10)
+        scatterlines!(ax3, mon_v, cx_abs; color = :tomato,    marker = :circle, markersize = 10)
+        scatterlines!(ax4, mon_v, cy_abs; color = :tomato,    marker = :circle, markersize = 10)
+
+        # control absolute point
+        if !isempty(ctrl)
+            cx_ctrl = mean(m.center_x for m in ctrl)
+            cy_ctrl = mean(m.center_y for m in ctrl)
+            for (ax, yv) in ((ax1, cx_ctrl), (ax2, cy_ctrl), (ax3, cx_ctrl), (ax4, cy_ctrl))
+                scatter!(ax, [mean(daq_fn(m) for m in ctrl)], [yv];
+                         color = :gray30, marker = :diamond, markersize = 16)
+            end
+        end
+
+        Legend(fig_abs[3, 1:2], legend_elems, legend_labels, "$prefix Channel";
+               orientation = :horizontal, framevisible = true)
+        display(fig_abs)
+        outpath_abs = joinpath(dir, "$(gkey)_angle_absolute.png")
+        save(outpath_abs, fig_abs)
+        println("Saved: $outpath_abs")
+
+        # ── Figure 2: delta center (relative to control) ───────────────────
+        fig_del = Figure(size = (900, 750))
+        Label(fig_del[0, 1:2], "$gkey — ΔBeam Center vs $prefix Voltage (ref = control)";
+              fontsize = 16, font = :bold, tellwidth = false)
+
+        ax5 = Axis(fig_del[1, 1], title = "$prefix DAQ vs ΔCenter X",
+                   xlabel = "$prefix DAQ Output (V)", ylabel = "ΔCenter X (px)")
+        ax6 = Axis(fig_del[1, 2], title = "$prefix DAQ vs ΔCenter Y",
+                   xlabel = "$prefix DAQ Output (V)", ylabel = "ΔCenter Y (px)")
+        ax7 = Axis(fig_del[2, 1], title = "$prefix Monitor vs ΔCenter X",
+                   xlabel = "$prefix Monitor (V)", ylabel = "ΔCenter X (px)")
+        ax8 = Axis(fig_del[2, 2], title = "$prefix Monitor vs ΔCenter Y",
+                   xlabel = "$prefix Monitor (V)", ylabel = "ΔCenter Y (px)")
+
+        scatterlines!(ax5, daq_v, cx_del; color = :steelblue, marker = :circle, markersize = 10)
+        scatterlines!(ax6, daq_v, cy_del; color = :steelblue, marker = :circle, markersize = 10)
+        scatterlines!(ax7, mon_v, cx_del; color = :tomato,    marker = :circle, markersize = 10)
+        scatterlines!(ax8, mon_v, cy_del; color = :tomato,    marker = :circle, markersize = 10)
+
+        add_control_point!(ax5, ctrl, daq_fn)
+        add_control_point!(ax6, ctrl, daq_fn)
+        add_control_point!(ax7, ctrl, mon_fn)
+        add_control_point!(ax8, ctrl, mon_fn)
+
+        Legend(fig_del[3, 1:2], legend_elems, legend_labels, "$prefix Channel";
+               orientation = :horizontal, framevisible = true)
+        display(fig_del)
+        outpath_del = joinpath(dir, "$(gkey)_angle_delta.png")
+        save(outpath_del, fig_del)
+        println("Saved: $outpath_del")
     end
 end
 
