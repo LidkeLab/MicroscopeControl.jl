@@ -47,19 +47,19 @@ function beam_characterization(
     start = time()
     initial_frame = getlastframe(camera)'
 
-    # ── HVA200 DAQ tasks (session-level: started once, held for entire session) ──
-    # Matches test_powersupply.jl TEST 4: all tasks created/started before any
-    # write or read, kept running until window close.
-    # Port map: AO0→HVA1  AO1→HVA2  AI0=HVA1 mon  AI1=AO0 loop  AI2=HVA2 mon  AI3=AO1 loop
+    # ── HVA200 DAQ tasks (session-level, following test_powersupply.jl TEST 3) ──
+    # Tasks started once at startup and held running for the entire session.
+    # Port map: AO0→HVA1  AO1→HVA2
+    #   data[1]=AI0=HVA1 mon  data[2]=AI1=AO0 loop
+    #   data[3]=AI2=HVA2 mon  data[4]=AI3=AO1 loop
     local dao0, dao1, dai
     daq_ok = false
     try
-        dao0 = AOTask("Dev2/ao0", min_val = -10.0, max_val = 10.0)
-        dao1 = AOTask("Dev2/ao1", min_val = -10.0, max_val = 10.0)
-        dai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3",
-                      terminal_config = Differential, min_val = -10.0, max_val = 10.0)
+        dao0 = AOTask("Dev2/ao0")
+        dao1 = AOTask("Dev2/ao1")
+        dai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3")
         start!(dao0); start!(dao1); start!(dai)
-        write_scalar(dao0, 0.0); write_scalar(dao1, 0.0)   # safe default
+        write_scalar(dao0, 0.0); write_scalar(dao1, 0.0)
         daq_ok = true
     catch e
         @warn "DAQ init failed — HVA200 controls disabled" exception=e
@@ -652,8 +652,7 @@ end
 #
 # If tasks are left reserved after a crash, clear them manually in the REPL:
 # using DAQmx
-# ao0 = AOTask("Dev2/ao0", min_val=-10.0, max_val=10.0)
-# ao1 = AOTask("Dev2/ao1", min_val=-10.0, max_val=10.0)
-# ai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3", terminal_config=Differential, min_val=-10.0, max_val=10.0)
+# ao0 = AOTask("Dev2/ao0"); ao1 = AOTask("Dev2/ao1")
+# ai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3")
 # stop!(ao0); stop!(ao1); stop!(ai)
 # clear!(ao0); clear!(ao1); clear!(ai)
