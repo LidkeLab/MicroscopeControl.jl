@@ -145,7 +145,7 @@ function beam_characterization(
     metric_label    = Label(data_box[3, 1], "Extinction Ratio*: N/A")
     Label(data_box[4, 1], "* = optimized values. Refresh to update.")
     Label(data_box[5, 1],
-        "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh  Ctrl+N=Filename  Ctrl+P=Position  Ctrl+V=Voltage",
+        "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh  Ctrl+N=Filename  Ctrl+P=Position  Ctrl+1=HVA1  Ctrl+2=HVA2  Ctrl+V=Apply",
         fontsize = 11)
 
     # ── Observables ──────────────────────────────────────────────────────────
@@ -395,6 +395,12 @@ function beam_characterization(
             end
             if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.v
                 notify(apply_voltage_button.clicks)
+            end
+            if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.one
+                hva1_textbox.focused[] = true
+            end
+            if ispressed(fig, Keyboard.left_control) && event.key == Keyboard.two
+                hva2_textbox.focused[] = true
             end
         end
         return Consume(false)
