@@ -195,14 +195,12 @@ function beam_characterization(
     end
 
     # ── Apply Voltage handler (both channels simultaneously) ─────────────────
-    # Follows test_powersupply.jl TEST 3/4 pattern exactly:
-    #   AOTask with min/max range, AITask with Differential mode + min/max,
-    #   read all 4 AI channels, index in channel-string order.
-    # Channel order in AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3"):
-    #   data[1] = AI0 = HVA1 monitor  (×20 → HVA1 real output)
-    #   data[2] = AI1 = AO0 loopback  (DAQ raw output to HVA1)
-    #   data[3] = AI2 = HVA2 monitor  (×20 → HVA2 real output)
-    #   data[4] = AI3 = AO1 loopback  (DAQ raw output to HVA2)
+    # Pattern from test_powersupply.jl TEST 4:
+    #   AO tasks stay running to hold the voltage (cleared only on next Apply or window close).
+    #   AI task is a one-shot read: start → read → stop → clear.
+    # Port map (user-specified):
+    #   AO0 → HVA1 input  |  AI0 = HVA1 monitor  |  AI1 = AO0 loopback
+    #   AO1 → HVA2 input  |  AI2 = HVA2 monitor  |  AI3 = AO1 loopback
     on(apply_voltage_button.clicks) do _
         v1 = tryparse(Float64, hva1_textbox.stored_string[])
         v2 = tryparse(Float64, hva2_textbox.stored_string[])
@@ -210,7 +208,7 @@ function beam_characterization(
         v2_daq = (isnothing(v2) ? 0.0 : v2) / 20.0
 
         @async begin
-            # Pre-cleanup: release any tasks left reserved from a previous attempt
+            # Stop any previously running AO tasks before applying new voltage
             try
                 if last_ao0[] !== nothing; stop!(last_ao0[]); clear!(last_ao0[]); last_ao0[] = nothing; end
                 if last_ao1[] !== nothing; stop!(last_ao1[]); clear!(last_ao1[]); last_ao1[] = nothing; end
@@ -219,24 +217,28 @@ function beam_characterization(
 
             ao0 = nothing; ao1 = nothing; ai = nothing
             try
+                # Start AO tasks and hold voltage (NOT stopped after read)
                 ao0 = AOTask("Dev2/ao0", min_val = -10.0, max_val = 10.0)
                 ao1 = AOTask("Dev2/ao1", min_val = -10.0, max_val = 10.0)
-                ai  = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3",
-                             terminal_config = Differential, min_val = -10.0, max_val = 10.0)
-                last_ao0[] = ao0;  last_ao1[] = ao1;  last_ai[] = ai
-                start!(ao0);  start!(ao1);  start!(ai)
+                start!(ao0); start!(ao1)
                 write_scalar(ao0, v1_daq)
                 write_scalar(ao1, v2_daq)
+                last_ao0[] = ao0;  last_ao1[] = ao1   # kept alive to hold voltage
+
+                # Wait for HVA to settle, then one-shot AI read
                 sleep(0.2)
+                ai = AITask("Dev2/ai0, Dev2/ai1, Dev2/ai2, Dev2/ai3",
+                            terminal_config = Differential, min_val = -10.0, max_val = 10.0)
+                start!(ai)
                 data = read(ai)
-                # data is a Vector; index by channel-string order
+                stop!(ai); clear!(ai)   # AI is one-shot; AO tasks remain running
+
+                # data is a Vector ordered by channel string
                 hva1_mon = data[1]   # AI0 → HVA1 monitor
                 ao0_loop = data[2]   # AI1 → AO0 loopback
                 hva2_mon = data[3]   # AI2 → HVA2 monitor
                 ao1_loop = data[4]   # AI3 → AO1 loopback
-                stop!(ao0);  stop!(ao1);  stop!(ai)
-                clear!(ao0); clear!(ao1); clear!(ai)
-                last_ao0[] = nothing;  last_ao1[] = nothing;  last_ai[] = nothing
+
                 current_hva1_monitor[] = hva1_mon * 20.0
                 current_hva2_monitor[] = hva2_mon * 20.0
                 current_ao0_read[]     = ao0_loop
@@ -249,11 +251,10 @@ function beam_characterization(
                 hva1_monitor_label.text = "Mon HVA1: ERROR"
                 hva2_monitor_label.text = "Mon HVA2: ERROR"
                 try
-                    if ao0 !== nothing; stop!(ao0); clear!(ao0); end
-                    if ao1 !== nothing; stop!(ao1); clear!(ao1); end
+                    if ao0 !== nothing; stop!(ao0); clear!(ao0); last_ao0[] = nothing; end
+                    if ao1 !== nothing; stop!(ao1); clear!(ao1); last_ao1[] = nothing; end
                     if ai  !== nothing; stop!(ai);  clear!(ai);  end
                 catch; end
-                last_ao0[] = nothing;  last_ao1[] = nothing;  last_ai[] = nothing
             end
         end
     end
