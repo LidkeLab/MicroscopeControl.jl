@@ -49,6 +49,7 @@ struct Measurement
     fwhm_x::Float64
     fwhm_y::Float64
     ellipticity::Float64
+    frame::Matrix{Float64}
 end
 
 function load_all(dir)
@@ -70,7 +71,7 @@ function load_all(dir)
                 frame    = read(f["frame"])
                 position = Float64(HDF5.read_attribute(f, "position"))
                 fwhm_x, fwhm_y, ellip = fit_fwhm(frame)
-                m = Measurement(position, fwhm_x, fwhm_y, ellip)
+                m = Measurement(position, fwhm_x, fwhm_y, ellip, Float64.(frame))
                 push!(get!(groups, group, Measurement[]), m)
             end
             print(".")
@@ -130,16 +131,61 @@ function plot_analysis(groups)
         scatterlines!(ax_el, pos, els, color = c, marker = mk, label = label, markersize = 10)
     end
 
-    # add control to legend manually
-    if ctrl !== nothing
-        scatterlines!(ax_fx, Float64[], Float64[]; color = (:gray40, 0.7),
-                      linestyle = :dash, linewidth = 2, label = "Control (ref)")
+    # build legend manually so it works regardless of empty-array plots
+    legend_elems  = []
+    legend_labels = String[]
+    for (label, _) in sort(collect(groups); by = first)
+        label == "Control" && continue
+        c, mk = palette[label]
+        push!(legend_elems,  [MarkerElement(color = c, marker = mk, markersize = 10),
+                               LineElement(color = c, linewidth = 2)])
+        push!(legend_labels, label)
     end
-
-    Legend(fig[2, 3], ax_fx, "ODE Mode", framevisible = true)
+    if ctrl !== nothing && !isempty(ctrl)
+        push!(legend_elems,  LineElement(color = (:gray40, 0.7), linestyle = :dash, linewidth = 2))
+        push!(legend_labels, "Control (ref)")
+    end
+    !isempty(legend_elems) && Legend(fig[2, 3], legend_elems, legend_labels, "ODE Mode",
+                                     framevisible = true)
 
     display(fig)
     return fig
+end
+
+# ============================================================================
+# Video generation (one MP4 per EOD group)
+# ============================================================================
+
+function make_videos(groups, dir; framerate = 10)
+    eod_groups = filter(kv -> kv.first != "Control", collect(groups))
+
+    for (label, meas) in sort(eod_groups; by = first)
+        isempty(meas) && continue
+        tag     = replace(label, " " => "_")
+        outpath = joinpath(dir, "$(tag)_video.mp4")
+
+        # build a figure for rendering
+        fig = Figure(size = (600, 550))
+        ax  = Axis(fig[1, 1], aspect = DataAspect(),
+                   title = "$label — pos = $(round(meas[1].position, digits=3))")
+        hidedecorations!(ax)
+
+        frame_obs = Observable(meas[1].frame)
+        clim      = (0.0, maximum(maximum(m.frame) for m in meas))
+        heatmap!(ax, frame_obs; colormap = :grays, colorrange = clim)
+
+        pos_label = Label(fig[2, 1],
+                          "Position: $(round(meas[1].position, digits=3))";
+                          fontsize = 18)
+
+        println("Recording $outpath  ($(length(meas)) frames @ $(framerate) fps)")
+        record(fig, outpath, meas; framerate = framerate) do m
+            frame_obs[]        = m.frame
+            ax.title[]         = "$label — pos = $(round(m.position, digits=3))"
+            pos_label.text[]   = "Position: $(round(m.position, digits=3))"
+        end
+        println("  Saved: $outpath")
+    end
 end
 
 # ============================================================================
@@ -157,3 +203,7 @@ end
 
 
 fig = plot_analysis(groups)
+name_dir = joinpath(DATA_DIR, "beam_quality_plot.png")
+save(name_dir, fig)
+
+make_videos(groups, DATA_DIR)
