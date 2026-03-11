@@ -229,11 +229,11 @@ function beam_characterization(
                 write_scalar(ao1, v2_daq)
                 sleep(0.2)
                 data = read(ai)
-                # data is 1×4 Matrix (1 sample × 4 channels); index as data[1, channel]
-                hva1_mon = isa(data, Matrix) ? data[1, 1] : data[1]   # AI0 → HVA1 monitor
-                ao0_loop = isa(data, Matrix) ? data[1, 2] : data[2]   # AI1 → AO0 loopback
-                hva2_mon = isa(data, Matrix) ? data[1, 3] : data[3]   # AI2 → HVA2 monitor
-                ao1_loop = isa(data, Matrix) ? data[1, 4] : data[4]   # AI3 → AO1 loopback
+                # data is a Vector; index by channel-string order
+                hva1_mon = data[1]   # AI0 → HVA1 monitor
+                ao0_loop = data[2]   # AI1 → AO0 loopback
+                hva2_mon = data[3]   # AI2 → HVA2 monitor
+                ao1_loop = data[4]   # AI3 → AO1 loopback
                 stop!(ao0);  stop!(ao1);  stop!(ai)
                 clear!(ao0); clear!(ao1); clear!(ai)
                 last_ao0[] = nothing;  last_ao1[] = nothing;  last_ai[] = nothing
