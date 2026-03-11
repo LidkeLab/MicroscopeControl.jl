@@ -232,8 +232,6 @@ end
 
 function plot_beam_quality(groups, dir)
     ctrl = get(groups, "Control", AngleMeasurement[])
-    ref_x = isempty(ctrl) ? 0.0 : mean(m.center_x for m in ctrl)
-    ref_y = isempty(ctrl) ? 0.0 : mean(m.center_y for m in ctrl)
 
     # control reference quality (mean)
     ctrl_fx = isempty(ctrl) ? NaN : mean(m.fwhm_x      for m in ctrl)
@@ -246,57 +244,115 @@ function plot_beam_quality(groups, dir)
         meas = get(groups, gkey, AngleMeasurement[])
         isempty(meas) && continue
 
-        c       = get(palette, gkey, :black)
-        delta_x = [m.center_x - ref_x  for m in meas]
-        delta_y = [m.center_y - ref_y  for m in meas]
-        fxs     = [m.fwhm_x            for m in meas]
-        fys     = [m.fwhm_y            for m in meas]
-        els     = [m.ellipticity        for m in meas]
+        c      = get(palette, gkey, :black)
+        prefix = gkey == "ODE1" ? "HVA1" : "HVA2"
+        daq_fn = gkey == "ODE1" ? (m -> m.hva1_daq)     : (m -> m.hva2_daq)
+        mon_fn = gkey == "ODE1" ? (m -> -m.hva1_monitor) : (m -> -m.hva2_monitor)
 
-        fig = Figure(size = (1100, 700))
-        Label(fig[0, 1:3], "$gkey — Beam Quality vs Center Displacement";
+        cx_raw  = [m.center_x for m in meas]
+        cy_raw  = [m.center_y for m in meas]
+        fxs     = [m.fwhm_x   for m in meas]
+        fys     = [m.fwhm_y   for m in meas]
+        els     = [m.ellipticity for m in meas]
+        daq_v   = daq_fn.(meas)
+        mon_v   = mon_fn.(meas)
+
+        ctrl_daq_v = isempty(ctrl) ? NaN : mean(daq_fn(m) for m in ctrl)
+        ctrl_mon_v = isempty(ctrl) ? NaN : mean(mon_fn(m) for m in ctrl)
+        ctrl_cx    = isempty(ctrl) ? NaN : mean(m.center_x for m in ctrl)
+        ctrl_cy    = isempty(ctrl) ? NaN : mean(m.center_y for m in ctrl)
+
+        # ── Figure 1: beam quality vs center position ──────────────────────
+        fig1 = Figure(size = (1100, 700))
+        Label(fig1[0, 1:3], "$gkey — Beam Quality vs Center Position";
               fontsize = 16, font = :bold, tellwidth = false)
 
-        # ── row 1: vs ΔCenter X ───────────────────────────────────────────
-        ax_x1 = Axis(fig[1, 1], title = "FWHM X vs ΔCenter X",
-                     xlabel = "ΔCenter X (px)", ylabel = "FWHM X (px)")
-        ax_x2 = Axis(fig[1, 2], title = "FWHM Y vs ΔCenter X",
-                     xlabel = "ΔCenter X (px)", ylabel = "FWHM Y (px)")
-        ax_x3 = Axis(fig[1, 3], title = "Ellipticity vs ΔCenter X",
-                     xlabel = "ΔCenter X (px)", ylabel = "Ellipticity")
+        ax_x1 = Axis(fig1[1, 1], title = "FWHM X vs Center X",
+                     xlabel = "Center X (px)", ylabel = "FWHM X (px)")
+        ax_x2 = Axis(fig1[1, 2], title = "FWHM Y vs Center X",
+                     xlabel = "Center X (px)", ylabel = "FWHM Y (px)")
+        ax_x3 = Axis(fig1[1, 3], title = "Ellipticity vs Center X",
+                     xlabel = "Center X (px)", ylabel = "Ellipticity")
+        ax_y1 = Axis(fig1[2, 1], title = "FWHM X vs Center Y",
+                     xlabel = "Center Y (px)", ylabel = "FWHM X (px)")
+        ax_y2 = Axis(fig1[2, 2], title = "FWHM Y vs Center Y",
+                     xlabel = "Center Y (px)", ylabel = "FWHM Y (px)")
+        ax_y3 = Axis(fig1[2, 3], title = "Ellipticity vs Center Y",
+                     xlabel = "Center Y (px)", ylabel = "Ellipticity")
 
-        scatterlines!(ax_x1, delta_x, fxs; color = c, marker = :circle, markersize = 10)
-        scatterlines!(ax_x2, delta_x, fys; color = c, marker = :circle, markersize = 10)
-        scatterlines!(ax_x3, delta_x, els; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_x1, cx_raw, fxs; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_x2, cx_raw, fys; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_x3, cx_raw, els; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_y1, cy_raw, fxs; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_y2, cy_raw, fys; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_y3, cy_raw, els; color = c, marker = :circle, markersize = 10)
 
-        # ── row 2: vs ΔCenter Y ───────────────────────────────────────────
-        ax_y1 = Axis(fig[2, 1], title = "FWHM X vs ΔCenter Y",
-                     xlabel = "ΔCenter Y (px)", ylabel = "FWHM X (px)")
-        ax_y2 = Axis(fig[2, 2], title = "FWHM Y vs ΔCenter Y",
-                     xlabel = "ΔCenter Y (px)", ylabel = "FWHM Y (px)")
-        ax_y3 = Axis(fig[2, 3], title = "Ellipticity vs ΔCenter Y",
-                     xlabel = "ΔCenter Y (px)", ylabel = "Ellipticity")
-
-        scatterlines!(ax_y1, delta_y, fxs; color = c, marker = :circle, markersize = 10)
-        scatterlines!(ax_y2, delta_y, fys; color = c, marker = :circle, markersize = 10)
-        scatterlines!(ax_y3, delta_y, els; color = c, marker = :circle, markersize = 10)
-
-        # control reference lines
         if !isnan(ctrl_fx)
             for ax in (ax_x1, ax_y1); hlines!(ax, [ctrl_fx]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
             for ax in (ax_x2, ax_y2); hlines!(ax, [ctrl_fy]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
             for ax in (ax_x3, ax_y3); hlines!(ax, [ctrl_el]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
-            # control Δ position (should be ~0,0)
-            for (ax, yv) in ((ax_x1, ctrl_fx), (ax_x2, ctrl_fy), (ax_x3, ctrl_el),
-                             (ax_y1, ctrl_fx), (ax_y2, ctrl_fy), (ax_y3, ctrl_el))
-                scatter!(ax, [0.0], [yv]; color = :gray30, marker = :diamond, markersize = 14)
+            if !isnan(ctrl_cx)
+                for (ax, yv) in ((ax_x1, ctrl_fx), (ax_x2, ctrl_fy), (ax_x3, ctrl_el))
+                    scatter!(ax, [ctrl_cx], [yv]; color = :gray30, marker = :diamond, markersize = 14)
+                end
+            end
+            if !isnan(ctrl_cy)
+                for (ax, yv) in ((ax_y1, ctrl_fx), (ax_y2, ctrl_fy), (ax_y3, ctrl_el))
+                    scatter!(ax, [ctrl_cy], [yv]; color = :gray30, marker = :diamond, markersize = 14)
+                end
             end
         end
 
-        display(fig)
-        outpath = joinpath(dir, "$(gkey)_beam_quality.png")
-        save(outpath, fig)
-        println("Saved: $outpath")
+        display(fig1)
+        out1 = joinpath(dir, "$(gkey)_beam_quality.png")
+        save(out1, fig1)
+        println("Saved: $out1")
+
+        # ── Figure 2: beam quality vs applied voltage ──────────────────────
+        fig2 = Figure(size = (1100, 700))
+        Label(fig2[0, 1:3], "$gkey — Beam Quality vs $prefix Voltage";
+              fontsize = 16, font = :bold, tellwidth = false)
+
+        ax_d1 = Axis(fig2[1, 1], title = "FWHM X vs $prefix DAQ",
+                     xlabel = "$prefix DAQ Output (V)", ylabel = "FWHM X (px)")
+        ax_d2 = Axis(fig2[1, 2], title = "FWHM Y vs $prefix DAQ",
+                     xlabel = "$prefix DAQ Output (V)", ylabel = "FWHM Y (px)")
+        ax_d3 = Axis(fig2[1, 3], title = "Ellipticity vs $prefix DAQ",
+                     xlabel = "$prefix DAQ Output (V)", ylabel = "Ellipticity")
+        ax_m1 = Axis(fig2[2, 1], title = "FWHM X vs $prefix Monitor",
+                     xlabel = "$prefix Monitor (V)", ylabel = "FWHM X (px)")
+        ax_m2 = Axis(fig2[2, 2], title = "FWHM Y vs $prefix Monitor",
+                     xlabel = "$prefix Monitor (V)", ylabel = "FWHM Y (px)")
+        ax_m3 = Axis(fig2[2, 3], title = "Ellipticity vs $prefix Monitor",
+                     xlabel = "$prefix Monitor (V)", ylabel = "Ellipticity")
+
+        scatterlines!(ax_d1, daq_v, fxs; color = :steelblue, marker = :circle, markersize = 10)
+        scatterlines!(ax_d2, daq_v, fys; color = :steelblue, marker = :circle, markersize = 10)
+        scatterlines!(ax_d3, daq_v, els; color = :steelblue, marker = :circle, markersize = 10)
+        scatterlines!(ax_m1, mon_v, fxs; color = :tomato,    marker = :circle, markersize = 10)
+        scatterlines!(ax_m2, mon_v, fys; color = :tomato,    marker = :circle, markersize = 10)
+        scatterlines!(ax_m3, mon_v, els; color = :tomato,    marker = :circle, markersize = 10)
+
+        if !isnan(ctrl_fx)
+            for ax in (ax_d1, ax_m1); hlines!(ax, [ctrl_fx]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
+            for ax in (ax_d2, ax_m2); hlines!(ax, [ctrl_fy]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
+            for ax in (ax_d3, ax_m3); hlines!(ax, [ctrl_el]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
+            if !isnan(ctrl_daq_v)
+                for (ax, yv) in ((ax_d1, ctrl_fx), (ax_d2, ctrl_fy), (ax_d3, ctrl_el))
+                    scatter!(ax, [ctrl_daq_v], [yv]; color = :gray30, marker = :diamond, markersize = 14)
+                end
+            end
+            if !isnan(ctrl_mon_v)
+                for (ax, yv) in ((ax_m1, ctrl_fx), (ax_m2, ctrl_fy), (ax_m3, ctrl_el))
+                    scatter!(ax, [ctrl_mon_v], [yv]; color = :gray30, marker = :diamond, markersize = 14)
+                end
+            end
+        end
+
+        display(fig2)
+        out2 = joinpath(dir, "$(gkey)_beam_quality_voltage.png")
+        save(out2, fig2)
+        println("Saved: $out2")
     end
 end
 
