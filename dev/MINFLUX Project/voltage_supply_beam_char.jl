@@ -211,26 +211,26 @@ function beam_characterization(
     # Tasks are already running (session-level); just write new values and read back.
     on(apply_voltage_button.clicks) do _
         !daq_ok && return
-        v1 = tryparse(Float64, hva1_textbox.stored_string[])
-        v2 = tryparse(Float64, hva2_textbox.stored_string[])
-        v1_daq = (isnothing(v1) ? 0.0 : v1) / 20.0   # HVA output → DAQ input
-        v2_daq = (isnothing(v2) ? 0.0 : v2) / 20.0
+        v1_daq = tryparse(Float64, hva1_textbox.displayed_string[])   # displayed_string updates as user types
+        v2_daq = tryparse(Float64, hva2_textbox.displayed_string[])
+        v1_daq = isnothing(v1_daq) ? 0.0 : v1_daq   # raw DAQ voltage (V), sent directly
+        v2_daq = isnothing(v2_daq) ? 0.0 : v2_daq
         @async begin
             try
                 write_scalar(dao0, v1_daq)
                 write_scalar(dao1, v2_daq)
                 sleep(0.2)   # wait for HVA to settle
                 data = read(dai)
-                hva1_mon = data[1]   # AI0 → HVA1 monitor
-                ao0_loop = data[2]   # AI1 → AO0 loopback
-                hva2_mon = data[3]   # AI2 → HVA2 monitor
-                ao1_loop = data[4]   # AI3 → AO1 loopback
-                current_hva1_monitor[] = hva1_mon * 20.0
-                current_hva2_monitor[] = hva2_mon * 20.0
+                hva1_mon = data[1]   # AI0 → HVA1 monitor (= DAQ out / 20 ≈ v1_daq)
+                ao0_loop = data[2]   # AI1 → AO0 loopback (= actual DAQ output)
+                hva2_mon = data[3]   # AI2 → HVA2 monitor (= DAQ out / 20 ≈ v2_daq)
+                ao1_loop = data[4]   # AI3 → AO1 loopback (= actual DAQ output)
+                current_hva1_monitor[] = hva1_mon
+                current_hva2_monitor[] = hva2_mon
                 current_ao0_read[]     = ao0_loop
                 current_ao1_read[]     = ao1_loop
-                hva1_monitor_label.text = "HVA1: $(round(hva1_mon * 20.0, digits=2)) V  DAQ: $(round(ao0_loop, digits=3)) V"
-                hva2_monitor_label.text = "HVA2: $(round(hva2_mon * 20.0, digits=2)) V  DAQ: $(round(ao1_loop, digits=3)) V"
+                hva1_monitor_label.text = "Mon HVA1: $(round(hva1_mon, digits=3)) V  Loop: $(round(ao0_loop, digits=3)) V"
+                hva2_monitor_label.text = "Mon HVA2: $(round(hva2_mon, digits=3)) V  Loop: $(round(ao1_loop, digits=3)) V"
             catch e
                 @error "HVA200 voltage apply failed"
                 showerror(stdout, e, catch_backtrace())
@@ -271,10 +271,10 @@ function beam_characterization(
         position_val = isnothing(position_val) ? 0.0 : position_val
 
         # HVA200 values at save time
-        hva1_voltage_val = Float64(current_hva1_monitor[])   # AI0 × 20: HVA1 real output (V)
-        hva2_voltage_val = Float64(current_hva2_monitor[])   # AI2 × 20: HVA2 real output (V)
-        hva1_daq_val     = Float64(current_ao0_read[])       # AI1: raw DAQ output to HVA1 (V)
-        hva2_daq_val     = Float64(current_ao1_read[])       # AI3: raw DAQ output to HVA2 (V)
+        hva1_monitor_val = Float64(current_hva1_monitor[])   # AI0: HVA1 monitor reading (V)
+        hva2_monitor_val = Float64(current_hva2_monitor[])   # AI2: HVA2 monitor reading (V)
+        hva1_daq_val     = Float64(current_ao0_read[])       # AI1: AO0 loopback (V)
+        hva2_daq_val     = Float64(current_ao1_read[])       # AI3: AO1 loopback (V)
 
         # beam quality metrics
         ext_ratio_val  = 0.0
@@ -316,10 +316,10 @@ function beam_characterization(
                     attrs(h5file)["timestamp"]         = timestamp
                     attrs(h5file)["position"]          = position_val
                     # HVA200 voltages: monitor (real ×20) and raw DAQ loopback
-                    attrs(h5file)["hva1_voltage"]    = hva1_voltage_val  # HVA1 output (V)
-                    attrs(h5file)["hva2_voltage"]    = hva2_voltage_val  # HVA2 output (V)
-                    attrs(h5file)["hva1_daq_output"] = hva1_daq_val      # DAQ raw → HVA1 (V)
-                    attrs(h5file)["hva2_daq_output"] = hva2_daq_val      # DAQ raw → HVA2 (V)
+                    attrs(h5file)["hva1_monitor"]    = hva1_monitor_val  # AI0 monitor (V)
+                    attrs(h5file)["hva2_monitor"]    = hva2_monitor_val  # AI2 monitor (V)
+                    attrs(h5file)["hva1_daq_output"] = hva1_daq_val      # AI1 loopback (V)
+                    attrs(h5file)["hva2_daq_output"] = hva2_daq_val      # AI3 loopback (V)
                     # beam quality
                     if beam_type[] == :donut
                         attrs(h5file)["extinction_ratio"] = ext_ratio_val
