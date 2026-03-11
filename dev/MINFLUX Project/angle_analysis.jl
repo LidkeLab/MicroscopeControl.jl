@@ -376,38 +376,62 @@ function plot_distance_vs_voltage(groups, dir)
         daq_fn = gkey == "ODE1" ? (m -> m.hva1_daq)      : (m -> m.hva2_daq)
         mon_fn = gkey == "ODE1" ? (m -> -m.hva1_monitor)  : (m -> -m.hva2_monitor)
 
-        dist   = [sqrt((m.center_x - ref_x)^2 + (m.center_y - ref_y)^2) for m in meas]
+        dist_abs = [sqrt(m.center_x^2 + m.center_y^2)                      for m in meas]
+        dist_del = [sqrt((m.center_x - ref_x)^2 + (m.center_y - ref_y)^2) for m in meas]
         daq_v  = daq_fn.(meas)
         mon_v  = mon_fn.(meas)
 
-        ctrl_daq_v = isempty(ctrl) ? NaN : mean(daq_fn(m) for m in ctrl)
-        ctrl_mon_v = isempty(ctrl) ? NaN : mean(mon_fn(m) for m in ctrl)
+        ctrl_daq_v  = isempty(ctrl) ? NaN : mean(daq_fn(m) for m in ctrl)
+        ctrl_mon_v  = isempty(ctrl) ? NaN : mean(mon_fn(m) for m in ctrl)
+        ctrl_d_abs  = isempty(ctrl) ? NaN : mean(sqrt(m.center_x^2 + m.center_y^2) for m in ctrl)
 
-        fig = Figure(size = (900, 450))
-        Label(fig[0, 1:2], "$gkey — Beam Displacement Distance vs $prefix Voltage";
+        # ── Figure: absolute distance ──────────────────────────────────────
+        fig_abs = Figure(size = (900, 450))
+        Label(fig_abs[0, 1:2], "$gkey — Absolute Distance vs $prefix Voltage";
               fontsize = 16, font = :bold, tellwidth = false)
 
-        ax_d = Axis(fig[1, 1], title = "Distance vs $prefix DAQ Output",
-                    xlabel = "$prefix DAQ Output (V)",
-                    ylabel = "Distance √(ΔX² + ΔY²) (px)")
-        ax_m = Axis(fig[1, 2], title = "Distance vs $prefix Monitor",
-                    xlabel = "$prefix Monitor (V)",
-                    ylabel = "Distance √(ΔX² + ΔY²) (px)")
+        ax_da = Axis(fig_abs[1, 1], title = "Abs Distance vs $prefix DAQ Output",
+                     xlabel = "$prefix DAQ Output (V)",
+                     ylabel = "Distance √(X² + Y²) (px)")
+        ax_ma = Axis(fig_abs[1, 2], title = "Abs Distance vs $prefix Monitor",
+                     xlabel = "$prefix Monitor (V)",
+                     ylabel = "Distance √(X² + Y²) (px)")
 
-        scatterlines!(ax_d, daq_v, dist; color = c, marker = mk, markersize = 10)
-        scatterlines!(ax_m, mon_v, dist; color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_da, daq_v, dist_abs; color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_ma, mon_v, dist_abs; color = c, marker = mk, markersize = 10)
 
-        if !isnan(ctrl_daq_v)
-            scatter!(ax_d, [ctrl_daq_v], [0.0]; color = :gray30, marker = :diamond, markersize = 14)
-        end
-        if !isnan(ctrl_mon_v)
-            scatter!(ax_m, [ctrl_mon_v], [0.0]; color = :gray30, marker = :diamond, markersize = 14)
+        if !isnan(ctrl_d_abs)
+            if !isnan(ctrl_daq_v); scatter!(ax_da, [ctrl_daq_v], [ctrl_d_abs]; color = :gray30, marker = :diamond, markersize = 14); end
+            if !isnan(ctrl_mon_v); scatter!(ax_ma, [ctrl_mon_v], [ctrl_d_abs]; color = :gray30, marker = :diamond, markersize = 14); end
         end
 
-        display(fig)
-        outpath = joinpath(dir, "$(gkey)_distance_vs_voltage.png")
-        save(outpath, fig)
-        println("Saved: $outpath")
+        display(fig_abs)
+        out_abs = joinpath(dir, "$(gkey)_distance_absolute.png")
+        save(out_abs, fig_abs)
+        println("Saved: $out_abs")
+
+        # ── Figure: delta distance (from control center) ───────────────────
+        fig_del = Figure(size = (900, 450))
+        Label(fig_del[0, 1:2], "$gkey — ΔDistance vs $prefix Voltage (ref = control)";
+              fontsize = 16, font = :bold, tellwidth = false)
+
+        ax_dd = Axis(fig_del[1, 1], title = "ΔDistance vs $prefix DAQ Output",
+                     xlabel = "$prefix DAQ Output (V)",
+                     ylabel = "Distance √(ΔX² + ΔY²) (px)")
+        ax_md = Axis(fig_del[1, 2], title = "ΔDistance vs $prefix Monitor",
+                     xlabel = "$prefix Monitor (V)",
+                     ylabel = "Distance √(ΔX² + ΔY²) (px)")
+
+        scatterlines!(ax_dd, daq_v, dist_del; color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_md, mon_v, dist_del; color = c, marker = mk, markersize = 10)
+
+        if !isnan(ctrl_daq_v); scatter!(ax_dd, [ctrl_daq_v], [0.0]; color = :gray30, marker = :diamond, markersize = 14); end
+        if !isnan(ctrl_mon_v); scatter!(ax_md, [ctrl_mon_v], [0.0]; color = :gray30, marker = :diamond, markersize = 14); end
+
+        display(fig_del)
+        out_del = joinpath(dir, "$(gkey)_distance_delta.png")
+        save(out_del, fig_del)
+        println("Saved: $out_del")
     end
 end
 
