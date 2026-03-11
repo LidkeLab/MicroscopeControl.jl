@@ -18,6 +18,29 @@ struct AngleMeasurement
     hva2_monitor::Float64
     center_x::Float64
     center_y::Float64
+    fwhm_x::Float64
+    fwhm_y::Float64
+    ellipticity::Float64
+end
+
+# ── FWHM helpers (profile-based) ─────────────────────────────────────────────
+function _background(frame; frac = 0.05)
+    thresh = quantile(vec(frame), frac)
+    return mean(filter(<=(thresh), vec(frame)))
+end
+
+function _fit_fwhm(frame)
+    idx = argmax(frame)
+    cx, cy = idx[1], idx[2]
+    bg = _background(frame)
+    xprof = max.(frame[:, cy] .- bg, 0.0)
+    x_above = findall(>=(maximum(xprof) / 2), xprof)
+    fwhm_x = length(x_above) >= 2 ? Float64(x_above[end] - x_above[1]) : 0.0
+    yprof = max.(frame[cx, :] .- bg, 0.0)
+    y_above = findall(>=(maximum(yprof) / 2), yprof)
+    fwhm_y = length(y_above) >= 2 ? Float64(y_above[end] - y_above[1]) : 0.0
+    ellip  = max(fwhm_x, fwhm_y) / max(min(fwhm_x, fwhm_y), 1.0)
+    return fwhm_x, fwhm_y, ellip
 end
 
 function read_attr(f, key, default = 0.0)
@@ -56,12 +79,13 @@ function load_angle_data(dir)
                     cx, cy = Float64(idx[1]), Float64(idx[2])
                 end
 
+                fwhm_x, fwhm_y, ellip = _fit_fwhm(Float64.(frame))
                 m = AngleMeasurement(
                     read_attr(f, "hva1_daq_output"),
                     read_attr(f, "hva1_monitor"),
                     read_attr(f, "hva2_daq_output"),
                     read_attr(f, "hva2_monitor"),
-                    cx, cy
+                    cx, cy, fwhm_x, fwhm_y, ellip
                 )
                 push!(get!(groups, group, AngleMeasurement[]), m)
             end
@@ -203,6 +227,80 @@ function plot_angle(groups, dir)
 end
 
 # ============================================================================
+# Beam quality vs center displacement
+# ============================================================================
+
+function plot_beam_quality(groups, dir)
+    ctrl = get(groups, "Control", AngleMeasurement[])
+    ref_x = isempty(ctrl) ? 0.0 : mean(m.center_x for m in ctrl)
+    ref_y = isempty(ctrl) ? 0.0 : mean(m.center_y for m in ctrl)
+
+    # control reference quality (mean)
+    ctrl_fx = isempty(ctrl) ? NaN : mean(m.fwhm_x      for m in ctrl)
+    ctrl_fy = isempty(ctrl) ? NaN : mean(m.fwhm_y      for m in ctrl)
+    ctrl_el = isempty(ctrl) ? NaN : mean(m.ellipticity  for m in ctrl)
+
+    palette = Dict("ODE1" => :steelblue, "ODE2" => :tomato)
+
+    for gkey in ("ODE1", "ODE2")
+        meas = get(groups, gkey, AngleMeasurement[])
+        isempty(meas) && continue
+
+        c       = get(palette, gkey, :black)
+        delta_x = [m.center_x - ref_x  for m in meas]
+        delta_y = [m.center_y - ref_y  for m in meas]
+        fxs     = [m.fwhm_x            for m in meas]
+        fys     = [m.fwhm_y            for m in meas]
+        els     = [m.ellipticity        for m in meas]
+
+        fig = Figure(size = (1100, 700))
+        Label(fig[0, 1:3], "$gkey — Beam Quality vs Center Displacement";
+              fontsize = 16, font = :bold, tellwidth = false)
+
+        # ── row 1: vs ΔCenter X ───────────────────────────────────────────
+        ax_x1 = Axis(fig[1, 1], title = "FWHM X vs ΔCenter X",
+                     xlabel = "ΔCenter X (px)", ylabel = "FWHM X (px)")
+        ax_x2 = Axis(fig[1, 2], title = "FWHM Y vs ΔCenter X",
+                     xlabel = "ΔCenter X (px)", ylabel = "FWHM Y (px)")
+        ax_x3 = Axis(fig[1, 3], title = "Ellipticity vs ΔCenter X",
+                     xlabel = "ΔCenter X (px)", ylabel = "Ellipticity")
+
+        scatterlines!(ax_x1, delta_x, fxs; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_x2, delta_x, fys; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_x3, delta_x, els; color = c, marker = :circle, markersize = 10)
+
+        # ── row 2: vs ΔCenter Y ───────────────────────────────────────────
+        ax_y1 = Axis(fig[2, 1], title = "FWHM X vs ΔCenter Y",
+                     xlabel = "ΔCenter Y (px)", ylabel = "FWHM X (px)")
+        ax_y2 = Axis(fig[2, 2], title = "FWHM Y vs ΔCenter Y",
+                     xlabel = "ΔCenter Y (px)", ylabel = "FWHM Y (px)")
+        ax_y3 = Axis(fig[2, 3], title = "Ellipticity vs ΔCenter Y",
+                     xlabel = "ΔCenter Y (px)", ylabel = "Ellipticity")
+
+        scatterlines!(ax_y1, delta_y, fxs; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_y2, delta_y, fys; color = c, marker = :circle, markersize = 10)
+        scatterlines!(ax_y3, delta_y, els; color = c, marker = :circle, markersize = 10)
+
+        # control reference lines
+        if !isnan(ctrl_fx)
+            for ax in (ax_x1, ax_y1); hlines!(ax, [ctrl_fx]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
+            for ax in (ax_x2, ax_y2); hlines!(ax, [ctrl_fy]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
+            for ax in (ax_x3, ax_y3); hlines!(ax, [ctrl_el]; color = (:gray30, 0.8), linestyle = :dash, linewidth = 2); end
+            # control Δ position (should be ~0,0)
+            for (ax, yv) in ((ax_x1, ctrl_fx), (ax_x2, ctrl_fy), (ax_x3, ctrl_el),
+                             (ax_y1, ctrl_fx), (ax_y2, ctrl_fy), (ax_y3, ctrl_el))
+                scatter!(ax, [0.0], [yv]; color = :gray30, marker = :diamond, markersize = 14)
+            end
+        end
+
+        display(fig)
+        outpath = joinpath(dir, "$(gkey)_beam_quality.png")
+        save(outpath, fig)
+        println("Saved: $outpath")
+    end
+end
+
+# ============================================================================
 # Run
 # ============================================================================
 
@@ -221,3 +319,4 @@ for (g, v) in sort(collect(groups); by = first)
 end
 
 plot_angle(groups, DATA_DIR)
+plot_beam_quality(groups, DATA_DIR)
