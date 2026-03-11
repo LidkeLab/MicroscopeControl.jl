@@ -82,11 +82,11 @@ end
 # Plot helpers
 # ============================================================================
 
-function add_control_point!(ax, ctrl_meas, volt_fn, center_fn)
+function add_control_point!(ax, ctrl_meas, volt_fn)
     isempty(ctrl_meas) && return
-    cv = mean(volt_fn(m)   for m in ctrl_meas)
-    cc = mean(center_fn(m) for m in ctrl_meas)
-    scatter!(ax, [cv], [cc];
+    cv = mean(volt_fn(m) for m in ctrl_meas)
+    # delta is always 0 at control (reference subtracted)
+    scatter!(ax, [cv], [0.0];
              color = :gray30, marker = :diamond, markersize = 16,
              label = "Control")
 end
@@ -98,8 +98,11 @@ end
 function plot_angle(groups, dir)
     ctrl = get(groups, "Control", AngleMeasurement[])
 
+    # reference center from control (delta = value - ref)
+    ref_x = isempty(ctrl) ? 0.0 : mean(m.center_x for m in ctrl)
+    ref_y = isempty(ctrl) ? 0.0 : mean(m.center_y for m in ctrl)
+
     configs = [
-        # (group_key, daq_field, monitor_field, x_label_prefix)
         ("ODE1", m -> m.hva1_daq, m -> m.hva1_monitor, "HVA1"),
         ("ODE2", m -> m.hva2_daq, m -> m.hva2_monitor, "HVA2"),
     ]
@@ -108,52 +111,55 @@ function plot_angle(groups, dir)
         meas = get(groups, gkey, AngleMeasurement[])
         isempty(meas) && (@warn "No data for $gkey"; continue)
 
+        delta_x = [m.center_x - ref_x for m in meas]
+        delta_y = [m.center_y - ref_y for m in meas]
+
         fig = Figure(size = (900, 750))
 
-        Label(fig[0, 1:2], "$gkey — Beam Center vs $prefix Voltage";
+        Label(fig[0, 1:2], "$gkey — Beam Center Displacement vs $prefix Voltage";
               fontsize = 16, font = :bold, tellwidth = false)
 
         # ── row 1: DAQ output ──────────────────────────────────────────────
         ax_dx = Axis(fig[1, 1],
-                     title  = "$prefix DAQ Output vs Center X",
+                     title  = "$prefix DAQ Output vs ΔCenter X",
                      xlabel = "$prefix DAQ Output (V)",
-                     ylabel = "Center X (px)")
+                     ylabel = "ΔCenter X (px)")
         ax_dy = Axis(fig[1, 2],
-                     title  = "$prefix DAQ Output vs Center Y",
+                     title  = "$prefix DAQ Output vs ΔCenter Y",
                      xlabel = "$prefix DAQ Output (V)",
-                     ylabel = "Center Y (px)")
+                     ylabel = "ΔCenter Y (px)")
 
         daq_v = daq_fn.(meas)
-        scatterlines!(ax_dx, daq_v, [m.center_x for m in meas];
+        scatterlines!(ax_dx, daq_v, delta_x;
                       color = :steelblue, marker = :circle, markersize = 10,
                       label = gkey)
-        scatterlines!(ax_dy, daq_v, [m.center_y for m in meas];
+        scatterlines!(ax_dy, daq_v, delta_y;
                       color = :steelblue, marker = :circle, markersize = 10,
                       label = gkey)
 
-        add_control_point!(ax_dx, ctrl, daq_fn, m -> m.center_x)
-        add_control_point!(ax_dy, ctrl, daq_fn, m -> m.center_y)
+        add_control_point!(ax_dx, ctrl, daq_fn)
+        add_control_point!(ax_dy, ctrl, daq_fn)
 
         # ── row 2: Monitor ────────────────────────────────────────────────
         ax_mx = Axis(fig[2, 1],
-                     title  = "$prefix Monitor vs Center X",
+                     title  = "$prefix Monitor vs ΔCenter X",
                      xlabel = "$prefix Monitor (V)",
-                     ylabel = "Center X (px)")
+                     ylabel = "ΔCenter X (px)")
         ax_my = Axis(fig[2, 2],
-                     title  = "$prefix Monitor vs Center Y",
+                     title  = "$prefix Monitor vs ΔCenter Y",
                      xlabel = "$prefix Monitor (V)",
-                     ylabel = "Center Y (px)")
+                     ylabel = "ΔCenter Y (px)")
 
         mon_v = mon_fn.(meas)
-        scatterlines!(ax_mx, mon_v, [m.center_x for m in meas];
+        scatterlines!(ax_mx, mon_v, delta_x;
                       color = :tomato, marker = :circle, markersize = 10,
                       label = gkey)
-        scatterlines!(ax_my, mon_v, [m.center_y for m in meas];
+        scatterlines!(ax_my, mon_v, delta_y;
                       color = :tomato, marker = :circle, markersize = 10,
                       label = gkey)
 
-        add_control_point!(ax_mx, ctrl, mon_fn, m -> m.center_x)
-        add_control_point!(ax_my, ctrl, mon_fn, m -> m.center_y)
+        add_control_point!(ax_mx, ctrl, mon_fn)
+        add_control_point!(ax_my, ctrl, mon_fn)
 
         # ── legend ────────────────────────────────────────────────────────
         legend_elems = [
