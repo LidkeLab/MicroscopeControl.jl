@@ -128,6 +128,8 @@ function beam_characterization(
     apply_voltage_button = Button(toggle_box[9, 1:4], label = "Apply Voltage")
     hva1_monitor_label   = Label(toggle_box[10, 1:2], "Mon HVA1: -- V")
     hva2_monitor_label   = Label(toggle_box[10, 3:4], "Mon HVA2: -- V")
+    hva1_loop_label      = Label(toggle_box[11, 1:2], "Loop HVA1: -- V")
+    hva2_loop_label      = Label(toggle_box[11, 3:4], "Loop HVA2: -- V")
 
     # Observables tracking the last applied/read HVA values
     current_hva1_setpoint = Observable(0.0)   # voltage applied by user (DAQ V)
@@ -233,8 +235,10 @@ function beam_characterization(
                 current_hva2_monitor[] = hva2_mon
                 current_ao0_read[]     = ao0_loop
                 current_ao1_read[]     = ao1_loop
-                hva1_monitor_label.text = "Mon HVA1: $(round(hva1_mon, digits=3)) V  Loop: $(round(ao0_loop, digits=3)) V"
-                hva2_monitor_label.text = "Mon HVA2: $(round(hva2_mon, digits=3)) V  Loop: $(round(ao1_loop, digits=3)) V"
+                hva1_monitor_label.text = "Mon HVA1: $(round(hva1_mon, digits=3)) V"
+                hva2_monitor_label.text = "Mon HVA2: $(round(hva2_mon, digits=3)) V"
+                hva1_loop_label.text    = "Loop HVA1: $(round(ao0_loop, digits=3)) V"
+                hva2_loop_label.text    = "Loop HVA2: $(round(ao1_loop, digits=3)) V"
             catch e
                 @error "HVA200 voltage apply failed"
                 showerror(stdout, e, catch_backtrace())
