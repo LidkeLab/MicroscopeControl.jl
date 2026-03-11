@@ -5,7 +5,7 @@
 
 using HDF5, GLMakie, Statistics
 
-const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/angle"
+const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/angle/mar_11"
 
 # ============================================================================
 # Data loading
@@ -27,14 +27,21 @@ end
 function load_angle_data(dir)
     groups = Dict{String, Vector{AngleMeasurement}}()
 
-    for fname in sort(filter(f -> endswith(f, ".h5"), readdir(dir)))
-        group = if startswith(fname, "ODE1") || startswith(fname, "ODE_1")
+    h5files = sort(filter(f -> endswith(f, ".h5"), readdir(dir)))
+    println("  Found $(length(h5files)) HDF5 files:")
+    for f in h5files; println("    $f"); end
+    println()
+
+    for fname in h5files
+        # must check eod1/eod2 BEFORE plain "control"
+        group = if occursin("eod1", lowercase(fname))
             "ODE1"
-        elseif startswith(fname, "ODE2") || startswith(fname, "ODE_2")
+        elseif occursin("eod2", lowercase(fname))
             "ODE2"
-        elseif startswith(fname, "control") || startswith(fname, "Control")
+        elseif startswith(lowercase(fname), "control")
             "Control"
         else
+            @warn "Unmatched file (check naming): $fname"
             continue
         end
 
@@ -65,8 +72,8 @@ function load_angle_data(dir)
     end
     println()
 
-    for v in values(groups)
-        sort!(v, by = m -> (m.hva1_daq, m.hva2_daq))
+    for (gkey, v) in groups
+        sort!(v, by = gkey == "ODE2" ? (m -> m.hva2_daq) : (m -> m.hva1_daq))
     end
     return groups
 end
