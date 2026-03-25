@@ -75,10 +75,14 @@ function plot_eod(points, eod_name)
                                [p.hva2_monitor for p in points]
     c        = hva_num == 1 ? :steelblue : :tomato
 
-    fig = Figure(size = (950, 450))
+    cx = [p.center_x for p in points]
+    cy = [p.center_y for p in points]
+
+    fig = Figure(size = (950, 800))
     Label(fig[0, 1:2], "$eod_name — $hva_name Voltage vs Beam Position";
           fontsize = 16, font = :bold, tellwidth = false)
 
+    # ── row 1: vs total position ──────────────────────────────────────────
     ax1 = Axis(fig[1, 1], title = "$hva_name DAQ Output vs Position",
                xlabel = "$hva_name DAQ Output (V)",
                ylabel = "Position √(cx² + cy²) (px)")
@@ -88,6 +92,15 @@ function plot_eod(points, eod_name)
 
     scatterlines!(ax1, daq_v, pos; color = c, marker = :circle, markersize = 6)
     scatterlines!(ax2, mon_v, pos; color = c, marker = :circle, markersize = 6)
+
+    # ── row 2: center x and center y vs monitor ───────────────────────────
+    ax3 = Axis(fig[2, 1], title = "$hva_name Monitor vs Center X",
+               xlabel = "$hva_name Monitor (V)", ylabel = "Center X (px)")
+    ax4 = Axis(fig[2, 2], title = "$hva_name Monitor vs Center Y",
+               xlabel = "$hva_name Monitor (V)", ylabel = "Center Y (px)")
+
+    scatterlines!(ax3, mon_v, cx; color = c, marker = :circle, markersize = 6)
+    scatterlines!(ax4, mon_v, cy; color = c, marker = :circle, markersize = 6)
 
     display(fig)
     outpath = joinpath(DATA_DIR, "$(eod_name)_$(hva_name).png")
