@@ -131,6 +131,27 @@ function beam_characterization(
     hva1_loop_label      = Label(toggle_box[11, 1:2], "Loop HVA1: -- V")
     hva2_loop_label      = Label(toggle_box[11, 3:4], "Loop HVA2: -- V")
 
+    # ── Voltage sweep (rows 12–16) ────────────────────────────────────────────
+    Label(toggle_box[12, 1:4], "── Voltage Sweep ──"; fontsize = 12, font = :bold, tellwidth = false)
+
+    Label(toggle_box[13, 1], "Channel:")
+    sweep_chan_menu = Menu(toggle_box[13, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
+    Label(toggle_box[13, 3], "File prefix:")
+    sweep_name_textbox = Textbox(toggle_box[13, 4], placeholder = "sweep", stored_string = "sweep")
+
+    Label(toggle_box[14, 1], "V start:")
+    sweep_vstart_textbox = Textbox(toggle_box[14, 2], placeholder = "0.0", stored_string = "0.0")
+    Label(toggle_box[14, 3], "V stop:")
+    sweep_vstop_textbox  = Textbox(toggle_box[14, 4], placeholder = "1.0", stored_string = "1.0")
+
+    Label(toggle_box[15, 1], "Steps:")
+    sweep_steps_textbox  = Textbox(toggle_box[15, 2], placeholder = "10",  stored_string = "10")
+    Label(toggle_box[15, 3], "Settle (s):")
+    sweep_settle_textbox = Textbox(toggle_box[15, 4], placeholder = "1.0", stored_string = "1.0")
+
+    sweep_start_button  = Button(toggle_box[16, 1:3], label = "Start Sweep")
+    sweep_status_label  = Label(toggle_box[16, 4], "Idle")
+
     # Observables tracking the last applied/read HVA values
     current_hva1_setpoint = Observable(0.0)   # voltage applied by user (DAQ V)
     current_hva2_setpoint = Observable(0.0)
@@ -138,6 +159,7 @@ function beam_characterization(
     current_hva2_monitor  = Observable(0.0)   # AI2 monitor reading
     current_ao0_read      = Observable(0.0)   # AI1 loopback: actual DAQ output to HVA1
     current_ao1_read      = Observable(0.0)   # AI3 loopback: actual DAQ output to HVA2
+    sweep_running         = Observable(false)
 
     # ── Data labels ──────────────────────────────────────────────────────────
     approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
@@ -245,6 +267,112 @@ function beam_characterization(
                 hva1_monitor_label.text = "Mon HVA1: ERROR"
                 hva2_monitor_label.text = "Mon HVA2: ERROR"
             end
+        end
+    end
+
+    # ── Sweep handler ─────────────────────────────────────────────────────────
+    on(sweep_start_button.clicks) do _
+        # toggle: if already running, stop
+        if sweep_running[]
+            sweep_running[] = false
+            sweep_start_button.label = "Start Sweep"
+            sweep_status_label.text  = "Stopped."
+            return
+        end
+
+        !daq_ok && (sweep_status_label.text = "DAQ not available."; return)
+
+        vstart = tryparse(Float64, sweep_vstart_textbox.displayed_string[])
+        vstop  = tryparse(Float64, sweep_vstop_textbox.displayed_string[])
+        nsteps = tryparse(Int,     sweep_steps_textbox.displayed_string[])
+        settle = tryparse(Float64, sweep_settle_textbox.displayed_string[])
+        if any(isnothing, (vstart, vstop, nsteps, settle))
+            sweep_status_label.text = "Invalid params."
+            return
+        end
+        nsteps = max(nsteps, 2)
+        settle = max(settle, 0.0)
+
+        voltages    = range(vstart, vstop; length = nsteps)
+        sweep_chan  = sweep_chan_menu.selection[]
+        sweep_pfx   = sweep_name_textbox.stored_string[]
+        isempty(sweep_pfx) && (sweep_pfx = "sweep")
+
+        sweep_running[]           = true
+        sweep_start_button.label  = "Stop Sweep"
+        sweep_status_label.text   = "Running…"
+
+        @async begin
+            for (i, v) in enumerate(voltages)
+                !sweep_running[] && break
+
+                sweep_status_label.text = "Step $i/$(length(voltages)): $(round(v, digits=4)) V"
+
+                # ── apply voltage ──────────────────────────────────────────
+                try
+                    v1 = (sweep_chan == "HVA1" || sweep_chan == "Both") ? v : Float64(current_hva1_setpoint[])
+                    v2 = (sweep_chan == "HVA2" || sweep_chan == "Both") ? v : Float64(current_hva2_setpoint[])
+                    write_scalar(dao0, v1)
+                    write_scalar(dao1, v2)
+                    current_hva1_setpoint[] = v1
+                    current_hva2_setpoint[] = v2
+
+                    sleep(settle)   # wait for HVA and beam to settle
+
+                    data = read(dai)
+                    hva1_mon = data[1];  ao0_loop = data[2]
+                    hva2_mon = data[3];  ao1_loop = data[4]
+                    current_hva1_monitor[] = hva1_mon
+                    current_hva2_monitor[] = hva2_mon
+                    current_ao0_read[]     = ao0_loop
+                    current_ao1_read[]     = ao1_loop
+                    hva1_monitor_label.text = "Mon HVA1: $(round(hva1_mon, digits=3)) V"
+                    hva2_monitor_label.text = "Mon HVA2: $(round(hva2_mon, digits=3)) V"
+                    hva1_loop_label.text    = "Loop HVA1: $(round(ao0_loop, digits=3)) V"
+                    hva2_loop_label.text    = "Loop HVA2: $(round(ao1_loop, digits=3)) V"
+                catch e
+                    @error "Sweep step $i: voltage apply failed"
+                    showerror(stdout, e, catch_backtrace())
+                    continue
+                end
+
+                # ── auto-save this step ────────────────────────────────────
+                timestamp  = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
+                step_label = "$(sweep_pfx)_step$(lpad(i, 3, '0'))_$(round(v, digits=4))V"
+                h5_path    = joinpath(save_dir, "$(step_label)_$(timestamp).h5")
+                frame_data = collect(Float64, frame_obs[])
+                cx_val     = Float64(cx[]);  cy_val = Float64(cy[])
+
+                try
+                    h5open(h5_path, "w") do h5file
+                        write(h5file, "frame", frame_data)
+                        attrs(h5file)["beam_type"]       = string(beam_type[])
+                        attrs(h5file)["center_x"]        = cx_val
+                        attrs(h5file)["center_y"]        = cy_val
+                        attrs(h5file)["timestamp"]       = timestamp
+                        attrs(h5file)["sweep_step"]      = i
+                        attrs(h5file)["sweep_voltage"]   = Float64(v)
+                        attrs(h5file)["sweep_channel"]   = sweep_chan
+                        attrs(h5file)["settle_time"]     = settle
+                        attrs(h5file)["hva1_setpoint"]   = Float64(current_hva1_setpoint[])
+                        attrs(h5file)["hva2_setpoint"]   = Float64(current_hva2_setpoint[])
+                        attrs(h5file)["hva1_monitor"]    = Float64(current_hva1_monitor[])
+                        attrs(h5file)["hva2_monitor"]    = Float64(current_hva2_monitor[])
+                        attrs(h5file)["hva1_daq_output"] = Float64(current_ao0_read[])
+                        attrs(h5file)["hva2_daq_output"] = Float64(current_ao1_read[])
+                    end
+                    println("Sweep step $i saved: $h5_path")
+                catch e
+                    @error "Sweep step $i: save failed"
+                    showerror(stdout, e, catch_backtrace())
+                end
+            end
+
+            if sweep_running[]
+                sweep_status_label.text = "Done ($(length(voltages)) steps)."
+            end
+            sweep_running[]           = false
+            sweep_start_button.label  = "Start Sweep"
         end
     end
 
