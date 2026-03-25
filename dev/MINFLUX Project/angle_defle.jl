@@ -38,9 +38,9 @@ function load_eod_folder(folder_path)
                     Int(read_attribute(f, "sweep_step")),
                     read_attr(f, "sweep_voltage"),
                     read_attr(f, "hva1_daq_output"),
-                    -read_attr(f, "hva1_monitor"),   # negate inverted monitor
+                    -read_attr(f, "hva1_monitor") * 20,   # negate + ×20 → real HVA output (V)
                     read_attr(f, "hva2_daq_output"),
-                    -read_attr(f, "hva2_monitor"),   # negate inverted monitor
+                    -read_attr(f, "hva2_monitor") * 20,   # negate + ×20 → real HVA output (V)
                     read_attr(f, "center_x"),
                     read_attr(f, "center_y"),
                 )
@@ -87,7 +87,7 @@ function plot_eod(points, eod_name)
                xlabel = "$hva_name DAQ Output (V)",
                ylabel = "Position √(cx² + cy²) (px)")
     ax2 = Axis(fig[1, 2], title = "$hva_name Monitor vs Position",
-               xlabel = "$hva_name Monitor (V)",
+               xlabel = "$hva_name Real Output (V)",
                ylabel = "Position √(cx² + cy²) (px)")
 
     scatterlines!(ax1, daq_v, pos; color = c, marker = :circle, markersize = 6)
@@ -95,9 +95,9 @@ function plot_eod(points, eod_name)
 
     # ── row 2: center x and center y vs monitor ───────────────────────────
     ax3 = Axis(fig[2, 1], title = "$hva_name Monitor vs Center X",
-               xlabel = "$hva_name Monitor (V)", ylabel = "Center X (px)")
+               xlabel = "$hva_name Real Output (V)", ylabel = "Center X (px)")
     ax4 = Axis(fig[2, 2], title = "$hva_name Monitor vs Center Y",
-               xlabel = "$hva_name Monitor (V)", ylabel = "Center Y (px)")
+               xlabel = "$hva_name Real Output (V)", ylabel = "Center Y (px)")
 
     scatterlines!(ax3, mon_v, cx; color = c, marker = :circle, markersize = 6)
     scatterlines!(ax4, mon_v, cy; color = c, marker = :circle, markersize = 6)
@@ -113,7 +113,7 @@ end
 # ============================================================================
 # Physical constants — adjust to match your setup
 const PIXEL_SIZE_UM = 3.45      # camera pixel size in micrometres (µm)
-const EOD_DISTANCE_MM = 100.0   # distance from EOD to camera sensor in mm
+const EOD_DISTANCE_MM = 265.0   # distance from EOD to camera sensor in mm
 
 function compute_angle_calibration(points, eod_name)
     isempty(points) && return
@@ -168,8 +168,8 @@ function compute_angle_calibration(points, eod_name)
     for (label, slope, r2) in [
             ("DAQ → Center X", slope_cx_daq, r2_cx_daq),
             ("DAQ → Center Y", slope_cy_daq, r2_cy_daq),
-            ("Monitor → Center X", slope_cx_mon, r2_cx_mon),
-            ("Monitor → Center Y", slope_cy_mon, r2_cy_mon),
+            ("Monitor×20 → Center X", slope_cx_mon, r2_cx_mon),
+            ("Monitor×20 → Center Y", slope_cy_mon, r2_cy_mon),
         ]
         mrad_V, deg_V, V_mrad, V_deg = to_calibration(slope)
         println("  $label")
