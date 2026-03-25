@@ -120,8 +120,8 @@ function compute_angle_calibration(points, eod_name)
 
     hva_num  = occursin("34", eod_name) ? 1 : 2
     hva_name = "HVA$hva_num"
-    mon_v    = hva_num == 1 ? [p.hva1_monitor for p in points] :
-                               [p.hva2_monitor for p in points]   # already ×20
+    mon_v    = hva_num == 1 ? [-p.hva1_monitor for p in points] :
+                               [-p.hva2_monitor for p in points]  # already ×20; negate inverted reading
     cx       = [p.center_x for p in points]
     cy       = [p.center_y for p in points]
 
