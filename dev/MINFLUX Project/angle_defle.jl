@@ -112,8 +112,10 @@ end
 # Angle calibration
 # ============================================================================
 # Physical constants — adjust to match your setup
-const PIXEL_SIZE_UM = 3.45      # camera pixel size in micrometres (µm)
-const EOD_DISTANCE_MM = 265.0   # distance from EOD to camera sensor in mm
+const PIXEL_SIZE_UM = 3.45           # camera pixel size in micrometres (µm)
+const EOD_DISTANCE_MM = 265.0        # distance from EOD to camera sensor in mm
+const SPEC_MRAD_PER_KV = 3.0         # fabricator spec: 3 mrad/kV = 0.003 mrad/V
+const SPEC_MRAD_PER_V  = SPEC_MRAD_PER_KV / 1000.0
 
 function compute_angle_calibration(points, eod_name)
     isempty(points) && return
@@ -159,20 +161,23 @@ function compute_angle_calibration(points, eod_name)
 
     println("=" ^ 60)
     println("Angle Calibration — $eod_name ($hva_name)  [monitor ×20 = real output]")
-    println("  Pixel size : $(PIXEL_SIZE_UM) µm")
-    println("  EOD→camera : $(EOD_DISTANCE_MM) mm")
+    println("  Pixel size    : $(PIXEL_SIZE_UM) µm")
+    println("  EOD→camera    : $(EOD_DISTANCE_MM) mm")
+    println("  Fabricator spec: $(SPEC_MRAD_PER_KV) mrad/kV = $(SPEC_MRAD_PER_V) mrad/V")
     println()
 
     for (label, slope, r2) in [
-            ("Monitor×20 → Center X",        slope_cx,  r2_cx),
-            ("Monitor×20 → Center Y",        slope_cy,  r2_cy),
-            ("Monitor×20 → Distance √(X²+Y²)", slope_pos, r2_pos),
+            ("Monitor×20 → Center X",           slope_cx,  r2_cx),
+            ("Monitor×20 → Center Y",           slope_cy,  r2_cy),
+            ("Monitor×20 → Distance √(X²+Y²)",  slope_pos, r2_pos),
         ]
         mrad_V, deg_V, V_mrad, V_deg = to_calibration(slope)
+        pct_of_spec = abs(mrad_V) / SPEC_MRAD_PER_V * 100.0
         println("  $label")
-        println("    Slope      : $(round(slope,   digits=4)) px/V   (R² = $(round(r2, digits=4)))")
-        println("    Deflection : $(round(mrad_V,  digits=4)) mrad/V  |  $(round(deg_V, digits=4)) deg/V")
-        println("    Sensitivity: $(round(V_mrad,  digits=4)) V/mrad  |  $(round(V_deg, digits=4)) V/deg")
+        println("    Slope        : $(round(slope,        digits=4)) px/V   (R² = $(round(r2, digits=4)))")
+        println("    Deflection   : $(round(mrad_V,       digits=4)) mrad/V  |  $(round(deg_V, digits=4)) deg/V")
+        println("    Sensitivity  : $(round(V_mrad,       digits=4)) V/mrad  |  $(round(V_deg, digits=4)) V/deg")
+        println("    vs spec      : $(round(pct_of_spec,  digits=1))% of $(SPEC_MRAD_PER_KV) mrad/kV  ($(round(abs(mrad_V)*1000, digits=4)) mrad/kV measured)")
         println()
     end
     println("=" ^ 60)
