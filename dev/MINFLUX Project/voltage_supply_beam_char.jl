@@ -66,7 +66,7 @@ function beam_characterization(
     end
 
     # ── Figure / layout ──────────────────────────────────────────────────────
-    fig = Figure(size = (1000, 750), title = "Beam Characterization")
+    fig = Figure(size = (1100, 900), title = "Beam Characterization")
     ax2d = Axis(fig[1, 1], title = "2D Intensity Map", aspect = DataAspect())
     ax3d = Axis3(fig[1, 2], title = "3D Intensity Map", aspect = (1280, 1024, 400))
     ax3d.limits[] = (nothing, nothing, nothing, nothing, -50, nothing)
@@ -75,15 +75,19 @@ function beam_characterization(
     toggle_box       = GridLayout(info_box[1, 1])
     data_box         = GridLayout(info_box[2, 1])
     line_profile_box = GridLayout(fig[2, 1])
-    y_profile_ax = Axis(line_profile_box[2, 1], title = "Y Profile")
+    y_profile_ax = Axis(line_profile_box[2, 1], title = "Y Profile",
+                        xticklabelsize = 10, yticklabelsize = 10, titlesize = 11)
     y_profile_ax.limits[] = (0, 1080, 0, 100)
-    x_profile_ax = Axis(line_profile_box[1, 1], title = "X Profile")
+    x_profile_ax = Axis(line_profile_box[1, 1], title = "X Profile",
+                        xticklabelsize = 10, yticklabelsize = 10, titlesize = 11)
     x_profile_ax.limits[] = (0, 1280, 0, 100)
 
     colsize!(fig.layout, 1, Relative(0.5))
     colsize!(fig.layout, 2, Relative(0.5))
-    rowsize!(fig.layout, 1, Relative(0.5))
-    rowsize!(fig.layout, 2, Relative(0.5))
+    rowsize!(fig.layout, 1, Relative(0.62))
+    rowsize!(fig.layout, 2, Relative(0.38))
+    rowsize!(line_profile_box, 1, Fixed(120))
+    rowsize!(line_profile_box, 2, Fixed(120))
 
     # ── Beam type selector ───────────────────────────────────────────────────
     beam_type = Observable(:donut)
