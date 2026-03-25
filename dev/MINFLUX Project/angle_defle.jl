@@ -1,7 +1,7 @@
 # angle_defle.jl
 # For each EOD folder in mar_25, load all sweep HDF5 files and plot
-# HVA1 and HVA2 voltage (DAQ output + monitor) vs center_x / center_y.
-# Produces 4 PNGs per EOD folder (one per HVA × one per axis).
+# voltage (DAQ output + monitor) vs beam position sqrt(cx²+cy²).
+# EOD34 → HVA1 only.  EOD35 → HVA2 only.
 
 using HDF5, GLMakie, Statistics
 
@@ -63,38 +63,36 @@ end
 function plot_eod(points, eod_name)
     isempty(points) && return
 
-    cx = [p.center_x   for p in points]
-    cy = [p.center_y   for p in points]
+    # beam position = Euclidean distance from image origin
+    pos = [sqrt(p.center_x^2 + p.center_y^2) for p in points]
 
-    configs = [
-        ("HVA1", [p.hva1_daq for p in points], [p.hva1_monitor for p in points], :steelblue),
-        ("HVA2", [p.hva2_daq for p in points], [p.hva2_monitor for p in points], :tomato),
-    ]
+    # select HVA channel based on EOD folder name
+    hva_num  = occursin("34", eod_name) ? 1 : 2
+    hva_name = "HVA$hva_num"
+    daq_v    = hva_num == 1 ? [p.hva1_daq     for p in points] :
+                               [p.hva2_daq     for p in points]
+    mon_v    = hva_num == 1 ? [p.hva1_monitor for p in points] :
+                               [p.hva2_monitor for p in points]
+    c        = hva_num == 1 ? :steelblue : :tomato
 
-    for (hva_name, daq_v, mon_v, c) in configs
-        fig = Figure(size = (950, 750))
-        Label(fig[0, 1:2], "$eod_name — $hva_name Voltage vs Beam Center";
-              fontsize = 16, font = :bold, tellwidth = false)
+    fig = Figure(size = (950, 450))
+    Label(fig[0, 1:2], "$eod_name — $hva_name Voltage vs Beam Position";
+          fontsize = 16, font = :bold, tellwidth = false)
 
-        ax1 = Axis(fig[1, 1], title = "$hva_name DAQ Output vs Center X",
-                   xlabel = "$hva_name DAQ Output (V)", ylabel = "Center X (px)")
-        ax2 = Axis(fig[1, 2], title = "$hva_name DAQ Output vs Center Y",
-                   xlabel = "$hva_name DAQ Output (V)", ylabel = "Center Y (px)")
-        ax3 = Axis(fig[2, 1], title = "$hva_name Monitor vs Center X",
-                   xlabel = "$hva_name Monitor (V)", ylabel = "Center X (px)")
-        ax4 = Axis(fig[2, 2], title = "$hva_name Monitor vs Center Y",
-                   xlabel = "$hva_name Monitor (V)", ylabel = "Center Y (px)")
+    ax1 = Axis(fig[1, 1], title = "$hva_name DAQ Output vs Position",
+               xlabel = "$hva_name DAQ Output (V)",
+               ylabel = "Position √(cx² + cy²) (px)")
+    ax2 = Axis(fig[1, 2], title = "$hva_name Monitor vs Position",
+               xlabel = "$hva_name Monitor (V)",
+               ylabel = "Position √(cx² + cy²) (px)")
 
-        scatterlines!(ax1, daq_v, cx; color = c, marker = :circle, markersize = 6)
-        scatterlines!(ax2, daq_v, cy; color = c, marker = :circle, markersize = 6)
-        scatterlines!(ax3, mon_v, cx; color = c, marker = :circle, markersize = 6)
-        scatterlines!(ax4, mon_v, cy; color = c, marker = :circle, markersize = 6)
+    scatterlines!(ax1, daq_v, pos; color = c, marker = :circle, markersize = 6)
+    scatterlines!(ax2, mon_v, pos; color = c, marker = :circle, markersize = 6)
 
-        display(fig)
-        outpath = joinpath(DATA_DIR, "$(eod_name)_$(hva_name).png")
-        save(outpath, fig)
-        println("Saved: $outpath")
-    end
+    display(fig)
+    outpath = joinpath(DATA_DIR, "$(eod_name)_$(hva_name).png")
+    save(outpath, fig)
+    println("Saved: $outpath")
 end
 
 # ============================================================================
