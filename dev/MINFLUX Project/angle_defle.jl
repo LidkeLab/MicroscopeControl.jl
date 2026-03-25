@@ -120,61 +120,54 @@ function compute_angle_calibration(points, eod_name)
 
     hva_num  = occursin("34", eod_name) ? 1 : 2
     hva_name = "HVA$hva_num"
-    daq_v    = hva_num == 1 ? [p.hva1_daq     for p in points] :
-                               [p.hva2_daq     for p in points]
     mon_v    = hva_num == 1 ? [p.hva1_monitor for p in points] :
-                               [p.hva2_monitor for p in points]
+                               [p.hva2_monitor for p in points]   # already ×20
     cx       = [p.center_x for p in points]
     cy       = [p.center_y for p in points]
 
     # ── linear fit: center = slope * voltage + intercept ──────────────────
-    # using least-squares via the normal equations [v 1] \ c
     function linfit(v, c)
         A = hcat(v, ones(length(v)))
         coeffs = A \ c
         slope, intercept = coeffs[1], coeffs[2]
-        resid   = c .- (slope .* v .+ intercept)
-        ss_res  = sum(resid .^ 2)
-        ss_tot  = sum((c .- mean(c)) .^ 2)
-        r2      = 1.0 - ss_res / ss_tot
+        resid  = c .- (slope .* v .+ intercept)
+        ss_res = sum(resid .^ 2)
+        ss_tot = sum((c .- mean(c)) .^ 2)
+        r2     = 1.0 - ss_res / ss_tot
         return slope, intercept, r2
     end
 
-    slope_cx_daq, _, r2_cx_daq = linfit(daq_v, cx)
-    slope_cy_daq, _, r2_cy_daq = linfit(daq_v, cy)
-    slope_cx_mon, _, r2_cx_mon = linfit(mon_v, cx)
-    slope_cy_mon, _, r2_cy_mon = linfit(mon_v, cy)
+    slope_cx, _, r2_cx = linfit(mon_v, cx)
+    slope_cy, _, r2_cy = linfit(mon_v, cy)
 
     # ── unit conversion ────────────────────────────────────────────────────
     # small-angle approx: θ (rad) = displacement (m) / distance (m)
-    px_to_m   = PIXEL_SIZE_UM * 1e-6          # px → metres
-    dist_m    = EOD_DISTANCE_MM * 1e-3         # mm → metres
+    px_to_m = PIXEL_SIZE_UM * 1e-6
+    dist_m  = EOD_DISTANCE_MM * 1e-3
 
     function to_calibration(slope_px_per_V)
         rad_per_V  = slope_px_per_V * px_to_m / dist_m
         mrad_per_V = rad_per_V * 1e3
         deg_per_V  = rad_per_V * 180.0 / π
-        V_per_mrad = abs(rad_per_V) > 0 ? 1.0 / (mrad_per_V) : NaN
-        V_per_deg  = abs(rad_per_V) > 0 ? 1.0 / (deg_per_V)  : NaN
+        V_per_mrad = abs(rad_per_V) > 0 ? 1.0 / mrad_per_V : NaN
+        V_per_deg  = abs(rad_per_V) > 0 ? 1.0 / deg_per_V  : NaN
         return mrad_per_V, deg_per_V, V_per_mrad, V_per_deg
     end
 
     println("=" ^ 60)
-    println("Angle Calibration — $eod_name ($hva_name)")
+    println("Angle Calibration — $eod_name ($hva_name)  [monitor ×20 = real output]")
     println("  Pixel size : $(PIXEL_SIZE_UM) µm")
     println("  EOD→camera : $(EOD_DISTANCE_MM) mm")
     println()
 
     for (label, slope, r2) in [
-            ("DAQ → Center X", slope_cx_daq, r2_cx_daq),
-            ("DAQ → Center Y", slope_cy_daq, r2_cy_daq),
-            ("Monitor×20 → Center X", slope_cx_mon, r2_cx_mon),
-            ("Monitor×20 → Center Y", slope_cy_mon, r2_cy_mon),
+            ("Monitor×20 → Center X", slope_cx, r2_cx),
+            ("Monitor×20 → Center Y", slope_cy, r2_cy),
         ]
         mrad_V, deg_V, V_mrad, V_deg = to_calibration(slope)
         println("  $label")
-        println("    Slope     : $(round(slope,    digits=4)) px/V   (R² = $(round(r2, digits=4)))")
-        println("    Deflection: $(round(mrad_V,   digits=4)) mrad/V  |  $(round(deg_V, digits=4)) deg/V")
+        println("    Slope      : $(round(slope,   digits=4)) px/V   (R² = $(round(r2, digits=4)))")
+        println("    Deflection : $(round(mrad_V,  digits=4)) mrad/V  |  $(round(deg_V, digits=4)) deg/V")
         println("    Sensitivity: $(round(V_mrad,  digits=4)) V/mrad  |  $(round(V_deg, digits=4)) V/deg")
         println()
     end
