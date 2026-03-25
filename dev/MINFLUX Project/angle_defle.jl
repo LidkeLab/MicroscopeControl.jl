@@ -60,7 +60,7 @@ end
 # Plotting
 # ============================================================================
 
-function plot_eod(points, eod_name, dir)
+function plot_eod(points, eod_name)
     isempty(points) && return
 
     cx = [p.center_x   for p in points]
@@ -91,7 +91,7 @@ function plot_eod(points, eod_name, dir)
         scatterlines!(ax4, mon_v, cy; color = c, marker = :circle, markersize = 6)
 
         display(fig)
-        outpath = joinpath(dir, "$(eod_name)_$(hva_name).png")
+        outpath = joinpath(DATA_DIR, "$(eod_name)_$(hva_name).png")
         save(outpath, fig)
         println("Saved: $outpath")
     end
@@ -117,5 +117,5 @@ for eod_name in eod_dirs
         println("  center_y range: $(round(minimum(p.center_y for p in points), digits=1)) – $(round(maximum(p.center_y for p in points), digits=1)) px")
     end
     println()
-    plot_eod(points, eod_name, DATA_DIR)
+    plot_eod(points, eod_name)
 end
