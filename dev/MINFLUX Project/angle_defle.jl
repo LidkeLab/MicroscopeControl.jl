@@ -137,8 +137,11 @@ function compute_angle_calibration(points, eod_name)
         return slope, intercept, r2
     end
 
-    slope_cx, _, r2_cx = linfit(mon_v, cx)
-    slope_cy, _, r2_cy = linfit(mon_v, cy)
+    pos = sqrt.(cx .^ 2 .+ cy .^ 2)   # total distance from image origin
+
+    slope_cx,  _, r2_cx  = linfit(mon_v, cx)
+    slope_cy,  _, r2_cy  = linfit(mon_v, cy)
+    slope_pos, _, r2_pos = linfit(mon_v, pos)
 
     # ── unit conversion ────────────────────────────────────────────────────
     # small-angle approx: θ (rad) = displacement (m) / distance (m)
@@ -161,8 +164,9 @@ function compute_angle_calibration(points, eod_name)
     println()
 
     for (label, slope, r2) in [
-            ("Monitor×20 → Center X", slope_cx, r2_cx),
-            ("Monitor×20 → Center Y", slope_cy, r2_cy),
+            ("Monitor×20 → Center X",        slope_cx,  r2_cx),
+            ("Monitor×20 → Center Y",        slope_cy,  r2_cy),
+            ("Monitor×20 → Distance √(X²+Y²)", slope_pos, r2_pos),
         ]
         mrad_V, deg_V, V_mrad, V_deg = to_calibration(slope)
         println("  $label")
