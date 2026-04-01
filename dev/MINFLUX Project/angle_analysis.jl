@@ -558,6 +558,38 @@ function make_angle_videos(groups, dir; framerate = 2)
             label_obs[] = "$prefix DAQ: $(round(daq_fn(m), digits=3)) V"
         end
         println("  Saved: $outpath")
+
+        # ── centered video: xcorr-align each frame to the control ─────────
+        ctrl = get(groups, "$(gkey)_Control", AngleMeasurement[])
+        if isempty(ctrl)
+            @warn "No control for $gkey — skipping centered video"
+            continue
+        end
+        ref = mean(m.frame for m in ctrl)
+
+        outpath_c = joinpath(dir, "$(gkey)_video_centered.mp4")
+        fig_c = Figure(size = (nx, ny), backgroundcolor = :black, figure_padding = 0)
+        ax_c  = Axis(fig_c[1, 1], aspect = DataAspect(), backgroundcolor = :black)
+        hidedecorations!(ax_c); hidespines!(ax_c)
+        rowgap!(fig_c.layout, 0); colgap!(fig_c.layout, 0)
+
+        frame_c_obs = Observable(sorted[1].frame)
+        heatmap!(ax_c, frame_c_obs; colormap = :inferno, colorrange = clim)
+
+        label_c_obs = Observable("$prefix DAQ: $(round(daq_fn(sorted[1]), digits=3)) V  [centered]")
+        text!(ax_c, label_c_obs;
+              position = (0.98, 0.98), space = :relative,
+              align = (:right, :top), color = :white, fontsize = 16, font = :bold)
+
+        println("Recording $outpath_c  (centered, $(length(sorted)) frames @ $(framerate) fps)")
+        record(fig_c, outpath_c, sorted; framerate = framerate) do m
+            # xcorr gives displacement of this frame relative to ref
+            _, _, dx, dy = _xcorr_metrics(ref, m.frame)
+            # circshift cancels the displacement → beam stays at control position
+            frame_c_obs[] = circshift(m.frame, (-round(Int, dx), -round(Int, dy)))
+            label_c_obs[] = "$prefix DAQ: $(round(daq_fn(m), digits=3)) V  [centered]"
+        end
+        println("  Saved: $outpath_c")
     end
 end
 
