@@ -3,9 +3,9 @@
 # ODE2: hva2_daq_output and hva2_monitor vs center_x / center_y
 # Control file shown as a reference point on every plot.
 
-using HDF5, GLMakie, Statistics
+using HDF5, GLMakie, Statistics, FFTW
 
-const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/angle/mar_11"
+const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/angle/mar_25"
 
 # ============================================================================
 # Data loading
@@ -21,6 +21,7 @@ struct AngleMeasurement
     fwhm_x::Float64
     fwhm_y::Float64
     ellipticity::Float64
+    frame::Matrix{Float64}
 end
 
 # ── FWHM helpers (profile-based) ─────────────────────────────────────────────
@@ -50,51 +51,54 @@ end
 function load_angle_data(dir)
     groups = Dict{String, Vector{AngleMeasurement}}()
 
-    h5files = sort(filter(f -> endswith(f, ".h5"), readdir(dir)))
-    println("  Found $(length(h5files)) HDF5 files:")
-    for f in h5files; println("    $f"); end
-    println()
+    # folder structure: EOD34/ → ODE1 (HVA1), EOD35/ → ODE2 (HVA2)
+    subdirs = sort(filter(d -> isdir(joinpath(dir, d)), readdir(dir)))
+    println("  Found subfolders: $subdirs")
 
-    for fname in h5files
-        # must check eod1/eod2 BEFORE plain "control"
-        group = if occursin("eod1", lowercase(fname))
+    for subdir in subdirs
+        group = if occursin("34", subdir)
             "ODE1"
-        elseif occursin("eod2", lowercase(fname))
+        elseif occursin("35", subdir)
             "ODE2"
-        elseif startswith(lowercase(fname), "control")
-            "Control"
         else
-            @warn "Unmatched file (check naming): $fname"
+            @warn "Unmatched subfolder (skipping): $subdir"
             continue
         end
 
-        try
-            h5open(joinpath(dir, fname), "r") do f
-                frame = read(f["frame"])
+        folder  = joinpath(dir, subdir)
+        h5files = sort(filter(f -> endswith(f, ".h5"), readdir(folder)))
+        println("  $subdir → $group: $(length(h5files)) files")
 
-                cx = read_attr(f, "center_x", NaN)
-                cy = read_attr(f, "center_y", NaN)
-                if isnan(cx) || isnan(cy)
-                    idx = argmax(frame)
-                    cx, cy = Float64(idx[1]), Float64(idx[2])
+        for fname in h5files
+            try
+                h5open(joinpath(folder, fname), "r") do f
+                    frame = read(f["frame"])
+
+                    cx = read_attr(f, "center_x", NaN)
+                    cy = read_attr(f, "center_y", NaN)
+                    if isnan(cx) || isnan(cy)
+                        idx = argmax(frame)
+                        cx, cy = Float64(idx[1]), Float64(idx[2])
+                    end
+
+                    frame_f = Float64.(frame)
+                    fwhm_x, fwhm_y, ellip = _fit_fwhm(frame_f)
+                    m = AngleMeasurement(
+                        read_attr(f, "hva1_daq_output"),
+                        read_attr(f, "hva1_monitor"),
+                        read_attr(f, "hva2_daq_output"),
+                        read_attr(f, "hva2_monitor"),
+                        cx, cy, fwhm_x, fwhm_y, ellip, frame_f
+                    )
+                    push!(get!(groups, group, AngleMeasurement[]), m)
                 end
-
-                fwhm_x, fwhm_y, ellip = _fit_fwhm(Float64.(frame))
-                m = AngleMeasurement(
-                    read_attr(f, "hva1_daq_output"),
-                    read_attr(f, "hva1_monitor"),
-                    read_attr(f, "hva2_daq_output"),
-                    read_attr(f, "hva2_monitor"),
-                    cx, cy, fwhm_x, fwhm_y, ellip
-                )
-                push!(get!(groups, group, AngleMeasurement[]), m)
+                print(".")
+            catch e
+                @warn "Skipping $fname: $e"
             end
-            print(".")
-        catch e
-            @warn "Skipping $fname: $e"
         end
+        println()
     end
-    println()
 
     for (gkey, v) in groups
         sort!(v, by = gkey == "ODE2" ? (m -> m.hva2_daq) : (m -> m.hva1_daq))
@@ -412,6 +416,154 @@ function plot_distance_vs_voltage(groups, dir)
 end
 
 # ============================================================================
+# Cross-correlation beam quality vs angle deflection
+# ============================================================================
+
+function _xcorr2d(ref, frame)
+    r  = ref   .- mean(ref)
+    f  = frame .- mean(frame)
+    cc = real(ifft(fft(r) .* conj(fft(f))))
+    denom = sqrt(sum(r .^ 2) * sum(f .^ 2))
+    return denom > 0 ? fftshift(cc) ./ denom : fftshift(cc)
+end
+
+function _xcorr_metrics(ref, frame)
+    cc = _xcorr2d(ref, frame)
+    nx, ny = size(cc)
+    cx0, cy0 = nx ÷ 2 + 1, ny ÷ 2 + 1
+
+    peak_val = maximum(cc)
+    pidx     = argmax(cc)
+    dx       = Float64(pidx[1] - cx0)
+    dy       = Float64(pidx[2] - cy0)
+
+    half  = peak_val / 2
+    ax_   = findall(>=(half), cc[:, pidx[2]])
+    ay_   = findall(>=(half), cc[pidx[1], :])
+    fwhm_x = length(ax_) >= 2 ? Float64(ax_[end] - ax_[1]) : 0.0
+    fwhm_y = length(ay_) >= 2 ? Float64(ay_[end] - ay_[1]) : 0.0
+    fwhm_cc = (fwhm_x + fwhm_y) / 2
+
+    return peak_val, fwhm_cc, dx, dy
+end
+
+function plot_xcorr_angle(groups, dir)
+    ctrl = get(groups, "Control", AngleMeasurement[])
+    if isempty(ctrl)
+        @warn "No Control group — skipping xcorr plot"
+        return
+    end
+    ref = mean(m.frame for m in ctrl)
+
+    palette = Dict("ODE1" => (:steelblue, :circle), "ODE2" => (:tomato, :rect))
+
+    for gkey in ("ODE1", "ODE2")
+        meas = get(groups, gkey, AngleMeasurement[])
+        isempty(meas) && continue
+
+        c, mk  = palette[gkey]
+        prefix = gkey == "ODE1" ? "HVA1" : "HVA2"
+        daq_fn = gkey == "ODE1" ? (m -> m.hva1_daq)      : (m -> m.hva2_daq)
+        mon_fn = gkey == "ODE1" ? (m -> -m.hva1_monitor) : (m -> -m.hva2_monitor)
+
+        daq_v = daq_fn.(meas)
+        mon_v = mon_fn.(meas)
+
+        peak_nccs = Float64[]
+        fwhm_ccs  = Float64[]
+        for m in meas
+            p, fw, _, _ = _xcorr_metrics(ref, m.frame)
+            push!(peak_nccs, p)
+            push!(fwhm_ccs,  fw)
+        end
+
+        ctrl_daq_v  = mean(daq_fn(m) for m in ctrl)
+        ctrl_mon_v  = mean(mon_fn(m) for m in ctrl)
+        ctrl_p, ctrl_fw, _, _ = _xcorr_metrics(ref, mean(m.frame for m in ctrl))
+
+        fig = Figure(size = (1000, 750))
+        Label(fig[0, 1:2], "$gkey — Beam Quality (Cross-Correlation) vs $prefix Voltage";
+              fontsize = 16, font = :bold, tellwidth = false)
+
+        ax_nd = Axis(fig[1, 1], title = "Peak NCC vs $prefix DAQ",
+                     xlabel = "$prefix DAQ Output (V)", ylabel = "Peak NCC (0–1)")
+        ax_nm = Axis(fig[1, 2], title = "Peak NCC vs $prefix Monitor",
+                     xlabel = "$prefix Monitor (V)",   ylabel = "Peak NCC (0–1)")
+        ax_fd = Axis(fig[2, 1], title = "Xcorr FWHM vs $prefix DAQ",
+                     xlabel = "$prefix DAQ Output (V)", ylabel = "Xcorr FWHM (px)")
+        ax_fm = Axis(fig[2, 2], title = "Xcorr FWHM vs $prefix Monitor",
+                     xlabel = "$prefix Monitor (V)",   ylabel = "Xcorr FWHM (px)")
+
+        scatterlines!(ax_nd, daq_v, peak_nccs; color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_nm, mon_v, peak_nccs; color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_fd, daq_v, fwhm_ccs;  color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_fm, mon_v, fwhm_ccs;  color = c, marker = mk, markersize = 10)
+
+        # control reference
+        hlines!(ax_nd, [ctrl_p];  color = (:gray30, 0.7), linestyle = :dash, linewidth = 2)
+        hlines!(ax_nm, [ctrl_p];  color = (:gray30, 0.7), linestyle = :dash, linewidth = 2)
+        hlines!(ax_fd, [ctrl_fw]; color = (:gray30, 0.7), linestyle = :dash, linewidth = 2)
+        hlines!(ax_fm, [ctrl_fw]; color = (:gray30, 0.7), linestyle = :dash, linewidth = 2)
+        scatter!(ax_nd, [ctrl_daq_v], [ctrl_p];  color = :gray30, marker = :diamond, markersize = 14)
+        scatter!(ax_nm, [ctrl_mon_v], [ctrl_p];  color = :gray30, marker = :diamond, markersize = 14)
+        scatter!(ax_fd, [ctrl_daq_v], [ctrl_fw]; color = :gray30, marker = :diamond, markersize = 14)
+        scatter!(ax_fm, [ctrl_mon_v], [ctrl_fw]; color = :gray30, marker = :diamond, markersize = 14)
+
+        display(fig)
+        outpath = joinpath(dir, "$(gkey)_xcorr_quality.png")
+        save(outpath, fig)
+        println("Saved: $outpath")
+    end
+end
+
+# ============================================================================
+# Video — one per ODE group, sorted by DAQ voltage
+# ============================================================================
+
+function make_angle_videos(groups, dir; seconds_per_frame = 2)
+    fps      = 10
+    n_repeat = max(1, round(Int, fps * seconds_per_frame))
+
+    for gkey in ("ODE1", "ODE2")
+        meas = get(groups, gkey, AngleMeasurement[])
+        isempty(meas) && continue
+
+        prefix = gkey == "ODE1" ? "HVA1" : "HVA2"
+        daq_fn = gkey == "ODE1" ? (m -> m.hva1_daq) : (m -> m.hva2_daq)
+        sorted = sort(meas, by = daq_fn)
+
+        outpath = joinpath(dir, "$(gkey)_video.mp4")
+        nx, ny  = size(sorted[1].frame)
+        clim    = (0.0, maximum(maximum(m.frame) for m in sorted))
+
+        fig = Figure(size = (nx, ny), backgroundcolor = :black, figure_padding = 0)
+        ax  = Axis(fig[1, 1], aspect = DataAspect(), backgroundcolor = :black)
+        hidedecorations!(ax); hidespines!(ax)
+        rowgap!(fig.layout, 0); colgap!(fig.layout, 0)
+
+        frame_obs = Observable(sorted[1].frame)
+        heatmap!(ax, frame_obs; colormap = :inferno, colorrange = clim)
+
+        label_obs = Observable("$prefix DAQ: $(round(daq_fn(sorted[1]), digits=3)) V")
+        text!(ax, label_obs;
+              position = (0.98, 0.98), space = :relative,
+              align = (:right, :top), color = :white, fontsize = 16, font = :bold)
+
+        println("Recording $outpath  ($(length(sorted)) frames, $(seconds_per_frame)s each)")
+        record(fig, outpath; framerate = fps) do io
+            for m in sorted
+                frame_obs[] = m.frame
+                label_obs[] = "$prefix DAQ: $(round(daq_fn(m), digits=3)) V"
+                for _ in 1:n_repeat
+                    recordframe!(io)
+                end
+            end
+        end
+        println("  Saved: $outpath")
+    end
+end
+
+# ============================================================================
 # Run
 # ============================================================================
 
@@ -431,3 +583,5 @@ end
 
 plot_angle(groups, DATA_DIR)
 plot_beam_quality(groups, DATA_DIR)
+plot_xcorr_angle(groups, DATA_DIR)
+make_angle_videos(groups, DATA_DIR)

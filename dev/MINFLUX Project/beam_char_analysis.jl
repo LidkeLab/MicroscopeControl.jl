@@ -3,7 +3,7 @@
 # and plots FWHM_x, FWHM_y, and ellipticity vs stage position for each ODE mode.
 # Includes control measurement as a dashed reference line.
 
-using HDF5, GLMakie, Statistics
+using HDF5, GLMakie, Statistics, FFTW
 
 const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/movig EDO1/MAR_3"
 
@@ -38,6 +38,158 @@ function fit_fwhm(frame)
 
     ellipticity = max(fwhm_x, fwhm_y) / max(min(fwhm_x, fwhm_y), 1.0)
     return fwhm_x, fwhm_y, ellipticity
+end
+
+# ============================================================================
+# Cross-correlation beam quality
+# ============================================================================
+
+"""
+    xcorr2d(ref, frame) -> NCC map (fftshifted, zero-lag at centre)
+
+Normalised 2-D cross-correlation via FFT.
+Peak value = 1.0 when frames are identical (up to a global shift).
+"""
+function xcorr2d(ref, frame)
+    r = ref   .- mean(ref)
+    f = frame .- mean(frame)
+    cc    = real(ifft(fft(r) .* conj(fft(f))))
+    denom = sqrt(sum(r .^ 2) * sum(f .^ 2))
+    return denom > 0 ? fftshift(cc) ./ denom : fftshift(cc)
+end
+
+"""
+    xcorr_metrics(ref, frame) -> (peak_ncc, fwhm_cc_px, dx, dy)
+
+- `peak_ncc`   : peak of the normalised cross-correlation (0–1).  1 = perfect match.
+- `fwhm_cc_px` : FWHM of the xcorr peak (px).  Narrower = sharper / better beam.
+- `dx`, `dy`   : sub-pixel beam displacement relative to reference (px).
+"""
+function xcorr_metrics(ref, frame)
+    cc  = xcorr2d(ref, frame)
+    nx, ny = size(cc)
+    cx0, cy0 = nx ÷ 2 + 1, ny ÷ 2 + 1          # index of zero-lag after fftshift
+
+    peak_val = maximum(cc)
+    pidx     = argmax(cc)
+    dx       = Float64(pidx[1] - cx0)
+    dy       = Float64(pidx[2] - cy0)
+
+    # FWHM of xcorr peak: average of x and y profiles through the peak
+    half = peak_val / 2
+    xprof = cc[:, pidx[2]]
+    yprof = cc[pidx[1], :]
+    ax = findall(>=(half), xprof)
+    ay = findall(>=(half), yprof)
+    fwhm_x = length(ax) >= 2 ? Float64(ax[end] - ax[1]) : 0.0
+    fwhm_y = length(ay) >= 2 ? Float64(ay[end] - ay[1]) : 0.0
+    fwhm_cc = (fwhm_x + fwhm_y) / 2
+
+    return peak_val, fwhm_cc, dx, dy
+end
+
+struct XCorrResult
+    position::Float64
+    peak_ncc::Float64       # 0–1, similarity to reference
+    fwhm_cc::Float64        # xcorr peak width (px) — narrower = sharper beam
+    dx::Float64             # beam displacement x vs reference (px)
+    dy::Float64             # beam displacement y vs reference (px)
+end
+
+"""
+    compute_xcorr_quality(groups) -> Dict{String, Vector{XCorrResult}}
+
+Uses the mean Control frame as the reference.  Returns xcorr metrics for
+every measurement in each group, sorted by position.
+"""
+function compute_xcorr_quality(groups)
+    ctrl = get(groups, "Control", nothing)
+    if isnothing(ctrl) || isempty(ctrl)
+        @warn "No Control group found — cannot compute cross-correlation quality"
+        return nothing
+    end
+
+    # average all control frames → reference
+    ref = mean(Float64.(m.frame) for m in ctrl)
+
+    results = Dict{String, Vector{XCorrResult}}()
+    for (label, meas) in groups
+        res = XCorrResult[]
+        for m in meas
+            peak, fwhm_cc, dx, dy = xcorr_metrics(ref, Float64.(m.frame))
+            push!(res, XCorrResult(m.position, peak, fwhm_cc, dx, dy))
+        end
+        sort!(res, by = r -> r.position)
+        results[label] = res
+    end
+    return results
+end
+
+function plot_xcorr_quality(xcorr_results)
+    isnothing(xcorr_results) && return
+
+    fig = Figure(size = (1100, 900))
+    Label(fig[0, 1:3], "Beam Quality — 2D Cross-Correlation vs Control Reference";
+          fontsize = 16, font = :bold, tellwidth = false)
+
+    ax_ncc  = Axis(fig[1, 1], title = "Peak NCC (similarity to control)",
+                   xlabel = "Stage Position", ylabel = "Peak NCC (0–1)")
+    ax_fwhm = Axis(fig[1, 2], title = "Xcorr Peak FWHM (beam sharpness)",
+                   xlabel = "Stage Position", ylabel = "Xcorr FWHM (px)")
+    ax_dx   = Axis(fig[2, 1], title = "Beam Displacement ΔX vs Control",
+                   xlabel = "Stage Position", ylabel = "ΔX (px)")
+    ax_dy   = Axis(fig[2, 2], title = "Beam Displacement ΔY vs Control",
+                   xlabel = "Stage Position", ylabel = "ΔY (px)")
+
+    palette = Dict("ODE G"   => (:steelblue, :circle),
+                   "ODE P"   => (:tomato,    :rect),
+                   "Control" => (:gray40,    :diamond))
+
+    # control reference lines: NCC = 1, FWHM = self-correlation peak, displacement = 0
+    ctrl_res = get(xcorr_results, "Control", nothing)
+    if !isnothing(ctrl_res) && !isempty(ctrl_res)
+        ref_ncc  = mean(r.peak_ncc  for r in ctrl_res)
+        ref_fwhm = mean(r.fwhm_cc   for r in ctrl_res)
+        hlines!(ax_ncc,  [ref_ncc];  color = (:gray40, 0.7), linestyle = :dash, linewidth = 2)
+        hlines!(ax_fwhm, [ref_fwhm]; color = (:gray40, 0.7), linestyle = :dash, linewidth = 2)
+        hlines!(ax_dx,   [0.0];      color = (:gray40, 0.7), linestyle = :dash, linewidth = 2)
+        hlines!(ax_dy,   [0.0];      color = (:gray40, 0.7), linestyle = :dash, linewidth = 2)
+    end
+
+    legend_elems  = []
+    legend_labels = String[]
+
+    for (label, res) in sort(collect(xcorr_results); by = first)
+        label == "Control" && continue
+        c, mk = get(palette, label, (:black, :circle))
+        pos  = [r.position  for r in res]
+        ncc  = [r.peak_ncc  for r in res]
+        fwhm = [r.fwhm_cc   for r in res]
+        dxs  = [r.dx        for r in res]
+        dys  = [r.dy        for r in res]
+
+        scatterlines!(ax_ncc,  pos, ncc;  color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_fwhm, pos, fwhm; color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_dx,   pos, dxs;  color = c, marker = mk, markersize = 10)
+        scatterlines!(ax_dy,   pos, dys;  color = c, marker = mk, markersize = 10)
+
+        push!(legend_elems,  [MarkerElement(color = c, marker = mk, markersize = 10),
+                               LineElement(color = c, linewidth = 2)])
+        push!(legend_labels, label)
+    end
+
+    if !isnothing(ctrl_res) && !isempty(ctrl_res)
+        push!(legend_elems,  LineElement(color = (:gray40, 0.7), linestyle = :dash, linewidth = 2))
+        push!(legend_labels, "Control (ref)")
+    end
+    !isempty(legend_elems) && Legend(fig[1:2, 3], legend_elems, legend_labels, "ODE Mode",
+                                     framevisible = true)
+
+    display(fig)
+    outpath = joinpath(DATA_DIR, "beam_quality_xcorr.png")
+    save(outpath, fig)
+    println("Saved: $outpath")
+    return fig
 end
 
 # ============================================================================
@@ -156,8 +308,12 @@ end
 # Video generation (one MP4 per EOD group)
 # ============================================================================
 
-function make_videos(groups, dir; framerate = 10)
+function make_videos(groups, dir; seconds_per_frame = 2)
     eod_groups = filter(kv -> kv.first != "Control", collect(groups))
+
+    # Makie requires integer framerate; repeat each frame to achieve desired duration
+    fps        = 10
+    n_repeat   = max(1, round(Int, fps * seconds_per_frame))
 
     for (label, meas) in sort(eod_groups; by = first)
         isempty(meas) && continue
@@ -185,10 +341,15 @@ function make_videos(groups, dir; framerate = 10)
               align = (:right, :top), color = :white,
               fontsize = 16, font = :bold)
 
-        println("Recording $outpath  ($(length(meas)) frames @ $(framerate) fps)")
-        record(fig, outpath, meas; framerate = framerate) do m
-            frame_obs[] = m.frame
-            pos_obs[]   = "pos: $(round(m.position, digits=3))"
+        println("Recording $outpath  ($(length(meas)) frames, $(seconds_per_frame)s each @ $(fps) fps)")
+        record(fig, outpath; framerate = fps) do io
+            for m in meas
+                frame_obs[] = m.frame
+                pos_obs[]   = "pos: $(round(m.position, digits=3))"
+                for _ in 1:n_repeat
+                    recordframe!(io)
+                end
+            end
         end
         println("  Saved: $outpath")
     end
@@ -211,5 +372,9 @@ end
 fig = plot_analysis(groups)
 name_dir = joinpath(DATA_DIR, "beam_quality_plot.png")
 save(name_dir, fig)
+
+println("\nComputing cross-correlation beam quality…")
+xcorr_results = compute_xcorr_quality(groups)
+plot_xcorr_quality(xcorr_results)
 
 make_videos(groups, DATA_DIR)
