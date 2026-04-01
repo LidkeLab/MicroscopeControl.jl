@@ -66,35 +66,41 @@ function load_angle_data(dir)
         end
 
         folder  = joinpath(dir, subdir)
-        h5files = sort(filter(f -> endswith(f, ".h5"), readdir(folder)))
-        println("  $subdir → $group: $(length(h5files)) files")
+        allfiles = sort(filter(f -> endswith(f, ".h5"), readdir(folder)))
+        ctrl_files  = filter(f -> startswith(lowercase(f), "control"), allfiles)
+        sweep_files = filter(f -> !startswith(lowercase(f), "control"), allfiles)
+        println("  $subdir → $group: $(length(sweep_files)) sweep + $(length(ctrl_files)) control")
 
-        for fname in h5files
-            try
-                h5open(joinpath(folder, fname), "r") do f
-                    frame = read(f["frame"])
+        ctrl_group = "$(group)_Control"
 
-                    cx = read_attr(f, "center_x", NaN)
-                    cy = read_attr(f, "center_y", NaN)
-                    if isnan(cx) || isnan(cy)
-                        idx = argmax(frame)
-                        cx, cy = Float64(idx[1]), Float64(idx[2])
+        for (fnames, dest) in ((sweep_files, group), (ctrl_files, ctrl_group))
+            for fname in fnames
+                try
+                    h5open(joinpath(folder, fname), "r") do f
+                        frame = read(f["frame"])
+
+                        cx = read_attr(f, "center_x", NaN)
+                        cy = read_attr(f, "center_y", NaN)
+                        if isnan(cx) || isnan(cy)
+                            idx = argmax(frame)
+                            cx, cy = Float64(idx[1]), Float64(idx[2])
+                        end
+
+                        frame_f = Float64.(frame)
+                        fwhm_x, fwhm_y, ellip = _fit_fwhm(frame_f)
+                        m = AngleMeasurement(
+                            read_attr(f, "hva1_daq_output"),
+                            read_attr(f, "hva1_monitor"),
+                            read_attr(f, "hva2_daq_output"),
+                            read_attr(f, "hva2_monitor"),
+                            cx, cy, fwhm_x, fwhm_y, ellip, frame_f
+                        )
+                        push!(get!(groups, dest, AngleMeasurement[]), m)
                     end
-
-                    frame_f = Float64.(frame)
-                    fwhm_x, fwhm_y, ellip = _fit_fwhm(frame_f)
-                    m = AngleMeasurement(
-                        read_attr(f, "hva1_daq_output"),
-                        read_attr(f, "hva1_monitor"),
-                        read_attr(f, "hva2_daq_output"),
-                        read_attr(f, "hva2_monitor"),
-                        cx, cy, fwhm_x, fwhm_y, ellip, frame_f
-                    )
-                    push!(get!(groups, group, AngleMeasurement[]), m)
+                    print(".")
+                catch e
+                    @warn "Skipping $fname: $e"
                 end
-                print(".")
-            catch e
-                @warn "Skipping $fname: $e"
             end
         end
         println()
@@ -448,18 +454,18 @@ function _xcorr_metrics(ref, frame)
 end
 
 function plot_xcorr_angle(groups, dir)
-    ctrl = get(groups, "Control", AngleMeasurement[])
-    if isempty(ctrl)
-        @warn "No Control group — skipping xcorr plot"
-        return
-    end
-    ref = mean(m.frame for m in ctrl)
-
     palette = Dict("ODE1" => (:steelblue, :circle), "ODE2" => (:tomato, :rect))
 
     for gkey in ("ODE1", "ODE2")
         meas = get(groups, gkey, AngleMeasurement[])
         isempty(meas) && continue
+
+        ctrl = get(groups, "$(gkey)_Control", AngleMeasurement[])
+        if isempty(ctrl)
+            @warn "No control for $gkey — skipping xcorr plot"
+            continue
+        end
+        ref = mean(m.frame for m in ctrl)
 
         c, mk  = palette[gkey]
         prefix = gkey == "ODE1" ? "HVA1" : "HVA2"
@@ -520,10 +526,7 @@ end
 # Video — one per ODE group, sorted by DAQ voltage
 # ============================================================================
 
-function make_angle_videos(groups, dir; seconds_per_frame = 2)
-    fps      = 10
-    n_repeat = max(1, round(Int, fps * seconds_per_frame))
-
+function make_angle_videos(groups, dir; framerate = 2)
     for gkey in ("ODE1", "ODE2")
         meas = get(groups, gkey, AngleMeasurement[])
         isempty(meas) && continue
@@ -549,15 +552,10 @@ function make_angle_videos(groups, dir; seconds_per_frame = 2)
               position = (0.98, 0.98), space = :relative,
               align = (:right, :top), color = :white, fontsize = 16, font = :bold)
 
-        println("Recording $outpath  ($(length(sorted)) frames, $(seconds_per_frame)s each)")
-        record(fig, outpath; framerate = fps) do io
-            for m in sorted
-                frame_obs[] = m.frame
-                label_obs[] = "$prefix DAQ: $(round(daq_fn(m), digits=3)) V"
-                for _ in 1:n_repeat
-                    recordframe!(io)
-                end
-            end
+        println("Recording $outpath  ($(length(sorted)) frames @ $(framerate) fps)")
+        record(fig, outpath, sorted; framerate = framerate) do m
+            frame_obs[] = m.frame
+            label_obs[] = "$prefix DAQ: $(round(daq_fn(m), digits=3)) V"
         end
         println("  Saved: $outpath")
     end
