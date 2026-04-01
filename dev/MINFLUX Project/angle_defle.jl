@@ -112,8 +112,8 @@ end
 # Angle calibration
 # ============================================================================
 # Physical constants — adjust to match your setup
-const PIXEL_SIZE_UM = 3.45           # camera pixel size in micrometres (µm)
-const EOD_DISTANCE_MM = 265.0        # distance from EOD to camera sensor in mm
+const PIXEL_SIZE_UM = 5.2         # camera pixel size in micrometres (µm)
+const EOD_DISTANCE_MM = 350.0        # distance from EOD to camera sensor in mm
 const SPEC_MRAD_PER_KV = 3.0         # fabricator spec: 3 mrad/kV = 0.003 mrad/V
 const SPEC_MRAD_PER_V  = SPEC_MRAD_PER_KV / 1000.0
 
@@ -127,37 +127,30 @@ function compute_angle_calibration(points, eod_name)
     cx       = [p.center_x for p in points]
     cy       = [p.center_y for p in points]
 
-    # ── linear fit: center = slope * voltage + intercept ──────────────────
-    function linfit(v, c)
-        A = hcat(v, ones(length(v)))
-        coeffs = A \ c
-        slope, intercept = coeffs[1], coeffs[2]
-        resid  = c .- (slope .* v .+ intercept)
-        ss_res = sum(resid .^ 2)
-        ss_tot = sum((c .- mean(c)) .^ 2)
-        r2     = 1.0 - ss_res / ss_tot
-        return slope, intercept, r2
-    end
+    # ── find beam positions at voltage extremes ────────────────────────────
+    imin = argmin(mon_v)
+    imax = argmax(mon_v)
 
-    pos = sqrt.(cx .^ 2 .+ cy .^ 2)   # total distance from image origin
+    Δcx     = cx[imax] - cx[imin]
+    Δcy     = cy[imax] - cy[imin]
+    Δpos_px = sqrt(Δcx^2 + Δcy^2)          # total displacement in pixels
+    ΔV      = mon_v[imax] - mon_v[imin]    # voltage range (V)
 
-    slope_cx,  _, r2_cx  = linfit(mon_v, cx)
-    slope_cy,  _, r2_cy  = linfit(mon_v, cy)
-    slope_pos, _, r2_pos = linfit(mon_v, pos)
+    # ── trigonometry: θ = atan(displacement / distance) ───────────────────
+    px_to_m  = PIXEL_SIZE_UM * 1e-6
+    dist_m   = EOD_DISTANCE_MM * 1e-3
+    Δpos_m   = Δpos_px * px_to_m
 
-    # ── unit conversion ────────────────────────────────────────────────────
-    # small-angle approx: θ (rad) = displacement (m) / distance (m)
-    px_to_m = PIXEL_SIZE_UM * 1e-6
-    dist_m  = EOD_DISTANCE_MM * 1e-3
+    θ_rad  = atan(Δpos_m / dist_m)
+    θ_mrad = θ_rad * 1e3
+    θ_deg  = θ_rad * 180.0 / π
 
-    function to_calibration(slope_px_per_V)
-        rad_per_V  = slope_px_per_V * px_to_m / dist_m
-        mrad_per_V = rad_per_V * 1e3
-        deg_per_V  = rad_per_V * 180.0 / π
-        V_per_mrad = abs(rad_per_V) > 0 ? 1.0 / mrad_per_V : NaN
-        V_per_deg  = abs(rad_per_V) > 0 ? 1.0 / deg_per_V  : NaN
-        return mrad_per_V, deg_per_V, V_per_mrad, V_per_deg
-    end
+    # ── calibration: angle per volt ────────────────────────────────────────
+    mrad_per_V = θ_mrad / ΔV
+    deg_per_V  = θ_deg  / ΔV
+    V_per_mrad = 1.0 / mrad_per_V
+    V_per_deg  = 1.0 / deg_per_V
+    pct_of_spec = abs(mrad_per_V) / SPEC_MRAD_PER_V * 100.0
 
     println("=" ^ 60)
     println("Angle Calibration — $eod_name ($hva_name)  [monitor ×20 = real output]")
@@ -165,21 +158,14 @@ function compute_angle_calibration(points, eod_name)
     println("  EOD→camera    : $(EOD_DISTANCE_MM) mm")
     println("  Fabricator spec: $(SPEC_MRAD_PER_KV) mrad/kV = $(SPEC_MRAD_PER_V) mrad/V")
     println()
-
-    for (label, slope, r2) in [
-            ("Monitor×20 → Center X",           slope_cx,  r2_cx),
-            ("Monitor×20 → Center Y",           slope_cy,  r2_cy),
-            ("Monitor×20 → Distance √(X²+Y²)",  slope_pos, r2_pos),
-        ]
-        mrad_V, deg_V, V_mrad, V_deg = to_calibration(slope)
-        pct_of_spec = abs(mrad_V) / SPEC_MRAD_PER_V * 100.0
-        println("  $label")
-        println("    Slope        : $(round(slope,        digits=4)) px/V   (R² = $(round(r2, digits=4)))")
-        println("    Deflection   : $(round(mrad_V,       digits=4)) mrad/V  |  $(round(deg_V, digits=4)) deg/V")
-        println("    Sensitivity  : $(round(V_mrad,       digits=4)) V/mrad  |  $(round(V_deg, digits=4)) V/deg")
-        println("    vs spec      : $(round(pct_of_spec,  digits=1))% of $(SPEC_MRAD_PER_KV) mrad/kV  ($(round(abs(mrad_V)*1000, digits=4)) mrad/kV measured)")
-        println()
-    end
+    println("  Voltage range : $(round(mon_v[imin], digits=3)) → $(round(mon_v[imax], digits=3)) V  (ΔV = $(round(ΔV, digits=3)) V)")
+    println("  Displacement  : $(round(Δpos_px, digits=1)) px  =  $(round(Δpos_m * 1e6, digits=2)) µm")
+    println("  Total angle   : $(round(θ_mrad, digits=4)) mrad  =  $(round(θ_deg, digits=4)) deg")
+    println()
+    println("  Calibration:")
+    println("    Deflection   : $(round(mrad_per_V, digits=4)) mrad/V  |  $(round(deg_per_V, digits=6)) deg/V")
+    println("    Sensitivity  : $(round(V_per_mrad, digits=4)) V/mrad  |  $(round(V_per_deg,  digits=4)) V/deg")
+    println("    vs spec      : $(round(pct_of_spec, digits=1))% of $(SPEC_MRAD_PER_KV) mrad/kV  ($(round(abs(mrad_per_V)*1000, digits=4)) mrad/kV measured)")
     println("=" ^ 60)
 end
 
@@ -206,3 +192,5 @@ for eod_name in eod_dirs
     plot_eod(points, eod_name)
     compute_angle_calibration(points, eod_name)
 end
+
+
