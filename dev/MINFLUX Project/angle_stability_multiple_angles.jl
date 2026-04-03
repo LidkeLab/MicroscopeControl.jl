@@ -87,6 +87,7 @@ struct StepStats
     Δr::Vector{Float64}        # px
     Δr_um::Vector{Float64}
     Δr_mrad::Vector{Float64}
+    frame_nums::Vector{Int}    # frame index within step (for time series)
 end
 
 function compute_step_stats(frames::Vector{StabFrame}, hva_num::Int)
@@ -104,6 +105,7 @@ function compute_step_stats(frames::Vector{StabFrame}, hva_num::Int)
         Δr  = sqrt.(Δcx .^ 2 .+ Δcy .^ 2)
         Δr_um   = Δr .* PIXEL_SIZE_UM
         Δr_mrad = atan.(Δr_um .* 1e-6 ./ (EOD_DISTANCE_MM * 1e-3)) .* 1e3
+        frame_nums = [f.frame_num for f in grp]
         push!(stats, StepStats(
             s, voltage, length(grp),
             mcx, mcy,
@@ -111,7 +113,7 @@ function compute_step_stats(frames::Vector{StabFrame}, hva_num::Int)
             maximum(cx) - minimum(cx),
             maximum(cy) - minimum(cy),
             maximum(Δr) - minimum(Δr),
-            Δcx, Δcy, Δr, Δr_um, Δr_mrad,
+            Δcx, Δcy, Δr, Δr_um, Δr_mrad, frame_nums,
         ))
     end
     return stats
@@ -237,6 +239,100 @@ function plot_stab_multiple(stats, ode_name)
     display(fig3)
     out3 = joinpath(DATA_DIR, "$(ode_name)_boxplot_angular_mrad.png")
     save(out3, fig3);  println("Saved: $out3")
+
+    # ── Figure 4: time series within each step ────────────────────────────────
+    ncols4 = min(3, length(stats))
+    nrows4 = ceil(Int, length(stats) / ncols4)
+    fig4 = Figure(size = (380 * ncols4, 280 * nrows4 + 60))
+    Label(fig4[0, 1:ncols4], "$ode_name — Position Time Series per Voltage Step";
+          fontsize = 15, font = :bold, tellwidth = false)
+
+    for (idx, s) in enumerate(stats)
+        row = (idx - 1) ÷ ncols4 + 1
+        col = (idx - 1) % ncols4 + 1
+        ax = Axis(fig4[row, col],
+                  title    = "$(round(s.voltage, digits=1)) V (n=$(s.n))",
+                  xlabel   = "Frame #",
+                  ylabel   = "Δ (px)")
+        lines!(ax, s.frame_nums, s.Δcx; color = :steelblue, linewidth = 1, label = "ΔX")
+        lines!(ax, s.frame_nums, s.Δcy; color = :tomato,     linewidth = 1, label = "ΔY")
+        hlines!(ax, [0.0]; color = :gray50, linestyle = :dash, linewidth = 1)
+        idx == 1 && axislegend(ax; position = :rt, labelsize = 9)
+    end
+
+    display(fig4)
+    out4 = joinpath(DATA_DIR, "$(ode_name)_timeseries_per_step.png")
+    save(out4, fig4);  println("Saved: $out4")
+
+    # ── Figure 5: stability metrics (std & p2p) vs voltage ────────────────────
+    fig5 = Figure(size = (800, 420))
+    Label(fig5[0, 1:2], "$ode_name — Stability Metrics vs Applied Voltage";
+          fontsize = 15, font = :bold, tellwidth = false)
+
+    ax5a = Axis(fig5[1, 1], title = "Std of Radial Displacement",
+                xlabel = "Voltage (V)", ylabel = "std Δr (px)")
+    ax5b = Axis(fig5[1, 2], title = "Peak-to-Peak Radial Displacement",
+                xlabel = "Voltage (V)", ylabel = "p2p Δr (px)")
+
+    scatterlines!(ax5a, voltages, [s.std_r  for s in stats]; color = c, markersize = 8)
+    scatterlines!(ax5b, voltages, [s.p2p_r  for s in stats]; color = c, markersize = 8)
+
+    display(fig5)
+    out5 = joinpath(DATA_DIR, "$(ode_name)_stability_vs_voltage.png")
+    save(out5, fig5);  println("Saved: $out5")
+
+    # ── Figure 6: 2D scatter ΔX vs ΔY per step ───────────────────────────────
+    ncols6 = min(3, length(stats))
+    nrows6 = ceil(Int, length(stats) / ncols6)
+    fig6 = Figure(size = (320 * ncols6, 310 * nrows6 + 60))
+    Label(fig6[0, 1:ncols6], "$ode_name — 2D Position Scatter (ΔX vs ΔY) per Voltage Step";
+          fontsize = 15, font = :bold, tellwidth = false)
+
+    for (idx, s) in enumerate(stats)
+        row = (idx - 1) ÷ ncols6 + 1
+        col = (idx - 1) % ncols6 + 1
+        ax = Axis(fig6[row, col],
+                  title  = "$(round(s.voltage, digits=1)) V",
+                  xlabel = "ΔX (px)", ylabel = "ΔY (px)",
+                  aspect = DataAspect())
+        scatter!(ax, s.Δcx, s.Δcy;
+                 color = 1:s.n, colormap = :plasma, markersize = 5)
+    end
+
+    display(fig6)
+    out6 = joinpath(DATA_DIR, "$(ode_name)_2d_scatter_per_step.png")
+    save(out6, fig6);  println("Saved: $out6")
+
+    # ── Figure 7: frame-to-frame displacement ─────────────────────────────────
+    fig7 = Figure(size = (1000, 420))
+    Label(fig7[0, 1:2], "$ode_name — Frame-to-Frame Displacement per Voltage Step";
+          fontsize = 15, font = :bold, tellwidth = false)
+
+    ax7a = Axis(fig7[1, 1], title = "Frame-to-Frame |Δr| box plot",
+                xlabel = "Voltage Step", ylabel = "|r(t+1) − r(t)| (px)")
+    ax7b = Axis(fig7[1, 2], title = "Mean Frame-to-Frame |Δr| vs Voltage",
+                xlabel = "Voltage (V)", ylabel = "Mean |Δr step| (px)")
+
+    ftf_grp  = Int[]
+    ftf_vals = Float64[]
+    mean_ftf = Float64[]
+    for (i, s) in enumerate(stats)
+        Δr_step = sqrt.(diff(s.Δcx) .^ 2 .+ diff(s.Δcy) .^ 2)
+        append!(ftf_grp,  fill(i, length(Δr_step)))
+        append!(ftf_vals, Δr_step)
+        push!(mean_ftf, mean(Δr_step))
+    end
+
+    boxplot!(ax7a, ftf_grp, ftf_vals; color = (c, 0.7), strokewidth = 1)
+    ax7a.xticks = (xs, vlabels)
+    ax7a.xticklabelrotation[] = π / 5
+    hlines!(ax7a, [0.0]; color = :gray50, linestyle = :dash, linewidth = 1)
+
+    scatterlines!(ax7b, voltages, mean_ftf; color = c, markersize = 8)
+
+    display(fig7)
+    out7 = joinpath(DATA_DIR, "$(ode_name)_frameto_frame_displacement.png")
+    save(out7, fig7);  println("Saved: $out7")
 end
 
 # ============================================================================
