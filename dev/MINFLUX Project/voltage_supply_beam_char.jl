@@ -1,27 +1,13 @@
 # voltage_supply_beam_char.jl
-# Based on beam_char_save.jl — adds HVA200 high-voltage amplifier control to the GUI.
+# Beam characterisation GUI with HVA200 high-voltage amplifier control.
 #
-# ── Package installation (run once in Julia REPL) ────────────────────────────
-# using Pkg
-# Pkg.activate("path/to/MicroscopeControl.jl/dev/implementation")
-# Pkg.add(url="https://github.com/LidkeLab/DAQMX.jl", rev="under_dev_v1")
-# Pkg.instantiate()
-# ─────────────────────────────────────────────────────────────────────────────
+# HVA200 hardware (NIDAQ Dev2, gain 20×):
+#   AO0 → HVA1  |  AI0 = HVA1 monitor  |  AI1 = AO0 loopback
+#   AO1 → HVA2  |  AI2 = HVA2 monitor  |  AI3 = AO1 loopback
 #
-# HVA200 hardware (via NIDAQ Dev2):
-#   Gain: 20x  →  1 V DAQ input = 20 V HVA output
-#   Monitor output ≈ DAQ input  (1/20 of actual output)
-#   HVA1: AO0 (write)  →  AI1 (DAQ loopback)  →  AI0 (monitor read)
-#   HVA2: AO1 (write)  →  AI3 (DAQ loopback)  →  AI2 (monitor read)
-#
-# New GUI controls (rows 7–9 of toggle_box):
-#   Row 7: HVA channel selector (HVA1 / HVA2)
-#   Row 8: Set voltage textbox (in HVA output scale, e.g. "20.0" = 20 V)
-#   Row 9: Apply Voltage button  |  Monitor readback label
-#
-# New HDF5 attributes saved:
-#   hva_channel         – "HVA1" or "HVA2"
-#   hva_voltage_actual  – last applied HVA output voltage (V, real scale ×20)
+# Two tabs:
+#   Beam Char  — live view, X/Y profiles, fit controls, voltage control, sweep
+#   Stability  — angle-stability sweep with per-frame HDF5 saving
 #
 # Keyboard shortcuts:
 #   Ctrl+S  Save  |  Ctrl+M  Mode  |  Ctrl+R  Refresh
@@ -68,8 +54,6 @@ function beam_characterization(
     # ── Figure / layout ──────────────────────────────────────────────────────
     fig = Figure(size = (1100, 1060), title = "Beam Characterization")
     ax2d = Axis(fig[1, 1], title = "2D Intensity Map", aspect = DataAspect())
-    #ax3d = Axis3(fig[1, 2], title = "3D Intensity Map", aspect = (1280, 1024, 400))
-    #ax3d.limits[] = (nothing, nothing, nothing, nothing, -50, nothing)
 
     info_box         = GridLayout(fig[1:4, 2])
     # ── Tab buttons (row 0) ───────────────────────────────────────────────────
@@ -105,17 +89,22 @@ function beam_characterization(
     # ── Toggles ──────────────────────────────────────────────────────────────
     Label(toggle_box[1, 1], "Approx Fit Curve")
     fit_toggle       = Toggle(toggle_box[1, 2], active = true)
-    Label(toggle_box[2, 1], "Real 3D data")
-    real_3d_toggle   = Toggle(toggle_box[2, 2], active = true)
-    Label(toggle_box[1, 3], "Difference Image")
-    diff_toggle      = Toggle(toggle_box[1, 4], active = false)
-    Label(toggle_box[2, 3], "Optimized Fit Curve")
-    optimized_toggle = Toggle(toggle_box[2, 4], active = false)
-    loading_label    = Label(toggle_box[3, 1:4], "Loading...", visible = false)
+    Label(toggle_box[1, 3], "Optimized Fit Curve")
+    optimized_toggle = Toggle(toggle_box[1, 4], active = false)
+    loading_label    = Label(toggle_box[2, 1:4], "Loading...", visible = false)
 
-    # ── Buttons (row 4) ──────────────────────────────────────────────────────
-    refresh_optim = Button(toggle_box[4, 1:2], label = "Refresh Optimizers")
-    save_button   = Button(toggle_box[4, 3:4], label = "Save Data & Image")
+    # ── Buttons (row 3) ──────────────────────────────────────────────────────
+    refresh_optim = Button(toggle_box[3, 1:2], label = "Refresh Optimizers")
+    save_button   = Button(toggle_box[3, 3:4], label = "Save Data & Image")
+
+    # ── Save directory (row 4) ───────────────────────────────────────────────
+    Label(toggle_box[4, 1], "Save Dir:")
+    save_dir_textbox = Textbox(toggle_box[4, 2:4],
+        placeholder = save_dir, stored_string = save_dir)
+    save_dir_obs = Observable(save_dir)
+    on(save_dir_textbox.stored_string) do s
+        isempty(strip(s)) || (save_dir_obs[] = s)
+    end
 
     # ── Filename (row 5) ─────────────────────────────────────────────────────
     Label(toggle_box[5, 1], "Filename:")
@@ -217,7 +206,7 @@ function beam_characterization(
     metric_label    = Label(data_box[3, 1], "Extinction Ratio*: N/A")
     Label(data_box[4, 1], "* = optimized values. Refresh to update.")
     Label(data_box[5, 1],
-        "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh  Ctrl+N=Filename  Ctrl+P=Position  Ctrl+1=HVA1  Ctrl+2=HVA2  Ctrl+V=Apply",
+        "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh  Ctrl+N=Filename  Ctrl+P=Position  Ctrl+V=Apply",
         fontsize = 11)
 
     # ── Observables ──────────────────────────────────────────────────────────
@@ -235,7 +224,6 @@ function beam_characterization(
     ideal_z    = Observable(zeros(size(frame_obs[])))
     optimized  = Observable(zeros(size(frame_obs[])))
     r_squared  = Observable(0.0)
-    diff_img   = Observable(zeros(size(frame_obs[])))
     y_prof           = Observable(zeros(ny))
     x_prof           = Observable(zeros(nx))
     x_prof_ideal     = Observable(zeros(nx))
@@ -389,7 +377,7 @@ function beam_characterization(
                 # ── auto-save this step ────────────────────────────────────
                 timestamp  = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
                 step_label = "$(sweep_pfx)_step$(lpad(i, 3, '0'))_$(round(v, digits=4))V"
-                h5_path    = joinpath(save_dir, "$(step_label)_$(timestamp).h5")
+                h5_path    = joinpath(save_dir_obs[],"$(step_label)_$(timestamp).h5")
                 frame_data = collect(Float64, frame_obs[])
                 cx_val     = Float64(cx[]);  cy_val = Float64(cy[])
 
@@ -498,7 +486,7 @@ function beam_characterization(
 
                     timestamp  = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
                     fname      = "$(stab_pfx)_step$(lpad(i,3,'0'))_frame$(lpad(j,4,'0'))_$(round(v,digits=4))V_$(timestamp).h5"
-                    h5_path    = joinpath(save_dir, fname)
+                    h5_path    = joinpath(save_dir_obs[],fname)
                     frame_data = collect(Float64, frame_obs[])
                     cx_val     = Float64(cx[]);  cy_val = Float64(cy[])
 
@@ -548,14 +536,13 @@ function beam_characterization(
         if isempty(base_name)
             base_name = "beam_characterization"
         end
-        h5_path  = joinpath(save_dir, "$(base_name)_$timestamp.h5")
-        img_path = joinpath(save_dir, "$(base_name)_$timestamp.png")
+        h5_path  = joinpath(save_dir_obs[],"$(base_name)_$timestamp.h5")
+        img_path = joinpath(save_dir_obs[],"$(base_name)_$timestamp.png")
 
         # snapshot all data as plain Arrays
         frame_data  = collect(Float64, frame_obs[])
         ideal_data  = collect(Float64, ideal_z[])
         optim_data  = collect(Float64, optimized[])
-        diff_data   = collect(Float64, diff_img[])
         xprof_data  = collect(Float64, x_prof[])
         yprof_data  = collect(Float64, y_prof[])
         bt          = string(beam_type[])
@@ -602,7 +589,6 @@ function beam_characterization(
                     if any(optim_data .!= 0)
                         write(h5file, "optimized_fit", optim_data)
                     end
-                    write(h5file, "difference",   diff_data)
                     write(h5file, "x_profile",    xprof_data)
                     write(h5file, "y_profile",    yprof_data)
                     # metadata
@@ -711,20 +697,12 @@ function beam_characterization(
             C .* exp.((-2 .* r_grid.^2) ./ (ω.^2)) .+ bg
         end
     end
-    diff_img = lift(ideal_z, frame_obs) do ideal_z, frame_obs
-        ideal_z .- frame_obs
-    end
-
     # ── Plots ─────────────────────────────────────────────────────────────────
     photon_count_label = Label(fig[1, 1, Top()],
         "Min Photon Count: 0  Max Photon Count: 0", fontsize = 14, halign = :left, padding = (5, 0, 0, 0))
 
     heatmap!(ax2d, frame_obs, colormap = :inferno)
     scatter!(ax2d, cx, cy, color = :teal, markersize = 10)
-   # surface!(ax3d, x, y, frame_obs;   colormap = :viridis,          visible = real_3d_toggle.active)
-    #surface!(ax3d, x, y, ideal_z;     colormap = (:greys, 0.6),     overdraw = false, visible = fit_toggle.active)
-    #surface!(ax3d, x, y, diff_img;    colormap = (:bone, 0.6),      overdraw = true,  visible = diff_toggle.active)
-    #surface!(ax3d, x, y, optimized;   colormap = (:blues, 0.6),     overdraw = false, visible = optimized_toggle.active)
     lines!(y_profile_ax, y_prof,       color = :red)
     lines!(x_profile_ax, x_prof,       color = :blue)
     lines!(y_profile_ax, y_prof_ideal, color = :grey,        visible = fit_toggle.active)
