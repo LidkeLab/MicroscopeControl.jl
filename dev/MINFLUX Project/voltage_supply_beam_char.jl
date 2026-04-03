@@ -66,7 +66,7 @@ function beam_characterization(
     end
 
     # ── Figure / layout ──────────────────────────────────────────────────────
-    fig = Figure(size = (1100, 1060), title = "Beam Characterization")
+    fig = Figure(size = (1100, 1300), title = "Beam Characterization")
     ax2d = Axis(fig[1, 1], title = "2D Intensity Map", aspect = DataAspect())
     ax3d = Axis3(fig[1, 2], title = "3D Intensity Map", aspect = (1280, 1024, 400))
     ax3d.limits[] = (nothing, nothing, nothing, nothing, -50, nothing)
@@ -155,6 +155,34 @@ function beam_characterization(
 
     sweep_start_button  = Button(toggle_box[16, 1:3], label = "Start Sweep")
     sweep_status_label  = Label(toggle_box[16, 4], "Idle")
+
+    # ── Angle Stability (rows 17–23) ──────────────────────────────────────────
+    Label(toggle_box[17, 1:4], "── Angle Stability ──"; fontsize = 12, font = :bold, tellwidth = false)
+
+    Label(toggle_box[18, 1], "Channel:")
+    stab_chan_menu     = Menu(toggle_box[18, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
+    Label(toggle_box[18, 3], "File prefix:")
+    stab_name_textbox  = Textbox(toggle_box[18, 4], placeholder = "stability", stored_string = "stability")
+
+    Label(toggle_box[19, 1], "V start:")
+    stab_vstart_textbox = Textbox(toggle_box[19, 2], placeholder = "0.0",  stored_string = "0.0")
+    Label(toggle_box[19, 3], "V stop:")
+    stab_vstop_textbox  = Textbox(toggle_box[19, 4], placeholder = "1.0",  stored_string = "1.0")
+
+    Label(toggle_box[20, 1], "Steps:")
+    stab_steps_textbox  = Textbox(toggle_box[20, 2], placeholder = "5",    stored_string = "5")
+    Label(toggle_box[20, 3], "Settle (s):")
+    stab_settle_textbox = Textbox(toggle_box[20, 4], placeholder = "1.0",  stored_string = "1.0")
+
+    Label(toggle_box[21, 1], "Dwell (s):")
+    stab_dwell_textbox  = Textbox(toggle_box[21, 2], placeholder = "10.0", stored_string = "10.0")
+    Label(toggle_box[21, 3], "Frames/pos:")
+    stab_frames_textbox = Textbox(toggle_box[21, 4], placeholder = "50",   stored_string = "50")
+
+    stab_start_button  = Button(toggle_box[22, 1:3], label = "Start Stability")
+    stab_status_label  = Label(toggle_box[22, 4], "Idle")
+
+    stab_running = Observable(false)
 
     # Observables tracking the last applied/read HVA values
     current_hva1_setpoint = Observable(0.0)   # voltage applied by user (DAQ V)
@@ -377,6 +405,121 @@ function beam_characterization(
             end
             sweep_running[]           = false
             sweep_start_button.label  = "Start Sweep"
+        end
+    end
+
+    # ── Angle Stability handler ───────────────────────────────────────────────
+    on(stab_start_button.clicks) do _
+        if stab_running[]
+            stab_running[] = false
+            stab_start_button.label = "Start Stability"
+            stab_status_label.text  = "Stopped."
+            return
+        end
+
+        !daq_ok && (stab_status_label.text = "DAQ not available."; return)
+
+        vstart   = tryparse(Float64, stab_vstart_textbox.displayed_string[])
+        vstop    = tryparse(Float64, stab_vstop_textbox.displayed_string[])
+        nsteps   = tryparse(Int,     stab_steps_textbox.displayed_string[])
+        settle   = tryparse(Float64, stab_settle_textbox.displayed_string[])
+        dwell    = tryparse(Float64, stab_dwell_textbox.displayed_string[])
+        nframes  = tryparse(Int,     stab_frames_textbox.displayed_string[])
+        if any(isnothing, (vstart, vstop, nsteps, settle, dwell, nframes))
+            stab_status_label.text = "Invalid params."
+            return
+        end
+        nsteps  = max(nsteps,  2);  nframes = max(nframes, 1)
+        settle  = max(settle,  0.0); dwell   = max(dwell,  0.0)
+
+        voltages   = range(vstart, vstop; length = nsteps)
+        stab_chan  = stab_chan_menu.selection[]
+        stab_pfx   = stab_name_textbox.stored_string[]
+        isempty(stab_pfx) && (stab_pfx = "stability")
+        frame_interval = nframes > 1 ? dwell / (nframes - 1) : dwell
+
+        stab_running[]          = true
+        stab_start_button.label = "Stop Stability"
+        stab_status_label.text  = "Running…"
+
+        @async begin
+            for (i, v) in enumerate(voltages)
+                !stab_running[] && break
+
+                # ── apply voltage for this angle step ──────────────────────
+                try
+                    v1 = (stab_chan == "HVA1" || stab_chan == "Both") ? v : Float64(current_hva1_setpoint[])
+                    v2 = (stab_chan == "HVA2" || stab_chan == "Both") ? v : Float64(current_hva2_setpoint[])
+                    write_scalar(dao0, v1)
+                    write_scalar(dao1, v2)
+                    current_hva1_setpoint[] = v1
+                    current_hva2_setpoint[] = v2
+                    sleep(settle)
+                    data = read(dai)
+                    hva1_mon = data[1];  ao0_loop = data[2]
+                    hva2_mon = data[3];  ao1_loop = data[4]
+                    current_hva1_monitor[] = hva1_mon
+                    current_hva2_monitor[] = hva2_mon
+                    current_ao0_read[]     = ao0_loop
+                    current_ao1_read[]     = ao1_loop
+                    hva1_monitor_label.text = "Mon HVA1: $(round(hva1_mon, digits=3)) V"
+                    hva2_monitor_label.text = "Mon HVA2: $(round(hva2_mon, digits=3)) V"
+                    hva1_loop_label.text    = "Loop HVA1: $(round(ao0_loop, digits=3)) V"
+                    hva2_loop_label.text    = "Loop HVA2: $(round(ao1_loop, digits=3)) V"
+                catch e
+                    @error "Stability step $i: voltage apply failed"
+                    showerror(stdout, e, catch_backtrace())
+                    continue
+                end
+
+                # ── record nframes at this angle ───────────────────────────
+                for j in 1:nframes
+                    !stab_running[] && break
+
+                    stab_status_label.text = "Angle $i/$(length(voltages)) · Frame $j/$nframes  $(round(v, digits=4)) V"
+
+                    timestamp  = Dates.format(now(), "yyyy-mm-dd_HHMMSS")
+                    fname      = "$(stab_pfx)_step$(lpad(i,3,'0'))_frame$(lpad(j,4,'0'))_$(round(v,digits=4))V_$(timestamp).h5"
+                    h5_path    = joinpath(save_dir, fname)
+                    frame_data = collect(Float64, frame_obs[])
+                    cx_val     = Float64(cx[]);  cy_val = Float64(cy[])
+
+                    try
+                        h5open(h5_path, "w") do h5file
+                            write(h5file, "frame", frame_data)
+                            attrs(h5file)["beam_type"]           = string(beam_type[])
+                            attrs(h5file)["center_x"]            = cx_val
+                            attrs(h5file)["center_y"]            = cy_val
+                            attrs(h5file)["timestamp"]           = timestamp
+                            attrs(h5file)["sweep_step"]          = i
+                            attrs(h5file)["sweep_voltage"]       = Float64(v)
+                            attrs(h5file)["stability_frame"]     = j
+                            attrs(h5file)["frames_per_position"] = nframes
+                            attrs(h5file)["dwell_time"]          = dwell
+                            attrs(h5file)["settle_time"]         = settle
+                            attrs(h5file)["sweep_channel"]       = stab_chan
+                            attrs(h5file)["hva1_setpoint"]       = Float64(current_hva1_setpoint[])
+                            attrs(h5file)["hva2_setpoint"]       = Float64(current_hva2_setpoint[])
+                            attrs(h5file)["hva1_monitor"]        = Float64(current_hva1_monitor[])
+                            attrs(h5file)["hva2_monitor"]        = Float64(current_hva2_monitor[])
+                            attrs(h5file)["hva1_daq_output"]     = Float64(current_ao0_read[])
+                            attrs(h5file)["hva2_daq_output"]     = Float64(current_ao1_read[])
+                        end
+                        println("Stability $i/$j saved: $h5_path")
+                    catch e
+                        @error "Stability step $i frame $j: save failed"
+                        showerror(stdout, e, catch_backtrace())
+                    end
+
+                    j < nframes && sleep(frame_interval)
+                end
+            end
+
+            if stab_running[]
+                stab_status_label.text = "Done ($(length(voltages)) angles)."
+            end
+            stab_running[]          = false
+            stab_start_button.label = "Start Stability"
         end
     end
 
