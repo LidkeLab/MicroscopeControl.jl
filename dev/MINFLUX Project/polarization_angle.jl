@@ -215,39 +215,23 @@ end
 
 println("Scanning: $DATA_DIR\n")
 
-pol_dirs = sort(filter(d -> isdir(joinpath(DATA_DIR, d)), readdir(DATA_DIR)))
-println("Found polarization folders: $(pol_dirs)\n")
-
-# Dict: hva_num => Dict(pol_label => Vector{SweepPoint})
+# Structure: DATA_DIR/EOD34/<pol>/*.h5   (HVA1)
+#            DATA_DIR/EOD35/<pol>/*.h5   (HVA2)
 all_hva1 = Dict{String, Vector{SweepPoint}}()
 all_hva2 = Dict{String, Vector{SweepPoint}}()
 
-for pol in pol_dirs
-    pol_path = joinpath(DATA_DIR, pol)
-    println("Loading \"$pol\"…")
+for eod_dir in sort(filter(d -> isdir(joinpath(DATA_DIR, d)), readdir(DATA_DIR)))
+    eod_path = joinpath(DATA_DIR, eod_dir)
+    hva_num  = occursin("34", eod_dir) ? 1 :
+               occursin("35", eod_dir) ? 2 : continue
+    dict     = hva_num == 1 ? all_hva1 : all_hva2
+    println("$eod_dir → HVA$hva_num")
 
-    eod_subdirs = sort(filter(d -> isdir(joinpath(pol_path, d)), readdir(pol_path)))
-
-    if isempty(eod_subdirs)
-        @warn "No subfolders in $pol — skipping"
-        continue
-    end
-
-    for eod in eod_subdirs
-        eod_path = joinpath(pol_path, eod)
-        if occursin("34", eod)
-            print("  $eod → HVA1: ")
-            pts = load_eod_folder(eod_path)
-            all_hva1[pol] = pts
-            println("  $(length(pts)) points loaded")
-        elseif occursin("35", eod)
-            print("  $eod → HVA2: ")
-            pts = load_eod_folder(eod_path)
-            all_hva2[pol] = pts
-            println("  $(length(pts)) points loaded")
-        else
-            @warn "Unrecognised subfolder (skipping): $eod"
-        end
+    for pol in sort(filter(d -> isdir(joinpath(eod_path, d)), readdir(eod_path)))
+        print("  $pol: ")
+        pts = load_eod_folder(joinpath(eod_path, pol))
+        dict[pol] = pts
+        println("  $(length(pts)) points")
     end
     println()
 end
