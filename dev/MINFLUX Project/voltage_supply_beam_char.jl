@@ -37,7 +37,7 @@ function beam_characterization(
     camera,
     framerate::Float64 = 5.0,
     exposure_time::Float64 = 0.01,
-    save_dir::String = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom",
+    save_dir::String = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom\\angle_stability\\apr_4/EOD35",
 )
 
     # ── Camera ───────────────────────────────────────────────────────────────
@@ -66,167 +66,159 @@ function beam_characterization(
     end
 
     # ── Figure / layout ──────────────────────────────────────────────────────
-    fig = Figure(size = (1300, 900), title = "Beam Characterization")
+    fig = Figure(size = (1100, 1060), title = "Beam Characterization")
+    ax2d = Axis(fig[1, 1], title = "2D Intensity Map", aspect = DataAspect())
+    #ax3d = Axis3(fig[1, 2], title = "3D Intensity Map", aspect = (1280, 1024, 400))
+    #ax3d.limits[] = (nothing, nothing, nothing, nothing, -50, nothing)
 
-    # Tab bar (row 1, spans both columns)
-    tab_bar  = GridLayout(fig[1, 1:2])
-    tab1_btn = Button(tab_bar[1, 1], label = "Beam Char",       tellwidth = false)
-    tab2_btn = Button(tab_bar[1, 2], label = "Voltage Sweep",   tellwidth = false)
-    tab3_btn = Button(tab_bar[1, 3], label = "Angle Stability", tellwidth = false)
-    rowsize!(fig.layout, 1, Fixed(40))
-    colsize!(fig.layout, 1, Relative(0.55))
-    colsize!(fig.layout, 2, Relative(0.45))
-
-    # Left panel — live view always shown; profiles shown on Tab 1 only
-    left_panel   = GridLayout(fig[2, 1])
-    ax2d = Axis(left_panel[1, 1], title = "2D Intensity Map", aspect = DataAspect())
-
-    profile_box  = GridLayout(left_panel[2, 1])
-    y_profile_ax = Axis(profile_box[2, 1], title = "Y Profile",
+    info_box         = GridLayout(fig[1:4, 2])
+    # ── Tab buttons (row 0) ───────────────────────────────────────────────────
+    tab_row          = GridLayout(info_box[0, 1])
+    beam_char_tab_btn = Button(tab_row[1, 1], label = "Beam Char", tellwidth = false)
+    stab_tab_btn      = Button(tab_row[1, 2], label = "Stability",  tellwidth = false)
+    toggle_box       = GridLayout(info_box[1, 1])
+    data_box         = GridLayout(info_box[2, 1])
+    stab_box         = GridLayout(info_box[3:4, 1])
+    line_profile_box = GridLayout(fig[2, 1])
+    y_profile_ax = Axis(line_profile_box[2, 1], title = "Y Profile",
                         xticklabelsize = 9, yticklabelsize = 9, titlesize = 10)
     y_profile_ax.limits[] = (0, 1080, 0, 100)
-    x_profile_ax = Axis(profile_box[1, 1], title = "X Profile",
+    x_profile_ax = Axis(line_profile_box[1, 1], title = "X Profile",
                         xticklabelsize = 9, yticklabelsize = 9, titlesize = 10)
     x_profile_ax.limits[] = (0, 1280, 0, 100)
-    rowsize!(profile_box, 1, Fixed(80))
-    rowsize!(profile_box, 2, Fixed(80))
 
-    # Right panel — tab-specific content stacked vertically; only one shown at a time
-    right_panel = GridLayout(fig[2, 2])
+    colsize!(fig.layout, 1, Relative(0.5))
+    colsize!(fig.layout, 2, Relative(0.5))
+    rowsize!(fig.layout, 1, Relative(0.5))
+    rowsize!(fig.layout, 2, Relative(0.5))
+    rowsize!(line_profile_box, 1, Fixed(60))
+    rowsize!(line_profile_box, 2, Fixed(60))
 
-    # ── Tab 1: 3D view + beam char controls ──────────────────────────────────
-    tab1_right = GridLayout(right_panel[1, 1])
-    ax3d = Axis3(tab1_right[1, 1], title = "3D Intensity Map", aspect = (1280, 1024, 400))
-    ax3d.limits[] = (nothing, nothing, nothing, nothing, -50, nothing)
-    rowsize!(tab1_right, 1, Relative(0.45))
-
-    tab1_ctrl = GridLayout(tab1_right[2, 1])
-
+    # ── Beam type selector ───────────────────────────────────────────────────
     beam_type = Observable(:donut)
-    Label(tab1_ctrl[0, 1], "Beam Profile:")
-    beam_menu = Menu(tab1_ctrl[0, 2:4], options = ["Donut", "Gaussian"])
+    Label(toggle_box[0, 1], "Beam Profile:")
+    beam_menu = Menu(toggle_box[0, 2:4], options = ["Donut", "Gaussian"])
     on(beam_menu.selection) do sel
         beam_type[] = sel == "Donut" ? :donut : :gaussian
     end
 
-    Label(tab1_ctrl[1, 1], "Approx Fit Curve")
-    fit_toggle       = Toggle(tab1_ctrl[1, 2], active = true)
-    Label(tab1_ctrl[1, 3], "Difference Image")
-    diff_toggle      = Toggle(tab1_ctrl[1, 4], active = false)
-    Label(tab1_ctrl[2, 1], "Real 3D data")
-    real_3d_toggle   = Toggle(tab1_ctrl[2, 2], active = true)
-    Label(tab1_ctrl[2, 3], "Optimized Fit Curve")
-    optimized_toggle = Toggle(tab1_ctrl[2, 4], active = false)
-    loading_label    = Label(tab1_ctrl[3, 1:4], "Loading...", visible = false)
+    # ── Toggles ──────────────────────────────────────────────────────────────
+    Label(toggle_box[1, 1], "Approx Fit Curve")
+    fit_toggle       = Toggle(toggle_box[1, 2], active = true)
+    Label(toggle_box[2, 1], "Real 3D data")
+    real_3d_toggle   = Toggle(toggle_box[2, 2], active = true)
+    Label(toggle_box[1, 3], "Difference Image")
+    diff_toggle      = Toggle(toggle_box[1, 4], active = false)
+    Label(toggle_box[2, 3], "Optimized Fit Curve")
+    optimized_toggle = Toggle(toggle_box[2, 4], active = false)
+    loading_label    = Label(toggle_box[3, 1:4], "Loading...", visible = false)
 
-    refresh_optim = Button(tab1_ctrl[4, 1:2], label = "Refresh Optimizers")
-    save_button   = Button(tab1_ctrl[4, 3:4], label = "Save Data & Image")
+    # ── Buttons (row 4) ──────────────────────────────────────────────────────
+    refresh_optim = Button(toggle_box[4, 1:2], label = "Refresh Optimizers")
+    save_button   = Button(toggle_box[4, 3:4], label = "Save Data & Image")
 
-    Label(tab1_ctrl[5, 1], "Filename:")
-    filename_textbox = Textbox(tab1_ctrl[5, 2:4],
+    # ── Filename (row 5) ─────────────────────────────────────────────────────
+    Label(toggle_box[5, 1], "Filename:")
+    filename_textbox = Textbox(toggle_box[5, 2:4],
         placeholder = "beam_characterization", stored_string = "beam_characterization")
-    Label(tab1_ctrl[6, 1], "Position:")
-    position_textbox = Textbox(tab1_ctrl[6, 2:4], placeholder = "0.0", stored_string = "0.0")
 
-    Label(tab1_ctrl[7, 1], "HVA1 (V):")
-    hva1_textbox = Textbox(tab1_ctrl[7, 2:4], placeholder = "0.0", stored_string = "0.0")
-    Label(tab1_ctrl[8, 1], "HVA2 (V):")
-    hva2_textbox = Textbox(tab1_ctrl[8, 2:4], placeholder = "0.0", stored_string = "0.0")
-    apply_voltage_button = Button(tab1_ctrl[9, 1:4], label = "Apply Voltage")
-    hva1_monitor_label   = Label(tab1_ctrl[10, 1:2], "Mon HVA1: -- V")
-    hva2_monitor_label   = Label(tab1_ctrl[10, 3:4], "Mon HVA2: -- V")
-    hva1_loop_label      = Label(tab1_ctrl[11, 1:2], "Loop HVA1: -- V")
-    hva2_loop_label      = Label(tab1_ctrl[11, 3:4], "Loop HVA2: -- V")
+    # ── Position (row 6) ─────────────────────────────────────────────────────
+    Label(toggle_box[6, 1], "Position:")
+    position_textbox = Textbox(toggle_box[6, 2:4],
+        placeholder = "0.0", stored_string = "0.0")
 
-    approx_r2_label = Label(tab1_ctrl[12, 1:4], "Approximate Fit R^2: N/A")
-    optim_r2_label  = Label(tab1_ctrl[13, 1:4], "Optimized Fit R^2*: N/A")
-    metric_label    = Label(tab1_ctrl[14, 1:4], "Extinction Ratio*: N/A")
-    Label(tab1_ctrl[15, 1:4], "* optimized values. Ctrl+S=Save  Ctrl+V=Apply  Ctrl+R=Refresh",
-          fontsize = 11)
+    # ── HVA200 voltage control (rows 7–10) ───────────────────────────────────
+    Label(toggle_box[7, 1], "HVA1 (V):")
+    hva1_textbox = Textbox(toggle_box[7, 2:4], placeholder = "0.0", stored_string = "0.0")
 
-    # ── Tab 2: voltage sweep controls ────────────────────────────────────────
-    tab2_right = GridLayout(right_panel[2, 1])
-    Label(tab2_right[0, 1:4], "── Voltage Sweep ──"; fontsize = 13, font = :bold, tellwidth = false)
+    Label(toggle_box[8, 1], "HVA2 (V):")
+    hva2_textbox = Textbox(toggle_box[8, 2:4], placeholder = "0.0", stored_string = "0.0")
 
-    Label(tab2_right[1, 1], "Channel:")
-    sweep_chan_menu = Menu(tab2_right[1, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
-    Label(tab2_right[1, 3], "File prefix:")
-    sweep_name_textbox = Textbox(tab2_right[1, 4], placeholder = "sweep", stored_string = "sweep")
+    apply_voltage_button = Button(toggle_box[9, 1:4], label = "Apply Voltage")
+    hva1_monitor_label   = Label(toggle_box[10, 1:2], "Mon HVA1: -- V")
+    hva2_monitor_label   = Label(toggle_box[10, 3:4], "Mon HVA2: -- V")
+    hva1_loop_label      = Label(toggle_box[11, 1:2], "Loop HVA1: -- V")
+    hva2_loop_label      = Label(toggle_box[11, 3:4], "Loop HVA2: -- V")
 
-    Label(tab2_right[2, 1], "V start:")
-    sweep_vstart_textbox = Textbox(tab2_right[2, 2], placeholder = "0.0", stored_string = "0.0")
-    Label(tab2_right[2, 3], "V stop:")
-    sweep_vstop_textbox  = Textbox(tab2_right[2, 4], placeholder = "1.0", stored_string = "1.0")
+    # ── Voltage sweep (rows 12–16) ────────────────────────────────────────────
+    Label(toggle_box[12, 1:4], "── Voltage Sweep ──"; fontsize = 12, font = :bold, tellwidth = false)
 
-    Label(tab2_right[3, 1], "Steps:")
-    sweep_steps_textbox  = Textbox(tab2_right[3, 2], placeholder = "10",  stored_string = "10")
-    Label(tab2_right[3, 3], "Settle (s):")
-    sweep_settle_textbox = Textbox(tab2_right[3, 4], placeholder = "1.0", stored_string = "1.0")
+    Label(toggle_box[13, 1], "Channel:")
+    sweep_chan_menu = Menu(toggle_box[13, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
+    Label(toggle_box[13, 3], "File prefix:")
+    sweep_name_textbox = Textbox(toggle_box[13, 4], placeholder = "sweep", stored_string = "sweep")
 
-    sweep_start_button = Button(tab2_right[4, 1:3], label = "Start Sweep")
-    sweep_status_label = Label(tab2_right[4, 4], "Idle")
+    Label(toggle_box[14, 1], "V start:")
+    sweep_vstart_textbox = Textbox(toggle_box[14, 2], placeholder = "0.0", stored_string = "0.0")
+    Label(toggle_box[14, 3], "V stop:")
+    sweep_vstop_textbox  = Textbox(toggle_box[14, 4], placeholder = "1.0", stored_string = "1.0")
 
-    # ── Tab 3: angle stability controls ──────────────────────────────────────
-    tab3_right = GridLayout(right_panel[3, 1])
-    Label(tab3_right[0, 1:4], "── Angle Stability ──"; fontsize = 13, font = :bold, tellwidth = false)
+    Label(toggle_box[15, 1], "Steps:")
+    sweep_steps_textbox  = Textbox(toggle_box[15, 2], placeholder = "10",  stored_string = "10")
+    Label(toggle_box[15, 3], "Settle (s):")
+    sweep_settle_textbox = Textbox(toggle_box[15, 4], placeholder = "1.0", stored_string = "1.0")
 
-    Label(tab3_right[1, 1], "Channel:")
-    stab_chan_menu    = Menu(tab3_right[1, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
-    Label(tab3_right[1, 3], "File prefix:")
-    stab_name_textbox = Textbox(tab3_right[1, 4], placeholder = "stability", stored_string = "stability")
+    sweep_start_button  = Button(toggle_box[16, 1:3], label = "Start Sweep")
+    sweep_status_label  = Label(toggle_box[16, 4], "Idle")
 
-    Label(tab3_right[2, 1], "V start:")
-    stab_vstart_textbox = Textbox(tab3_right[2, 2], placeholder = "0.0",  stored_string = "0.0")
-    Label(tab3_right[2, 3], "V stop:")
-    stab_vstop_textbox  = Textbox(tab3_right[2, 4], placeholder = "1.0",  stored_string = "1.0")
+    # ── Angle Stability tab (stab_box, initially hidden) ──────────────────────
+    Label(stab_box[0, 1:4], "── Angle Stability ──"; fontsize = 12, font = :bold, tellwidth = false)
 
-    Label(tab3_right[3, 1], "Steps:")
-    stab_steps_textbox  = Textbox(tab3_right[3, 2], placeholder = "5",    stored_string = "5")
-    Label(tab3_right[3, 3], "Settle (s):")
-    stab_settle_textbox = Textbox(tab3_right[3, 4], placeholder = "1.0",  stored_string = "1.0")
+    Label(stab_box[1, 1], "Channel:")
+    stab_chan_menu     = Menu(stab_box[1, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
+    Label(stab_box[1, 3], "File prefix:")
+    stab_name_textbox  = Textbox(stab_box[1, 4], placeholder = "stability", stored_string = "stability")
 
-    Label(tab3_right[4, 1], "Dwell (s):")
-    stab_dwell_textbox  = Textbox(tab3_right[4, 2], placeholder = "10.0", stored_string = "10.0")
-    Label(tab3_right[4, 3], "Frames/pos:")
-    stab_frames_textbox = Textbox(tab3_right[4, 4], placeholder = "50",   stored_string = "50")
+    Label(stab_box[2, 1], "V start:")
+    stab_vstart_textbox = Textbox(stab_box[2, 2], placeholder = "0.0",  stored_string = "0.0")
+    Label(stab_box[2, 3], "V stop:")
+    stab_vstop_textbox  = Textbox(stab_box[2, 4], placeholder = "1.0",  stored_string = "1.0")
 
-    stab_start_button = Button(tab3_right[5, 1:3], label = "Start Stability")
-    stab_status_label = Label(tab3_right[5, 4], "Idle")
+    Label(stab_box[3, 1], "Steps:")
+    stab_steps_textbox  = Textbox(stab_box[3, 2], placeholder = "5",    stored_string = "5")
+    Label(stab_box[3, 3], "Settle (s):")
+    stab_settle_textbox = Textbox(stab_box[3, 4], placeholder = "1.0",  stored_string = "1.0")
 
-    # Initially show Tab 1; hide Tab 2 and Tab 3
-    rowsize!(right_panel, 2, Fixed(0))
-    rowsize!(right_panel, 3, Fixed(0))
+    Label(stab_box[4, 1], "Dwell (s):")
+    stab_dwell_textbox  = Textbox(stab_box[4, 2], placeholder = "10.0", stored_string = "10.0")
+    Label(stab_box[4, 3], "Frames/pos:")
+    stab_frames_textbox = Textbox(stab_box[4, 4], placeholder = "50",   stored_string = "50")
 
-    stab_running  = Observable(false)
-    sweep_running = Observable(false)
+    stab_start_button  = Button(stab_box[5, 1:3], label = "Start Stability")
+    stab_status_label  = Label(stab_box[5, 4], "Idle")
+
+    # Initially hide the stability tab; show beam char tab
+    rowsize!(info_box, 3, Fixed(0))
+
+    stab_running = Observable(false)
 
     # ── Tab switching ─────────────────────────────────────────────────────────
-    on(tab1_btn.clicks) do _
-        rowsize!(right_panel, 1, Auto())
-        rowsize!(right_panel, 2, Fixed(0))
-        rowsize!(right_panel, 3, Fixed(0))
-        rowsize!(left_panel, 2, Auto())    # show profiles
+    on(beam_char_tab_btn.clicks) do _
+        rowsize!(info_box, 1, Auto())
+        rowsize!(info_box, 3, Fixed(0))
     end
-    on(tab2_btn.clicks) do _
-        rowsize!(right_panel, 1, Fixed(0))
-        rowsize!(right_panel, 2, Auto())
-        rowsize!(right_panel, 3, Fixed(0))
-        rowsize!(left_panel, 2, Fixed(0))  # hide profiles
-    end
-    on(tab3_btn.clicks) do _
-        rowsize!(right_panel, 1, Fixed(0))
-        rowsize!(right_panel, 2, Fixed(0))
-        rowsize!(right_panel, 3, Auto())
-        rowsize!(left_panel, 2, Fixed(0))  # hide profiles
+    on(stab_tab_btn.clicks) do _
+        rowsize!(info_box, 1, Fixed(0))
+        rowsize!(info_box, 3, Auto())
     end
 
     # Observables tracking the last applied/read HVA values
-    current_hva1_setpoint = Observable(0.0)
+    current_hva1_setpoint = Observable(0.0)   # voltage applied by user (DAQ V)
     current_hva2_setpoint = Observable(0.0)
-    current_hva1_monitor  = Observable(0.0)
-    current_hva2_monitor  = Observable(0.0)
-    current_ao0_read      = Observable(0.0)
-    current_ao1_read      = Observable(0.0)
+    current_hva1_monitor  = Observable(0.0)   # AI0 monitor reading
+    current_hva2_monitor  = Observable(0.0)   # AI2 monitor reading
+    current_ao0_read      = Observable(0.0)   # AI1 loopback: actual DAQ output to HVA1
+    current_ao1_read      = Observable(0.0)   # AI3 loopback: actual DAQ output to HVA2
+    sweep_running         = Observable(false)
+
+    # ── Data labels ──────────────────────────────────────────────────────────
+    approx_r2_label = Label(data_box[1, 1], "Approximate Fit R^2: N/A")
+    optim_r2_label  = Label(data_box[2, 1], "Optimized Fit R^2*: N/A")
+    metric_label    = Label(data_box[3, 1], "Extinction Ratio*: N/A")
+    Label(data_box[4, 1], "* = optimized values. Refresh to update.")
+    Label(data_box[5, 1],
+        "Shortcuts: Ctrl+S=Save  Ctrl+M=Mode  Ctrl+R=Refresh  Ctrl+N=Filename  Ctrl+P=Position  Ctrl+1=HVA1  Ctrl+2=HVA2  Ctrl+V=Apply",
+        fontsize = 11)
 
     # ── Observables ──────────────────────────────────────────────────────────
     frame_obs      = Observable(initial_frame)
@@ -724,15 +716,15 @@ function beam_characterization(
     end
 
     # ── Plots ─────────────────────────────────────────────────────────────────
-    photon_count_label = Label(left_panel[1, 1, Top()],
+    photon_count_label = Label(fig[1, 1, Top()],
         "Min Photon Count: 0  Max Photon Count: 0", fontsize = 14, halign = :left, padding = (5, 0, 0, 0))
 
     heatmap!(ax2d, frame_obs, colormap = :inferno)
     scatter!(ax2d, cx, cy, color = :teal, markersize = 10)
-    surface!(ax3d, x, y, frame_obs;   colormap = :viridis,          visible = real_3d_toggle.active)
-    surface!(ax3d, x, y, ideal_z;     colormap = (:greys, 0.6),     overdraw = false, visible = fit_toggle.active)
-    surface!(ax3d, x, y, diff_img;    colormap = (:bone, 0.6),      overdraw = true,  visible = diff_toggle.active)
-    surface!(ax3d, x, y, optimized;   colormap = (:blues, 0.6),     overdraw = false, visible = optimized_toggle.active)
+   # surface!(ax3d, x, y, frame_obs;   colormap = :viridis,          visible = real_3d_toggle.active)
+    #surface!(ax3d, x, y, ideal_z;     colormap = (:greys, 0.6),     overdraw = false, visible = fit_toggle.active)
+    #surface!(ax3d, x, y, diff_img;    colormap = (:bone, 0.6),      overdraw = true,  visible = diff_toggle.active)
+    #surface!(ax3d, x, y, optimized;   colormap = (:blues, 0.6),     overdraw = false, visible = optimized_toggle.active)
     lines!(y_profile_ax, y_prof,       color = :red)
     lines!(x_profile_ax, x_prof,       color = :blue)
     lines!(y_profile_ax, y_prof_ideal, color = :grey,        visible = fit_toggle.active)
@@ -770,7 +762,7 @@ function beam_characterization(
         end
     end
 
-    return fig, ax2d, ax3d, frame_obs
+    return fig, ax2d, #=ax3d,=# frame_obs
 end
 
 # ============================================================================
