@@ -5,7 +5,7 @@
 
 using HDF5, GLMakie, Statistics, FFTW
 
-const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/angle/mar_25"
+const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/angle/apr_1"
 
 # ============================================================================
 # Data loading
