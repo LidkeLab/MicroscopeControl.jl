@@ -66,14 +66,19 @@ function beam_characterization(
     end
 
     # ── Figure / layout ──────────────────────────────────────────────────────
-    fig = Figure(size = (1100, 1300), title = "Beam Characterization")
+    fig = Figure(size = (1100, 1060), title = "Beam Characterization")
     ax2d = Axis(fig[1, 1], title = "2D Intensity Map", aspect = DataAspect())
     ax3d = Axis3(fig[1, 2], title = "3D Intensity Map", aspect = (1280, 1024, 400))
     ax3d.limits[] = (nothing, nothing, nothing, nothing, -50, nothing)
 
     info_box         = GridLayout(fig[2, 2])
+    # ── Tab buttons (row 0) ───────────────────────────────────────────────────
+    tab_row          = GridLayout(info_box[0, 1])
+    beam_char_tab_btn = Button(tab_row[1, 1], label = "Beam Char", tellwidth = false)
+    stab_tab_btn      = Button(tab_row[1, 2], label = "Stability",  tellwidth = false)
     toggle_box       = GridLayout(info_box[1, 1])
     data_box         = GridLayout(info_box[2, 1])
+    stab_box         = GridLayout(info_box[3, 1])
     line_profile_box = GridLayout(fig[2, 1])
     y_profile_ax = Axis(line_profile_box[2, 1], title = "Y Profile",
                         xticklabelsize = 9, yticklabelsize = 9, titlesize = 10)
@@ -156,33 +161,46 @@ function beam_characterization(
     sweep_start_button  = Button(toggle_box[16, 1:3], label = "Start Sweep")
     sweep_status_label  = Label(toggle_box[16, 4], "Idle")
 
-    # ── Angle Stability (rows 17–23) ──────────────────────────────────────────
-    Label(toggle_box[17, 1:4], "── Angle Stability ──"; fontsize = 12, font = :bold, tellwidth = false)
+    # ── Angle Stability tab (stab_box, initially hidden) ──────────────────────
+    Label(stab_box[0, 1:4], "── Angle Stability ──"; fontsize = 12, font = :bold, tellwidth = false)
 
-    Label(toggle_box[18, 1], "Channel:")
-    stab_chan_menu     = Menu(toggle_box[18, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
-    Label(toggle_box[18, 3], "File prefix:")
-    stab_name_textbox  = Textbox(toggle_box[18, 4], placeholder = "stability", stored_string = "stability")
+    Label(stab_box[1, 1], "Channel:")
+    stab_chan_menu     = Menu(stab_box[1, 2], options = ["HVA1", "HVA2", "Both"], default = "HVA1")
+    Label(stab_box[1, 3], "File prefix:")
+    stab_name_textbox  = Textbox(stab_box[1, 4], placeholder = "stability", stored_string = "stability")
 
-    Label(toggle_box[19, 1], "V start:")
-    stab_vstart_textbox = Textbox(toggle_box[19, 2], placeholder = "0.0",  stored_string = "0.0")
-    Label(toggle_box[19, 3], "V stop:")
-    stab_vstop_textbox  = Textbox(toggle_box[19, 4], placeholder = "1.0",  stored_string = "1.0")
+    Label(stab_box[2, 1], "V start:")
+    stab_vstart_textbox = Textbox(stab_box[2, 2], placeholder = "0.0",  stored_string = "0.0")
+    Label(stab_box[2, 3], "V stop:")
+    stab_vstop_textbox  = Textbox(stab_box[2, 4], placeholder = "1.0",  stored_string = "1.0")
 
-    Label(toggle_box[20, 1], "Steps:")
-    stab_steps_textbox  = Textbox(toggle_box[20, 2], placeholder = "5",    stored_string = "5")
-    Label(toggle_box[20, 3], "Settle (s):")
-    stab_settle_textbox = Textbox(toggle_box[20, 4], placeholder = "1.0",  stored_string = "1.0")
+    Label(stab_box[3, 1], "Steps:")
+    stab_steps_textbox  = Textbox(stab_box[3, 2], placeholder = "5",    stored_string = "5")
+    Label(stab_box[3, 3], "Settle (s):")
+    stab_settle_textbox = Textbox(stab_box[3, 4], placeholder = "1.0",  stored_string = "1.0")
 
-    Label(toggle_box[21, 1], "Dwell (s):")
-    stab_dwell_textbox  = Textbox(toggle_box[21, 2], placeholder = "10.0", stored_string = "10.0")
-    Label(toggle_box[21, 3], "Frames/pos:")
-    stab_frames_textbox = Textbox(toggle_box[21, 4], placeholder = "50",   stored_string = "50")
+    Label(stab_box[4, 1], "Dwell (s):")
+    stab_dwell_textbox  = Textbox(stab_box[4, 2], placeholder = "10.0", stored_string = "10.0")
+    Label(stab_box[4, 3], "Frames/pos:")
+    stab_frames_textbox = Textbox(stab_box[4, 4], placeholder = "50",   stored_string = "50")
 
-    stab_start_button  = Button(toggle_box[22, 1:3], label = "Start Stability")
-    stab_status_label  = Label(toggle_box[22, 4], "Idle")
+    stab_start_button  = Button(stab_box[5, 1:3], label = "Start Stability")
+    stab_status_label  = Label(stab_box[5, 4], "Idle")
+
+    # Initially hide the stability tab; show beam char tab
+    rowsize!(info_box, 3, Fixed(0))
 
     stab_running = Observable(false)
+
+    # ── Tab switching ─────────────────────────────────────────────────────────
+    on(beam_char_tab_btn.clicks) do _
+        rowsize!(info_box, 1, Auto())
+        rowsize!(info_box, 3, Fixed(0))
+    end
+    on(stab_tab_btn.clicks) do _
+        rowsize!(info_box, 1, Fixed(0))
+        rowsize!(info_box, 3, Auto())
+    end
 
     # Observables tracking the last applied/read HVA values
     current_hva1_setpoint = Observable(0.0)   # voltage applied by user (DAQ V)
