@@ -68,14 +68,17 @@ function beam_characterization(
     # ── Figure / layout ──────────────────────────────────────────────────────
     fig = Figure(size = (1100, 1060), title = "Beam Characterization")
     ax2d = Axis(fig[1, 1], title = "2D Intensity Map", aspect = DataAspect())
-    ax3d = Axis3(fig[1, 2], title = "3D Intensity Map", aspect = (1280, 1024, 400))
+    right_col        = GridLayout(fig[1:2, 2])
+    ax3d = Axis3(right_col[1, 1], title = "3D Intensity Map", aspect = (1280, 1024, 400))
     ax3d.limits[] = (nothing, nothing, nothing, nothing, -50, nothing)
 
-    info_box         = GridLayout(fig[2, 2])
+    info_box         = GridLayout(right_col[2, 1])
     # ── Tab buttons (row 0) ───────────────────────────────────────────────────
     tab_row          = GridLayout(info_box[0, 1])
     beam_char_tab_btn = Button(tab_row[1, 1], label = "Beam Char", tellwidth = false)
     stab_tab_btn      = Button(tab_row[1, 2], label = "Stability",  tellwidth = false)
+    Label(tab_row[1, 3], "3D Map")
+    show_3d_toggle   = Toggle(tab_row[1, 4], active = true)
     toggle_box       = GridLayout(info_box[1, 1])
     data_box         = GridLayout(info_box[2, 1])
     stab_box         = GridLayout(info_box[3, 1])
@@ -89,8 +92,9 @@ function beam_characterization(
 
     colsize!(fig.layout, 1, Relative(0.5))
     colsize!(fig.layout, 2, Relative(0.5))
-    rowsize!(fig.layout, 1, Relative(0.5))
-    rowsize!(fig.layout, 2, Relative(0.5))
+    rowsize!(fig.layout, 1, Relative(0.6))
+    rowsize!(fig.layout, 2, Relative(0.4))
+    rowsize!(right_col, 1, Relative(0.45))   # 3D map portion of right column
     rowsize!(line_profile_box, 1, Fixed(60))
     rowsize!(line_profile_box, 2, Fixed(60))
 
@@ -200,6 +204,9 @@ function beam_characterization(
     on(stab_tab_btn.clicks) do _
         rowsize!(info_box, 1, Fixed(0))
         rowsize!(info_box, 3, Auto())
+    end
+    on(show_3d_toggle.active) do show
+        rowsize!(right_col, 1, show ? Relative(0.45) : Fixed(0))
     end
 
     # Observables tracking the last applied/read HVA values
