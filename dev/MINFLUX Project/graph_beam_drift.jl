@@ -16,6 +16,10 @@ using HDF5, GLMakie, Statistics
 
 const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/movig EDO1"
 
+# Position calibration: raw position value × POS_TO_32IN = position in 1/32 inch
+# Calibrated from: raw 0.100 → 4/32 in  ⟹  scale = 4 / (32 × 0.100) × 32 = 40
+const POS_TO_32IN = 40.0
+
 # ============================================================================
 # Load data from all HDF5 files in a directory, grouped by series name
 # ============================================================================
@@ -111,8 +115,8 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
     ord1(v) = v[osc1_ord]
     ord2(v) = v[osc2_ord]
 
-    osc1_pos    = ord1(osc1_pos_raw)
-    osc2_pos    = ord2(osc2_pos_raw)
+    osc1_pos    = ord1(osc1_pos_raw) .* POS_TO_32IN   # now in 1/32 in
+    osc2_pos    = ord2(osc2_pos_raw) .* POS_TO_32IN   # now in 1/32 in
     osc1_dist   = ord1([beam_distance(d, ref1_cx, ref1_cy) for d in osc1_data])
     osc2_dist   = ord2([beam_distance(d, ref2_cx, ref2_cy) for d in osc2_data])
     osc1_cx     = ord1([d.center_x    for d in osc1_data])
@@ -164,7 +168,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
     let f = Figure(size = SZ)
         ax = Axis(f[1, 1],
             title  = "Beam Center Displacement vs EOD Position",
-            xlabel = "EOD Position",
+            xlabel = "EOD Position (1/32 in)",
             ylabel = "Displacement (px)",
         )
         lines!(ax, osc1_pos, osc1_dist, color = c1, linewidth = 2, label = "osc1")
@@ -189,7 +193,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
     let f = Figure(size = SZ)
         ax = Axis(f[1, 1],
             title  = "Beam Center X vs EOD Position",
-            xlabel = "EOD Position",
+            xlabel = "EOD Position (1/32 in)",
             ylabel = "Center X (px)",
         )
         lines!(ax, osc1_pos, osc1_cx, color = c1, linewidth = 2, label = "osc1")
@@ -208,7 +212,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
     let f = Figure(size = SZ)
         ax = Axis(f[1, 1],
             title  = "Beam Center Y vs EOD Position",
-            xlabel = "EOD Position",
+            xlabel = "EOD Position (1/32 in)",
             ylabel = "Center Y (px)",
         )
         lines!(ax, osc1_pos, osc1_cy, color = c1, linewidth = 2, label = "osc1")
@@ -228,7 +232,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
         let f = Figure(size = SZ)
             ax = Axis(f[1, 1],
                 title  = "Beam FWHM vs EOD Position",
-                xlabel = "EOD Position",
+                xlabel = "EOD Position (1/32 in)",
                 ylabel = "FWHM (px)",
             )
             if !all(isnan, osc1_fwhm_x)
@@ -255,7 +259,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
         let f = Figure(size = SZ)
             ax = Axis(f[1, 1],
                 title  = "Beam Ellipticity vs EOD Position",
-                xlabel = "EOD Position",
+                xlabel = "EOD Position (1/32 in)",
                 ylabel = "Ellipticity (FWHM_max / FWHM_min)",
             )
             lines!(ax, osc1_pos, osc1_ellip, color = c1, linewidth = 2, label = "osc1")
@@ -272,7 +276,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
         let f = Figure(size = SZ)
             ax = Axis(f[1, 1],
                 title  = "Donut Extinction Ratio vs EOD Position",
-                xlabel = "EOD Position",
+                xlabel = "EOD Position (1/32 in)",
                 ylabel = "Extinction Ratio",
             )
             lines!(ax, osc1_pos, osc1_extr, color = c1, linewidth = 2, label = "osc1")
@@ -293,7 +297,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
         let f = Figure(size = SZ)
             ax = Axis(f[1, 1],
                 title  = "Beam Radius ω (1/e²) vs EOD Position",
-                xlabel = "EOD Position",
+                xlabel = "EOD Position (1/32 in)",
                 ylabel = "ω (px)",
             )
             lines!(ax, osc1_pos, osc1_omega, color = c1, linewidth = 2, label = "osc1")
@@ -314,7 +318,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
         let f = Figure(size = SZ)
             ax = Axis(f[1, 1],
                 title  = "Max Photon Count vs EOD Position",
-                xlabel = "EOD Position",
+                xlabel = "EOD Position (1/32 in)",
                 ylabel = "Max photon count",
             )
             lines!(ax, osc1_pos, osc1_maxph, color = c1, linewidth = 2, label = "osc1")
@@ -335,7 +339,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
         let f = Figure(size = SZ)
             ax = Axis(f[1, 1],
                 title  = "Fit Quality R² vs EOD Position",
-                xlabel = "EOD Position",
+                xlabel = "EOD Position (1/32 in)",
                 ylabel = "R²",
             )
             lines!(ax, osc1_pos, osc1_r2, color = c1, linewidth = 2, label = "osc1")
@@ -359,7 +363,7 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
         ("osc2G", osc2_ctrl, osc2_pos, osc2_dist, osc2_fwhm_x, osc2_fwhm_y, osc2_ellip, osc2_extr, osc2_omega, osc2_r2, osc2_maxph),
     ]
         println("\n=== $label summary ===")
-        println("  Position range  : $(minimum(pos)) → $(maximum(pos))")
+        println("  Position range  : $(round(minimum(pos), digits=2)) → $(round(maximum(pos), digits=2)) (1/32 in)")
         println("  Max displacement: $(round(maximum(dist), digits=2)) px")
         !all(isnan, fwhm_x) && println("  Mean FWHM x     : $(round(mean(filter(!isnan, fwhm_x)), digits=2)) px")
         !all(isnan, fwhm_y) && println("  Mean FWHM y     : $(round(mean(filter(!isnan, fwhm_y)), digits=2)) px")
