@@ -11,10 +11,10 @@
 
 using HDF5, GLMakie, Statistics
 
-const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/polarization/apr4"
+const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/polarization/apr10"
 
 const PIXEL_SIZE_UM   = 5.2      # camera pixel pitch (µm)
-const EOD_DISTANCE_MM = 350.0    # EOD → camera sensor (mm)
+const EOD_DISTANCE_MM = 190.0    # EOD → camera sensor (mm)
 const SPEC_MRAD_PER_KV = 3.0     # manufacturer spec
 
 # ============================================================================
@@ -73,29 +73,54 @@ struct CalResult
     mrad_per_kV::Float64
     pct_spec::Float64
     ΔV::Float64
-    Δpos_px::Float64
-    θ_mrad::Float64
+    Δpos_px::Float64           # equivalent endpoint displacement over full ΔV
+    θ_mrad::Float64            # total angle over full ΔV
+    slope_cx_px_per_V::Float64 # linear slope cx vs monitor voltage (px/V)
+    slope_cy_px_per_V::Float64 # linear slope cy vs monitor voltage (px/V)
 end
 
+"""
+    compute_calibration(points, hva_num) -> CalResult or nothing
+
+Uses ordinary least-squares regression of beam position vs monitor voltage
+across all sweep points (robust to noise, uses every measurement).
+"""
 function compute_calibration(points, hva_num)::Union{CalResult, Nothing}
-    isempty(points) && return nothing
+    length(points) < 2 && return nothing
+
     mon_v = hva_num == 1 ? [p.hva1_monitor for p in points] :
                             [p.hva2_monitor for p in points]
     cx    = [p.center_x for p in points]
     cy    = [p.center_y for p in points]
 
-    imin = argmin(mon_v);  imax = argmax(mon_v)
-    ΔV      = mon_v[imax] - mon_v[imin]
+    ΔV = maximum(mon_v) - minimum(mon_v)
     ΔV == 0 && return nothing
 
-    Δpos_px = sqrt((cx[imax] - cx[imin])^2 + (cy[imax] - cy[imin])^2)
+    # OLS slopes: β = Σ(V_i - V̄)(pos_i - pos̄) / Σ(V_i - V̄)²
+    V̄     = mean(mon_v)
+    cx̄    = mean(cx)
+    cȳ    = mean(cy)
+    var_V = sum((v - V̄)^2 for v in mon_v)
+    var_V == 0 && return nothing
+
+    slope_cx = sum((mon_v[i] - V̄) * (cx[i] - cx̄) for i in eachindex(mon_v)) / var_V  # px/V
+    slope_cy = sum((mon_v[i] - V̄) * (cy[i] - cȳ) for i in eachindex(mon_v)) / var_V  # px/V
+
+    # Total angular sensitivity from the slope vector magnitude
+    # θ (rad) = displacement (m) / distance (m)  — simple trigonometry
+    slope_r_px_per_V = sqrt(slope_cx^2 + slope_cy^2)             # px/V
+    slope_m_per_V    = slope_r_px_per_V * PIXEL_SIZE_UM * 1e-6   # m/V
+    mrad_per_V       = (slope_m_per_V / (EOD_DISTANCE_MM * 1e-3)) * 1e3
+    mrad_per_kV      = mrad_per_V * 1000.0
+    pct_spec         = abs(mrad_per_kV) / SPEC_MRAD_PER_KV * 100.0
+
+    # Equivalent endpoint quantities over full voltage range (for display)
+    Δpos_px = slope_r_px_per_V * ΔV
     Δpos_m  = Δpos_px * PIXEL_SIZE_UM * 1e-6
-    θ_rad   = atan(Δpos_m / (EOD_DISTANCE_MM * 1e-3))
-    θ_mrad  = θ_rad * 1e3
-    mrad_per_V  = θ_mrad / ΔV
-    mrad_per_kV = mrad_per_V * 1000.0
-    pct_spec    = abs(mrad_per_V) / (SPEC_MRAD_PER_KV / 1000.0) * 100.0
-    return CalResult(mrad_per_V, mrad_per_kV, pct_spec, ΔV, Δpos_px, θ_mrad)
+    θ_mrad  = (Δpos_m / (EOD_DISTANCE_MM * 1e-3)) * 1e3
+
+    return CalResult(mrad_per_V, mrad_per_kV, pct_spec, ΔV, Δpos_px, θ_mrad,
+                     slope_cx, slope_cy)
 end
 
 # ============================================================================
@@ -237,25 +262,28 @@ for eod_dir in sort(filter(d -> isdir(joinpath(DATA_DIR, d)), readdir(DATA_DIR))
 end
 
 # ── Calibration table ─────────────────────────────────────────────────────────
-println("=" ^ 72)
+println("=" ^ 90)
 println(rpad("Polarization", 20), rpad("Channel", 8),
         rpad("ΔV (V)", 10), rpad("Δpos (px)", 12),
-        rpad("θ (mrad)", 12), rpad("mrad/kV", 12), "% spec")
-println("-" ^ 72)
+        rpad("θ (mrad)", 12), rpad("mrad/kV", 12),
+        rpad("slope cx (px/V)", 17), rpad("slope cy (px/V)", 17), "% spec")
+println("-" ^ 90)
 for pol in sort(union(collect(keys(all_hva1)), collect(keys(all_hva2))))
     for (hva_num, dict) in ((1, all_hva1), (2, all_hva2))
         haskey(dict, pol) || continue
         cal = compute_calibration(dict[pol], hva_num)
         cal === nothing && continue
         println(rpad(pol, 20), rpad("HVA$hva_num", 8),
-                rpad(round(cal.ΔV,        digits=3), 10),
-                rpad(round(cal.Δpos_px,   digits=1), 12),
-                rpad(round(cal.θ_mrad,    digits=4), 12),
-                rpad(round(cal.mrad_per_kV, digits=3), 12),
+                rpad(round(cal.ΔV,                 digits=2), 10),
+                rpad(round(cal.Δpos_px,             digits=1), 12),
+                rpad(round(cal.θ_mrad,              digits=4), 12),
+                rpad(round(cal.mrad_per_kV,         digits=3), 12),
+                rpad(round(cal.slope_cx_px_per_V,   digits=4), 17),
+                rpad(round(cal.slope_cy_px_per_V,   digits=4), 17),
                 "$(round(cal.pct_spec, digits=1))%")
     end
 end
-println("=" ^ 72)
+println("=" ^ 90)
 
 plot_polarization_hva(all_hva1, 1)
 plot_polarization_hva(all_hva2, 2)
