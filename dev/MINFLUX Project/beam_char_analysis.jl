@@ -7,6 +7,10 @@ using HDF5, GLMakie, Statistics, FFTW
 
 const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/movig EDO1/MAR_3"
 
+# Position calibration: raw value × POS_TO_32IN = position in 1/32 inch
+# (raw 0.100 = 4/32 in  →  scale = 40)
+const POS_TO_32IN = 40.0
+
 # ============================================================================
 # Gaussian fitting helpers (profile-based, fast)
 # ============================================================================
@@ -133,13 +137,13 @@ function plot_xcorr_quality(xcorr_results)
           fontsize = 16, font = :bold, tellwidth = false)
 
     ax_ncc  = Axis(fig[1, 1], title = "Peak NCC (similarity to control)",
-                   xlabel = "Stage Position", ylabel = "Peak NCC (0–1)")
+                   xlabel = "Stage Position (1/32 in)", ylabel = "Peak NCC (0–1)")
     ax_fwhm = Axis(fig[1, 2], title = "Xcorr Peak FWHM (beam sharpness)",
-                   xlabel = "Stage Position", ylabel = "Xcorr FWHM (px)")
+                   xlabel = "Stage Position (1/32 in)", ylabel = "Xcorr FWHM (px)")
     ax_dx   = Axis(fig[2, 1], title = "Beam Displacement ΔX vs Control",
-                   xlabel = "Stage Position", ylabel = "ΔX (px)")
+                   xlabel = "Stage Position (1/32 in)", ylabel = "ΔX (px)")
     ax_dy   = Axis(fig[2, 2], title = "Beam Displacement ΔY vs Control",
-                   xlabel = "Stage Position", ylabel = "ΔY (px)")
+                   xlabel = "Stage Position (1/32 in)", ylabel = "ΔY (px)")
 
     palette = Dict("ODE G"   => (:steelblue, :circle),
                    "ODE P"   => (:tomato,    :rect),
@@ -221,7 +225,7 @@ function load_all(dir)
         try
             h5open(joinpath(dir, fname), "r") do f
                 frame    = read(f["frame"])
-                position = Float64(HDF5.read_attribute(f, "position"))
+                position = Float64(HDF5.read_attribute(f, "position")) * POS_TO_32IN
                 fwhm_x, fwhm_y, ellip = fit_fwhm(frame)
                 m = Measurement(position, fwhm_x, fwhm_y, ellip, Float64.(frame))
                 push!(get!(groups, group, Measurement[]), m)
@@ -248,11 +252,11 @@ function plot_analysis(groups)
     fig = Figure(size = (1100, 850), title = "Beam Characterization — ODE Drift Analysis")
 
     ax_fx = Axis(fig[1, 1], title = "FWHM X vs Position",
-                 xlabel = "Stage Position", ylabel = "FWHM X (px)")
+                 xlabel = "Stage Position (1/32 in)", ylabel = "FWHM X (px)")
     ax_fy = Axis(fig[1, 2], title = "FWHM Y vs Position",
-                 xlabel = "Stage Position", ylabel = "FWHM Y (px)")
+                 xlabel = "Stage Position (1/32 in)", ylabel = "FWHM Y (px)")
     ax_el = Axis(fig[2, 1:2], title = "Ellipticity vs Position",
-                 xlabel = "Stage Position", ylabel = "Ellipticity (max/min FWHM)")
+                 xlabel = "Stage Position (1/32 in)", ylabel = "Ellipticity (max/min FWHM)")
 
     palette = Dict("ODE G" => (:steelblue, :circle),
                    "ODE P" => (:tomato,    :rect),
@@ -335,7 +339,7 @@ function make_videos(groups, dir; seconds_per_frame = 2)
         heatmap!(ax, frame_obs; colormap = :inferno, colorrange = clim)
 
         # position text overlay — top right corner, white on dark background
-        pos_obs = Observable("pos: $(round(meas[1].position, digits=3))")
+        pos_obs = Observable("pos: $(round(meas[1].position, digits=1))/32 in")
         text!(ax, pos_obs;
               position = (0.98, 0.98), space = :relative,
               align = (:right, :top), color = :white,
@@ -345,7 +349,7 @@ function make_videos(groups, dir; seconds_per_frame = 2)
         record(fig, outpath; framerate = fps) do io
             for m in meas
                 frame_obs[] = m.frame
-                pos_obs[]   = "pos: $(round(m.position, digits=3))"
+                pos_obs[]   = "pos: $(round(m.position, digits=1))/32 in"
                 for _ in 1:n_repeat
                     recordframe!(io)
                 end
@@ -365,7 +369,7 @@ groups = load_all(DATA_DIR)
 println("\nLoaded:")
 for (g, v) in sort(collect(groups); by = first)
     positions = [m.position for m in v]
-    println("  $g: $(length(v)) files  pos=$(round(minimum(positions), digits=3))–$(round(maximum(positions), digits=3))")
+    println("  $g: $(length(v)) files  pos=$(round(minimum(positions), digits=1))–$(round(maximum(positions), digits=1)) (1/32 in)")
 end
 
 
