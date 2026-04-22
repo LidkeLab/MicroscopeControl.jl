@@ -23,7 +23,7 @@ function beam_characterization(
     camera,
     framerate::Float64 = 5.0,
     exposure_time::Float64 = 0.01,
-    save_dir::String = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom\\angle_stability\\apr_4/EOD35",
+    save_dir::String = "Y:\\Projects\\NSF-MINFLUX\\projects\\Data\\Evaluation Experiments\\EOD Driver test\\beam characterizatiom\\angle_stability\\apr_4",
 )
 
     # ── Camera ───────────────────────────────────────────────────────────────
