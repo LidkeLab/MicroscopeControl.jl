@@ -14,7 +14,7 @@
 
 using HDF5, GLMakie, Statistics
 
-const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/movig EDO1"
+const DATA_DIR = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/movig EDO1/MAR_3/"
 
 # Position calibration: raw position value × POS_TO_32IN = position in 1/32 inch
 # Calibrated from: raw 0.100 → 4/32 in  ⟹  scale = 4 / (32 × 0.100) × 32 = 40
@@ -92,12 +92,12 @@ end
 
 function graph_beam_drift(data_dir::String = DATA_DIR)
 
-    println("Loading osc1 series...")
-    osc1_data, osc1_ctrl = load_series(data_dir, "osc1")
+    println("Loading ODE_G_drift series...")
+    osc1_data, osc1_ctrl = load_series(data_dir, "ODE_G_drift")
     println("  $(length(osc1_data)) data files, control: $(osc1_ctrl !== nothing)")
 
-    println("Loading osc2G series...")
-    osc2_data, osc2_ctrl = load_series(data_dir, "osc2G")
+    println("Loading ODE_P_drift series...")
+    osc2_data, osc2_ctrl = load_series(data_dir, "ODE_P_drift")
     println("  $(length(osc2_data)) data files, control: $(osc2_ctrl !== nothing)")
 
     # Reference origin: control file center if available, else first data point
@@ -171,17 +171,17 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
             xlabel = "EOD Position (1/32 in)",
             ylabel = "Displacement (px)",
         )
-        lines!(ax, osc1_pos, osc1_dist, color = c1, linewidth = 2, label = "osc1")
+        lines!(ax, osc1_pos, osc1_dist, color = c1, linewidth = 2, label = "ODE_G")
         scatter!(ax, osc1_pos, osc1_dist, color = c1, markersize = 7)
-        lines!(ax, osc2_pos, osc2_dist, color = c2, linewidth = 2, label = "osc2G")
+        lines!(ax, osc2_pos, osc2_dist, color = c2, linewidth = 2, label = "ODE_P")
         scatter!(ax, osc2_pos, osc2_dist, color = c2, markersize = 7)
         if osc1_ctrl !== nothing
             scatter!(ax, [osc1_ctrl.position], [0.0], color = c1,
-                marker = :star5, markersize = 16, label = "osc1 ctrl")
+                marker = :star5, markersize = 16, label = "ODE_G ctrl")
         end
         if osc2_ctrl !== nothing
             scatter!(ax, [osc2_ctrl.position], [0.0], color = c2,
-                marker = :star5, markersize = 16, label = "osc2G ctrl")
+                marker = :star5, markersize = 16, label = "ODE_P ctrl")
         end
         axislegend(ax, position = :lt)
         finish!(f, "01_beam_displacement.png")
@@ -196,12 +196,12 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
             xlabel = "EOD Position (1/32 in)",
             ylabel = "Center X (px)",
         )
-        lines!(ax, osc1_pos, osc1_cx, color = c1, linewidth = 2, label = "osc1")
+        lines!(ax, osc1_pos, osc1_cx, color = c1, linewidth = 2, label = "ODE_G")
         scatter!(ax, osc1_pos, osc1_cx, color = c1, markersize = 7)
-        lines!(ax, osc2_pos, osc2_cx, color = c2, linewidth = 2, label = "osc2G")
+        lines!(ax, osc2_pos, osc2_cx, color = c2, linewidth = 2, label = "ODE_P")
         scatter!(ax, osc2_pos, osc2_cx, color = c2, markersize = 7)
-        ctrl_hline!(ax, osc1_ctrl, d -> d.center_x, c1, label = "osc1 ctrl")
-        ctrl_hline!(ax, osc2_ctrl, d -> d.center_x, c2, label = "osc2G ctrl")
+        ctrl_hline!(ax, osc1_ctrl, d -> d.center_x, c1, label = "ODE_G ctrl")
+        ctrl_hline!(ax, osc2_ctrl, d -> d.center_x, c2, label = "ODE_P ctrl")
         axislegend(ax, position = :lt)
         finish!(f, "02_center_x.png")
     end
@@ -215,12 +215,12 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
             xlabel = "EOD Position (1/32 in)",
             ylabel = "Center Y (px)",
         )
-        lines!(ax, osc1_pos, osc1_cy, color = c1, linewidth = 2, label = "osc1")
+        lines!(ax, osc1_pos, osc1_cy, color = c1, linewidth = 2, label = "ODE_G")
         scatter!(ax, osc1_pos, osc1_cy, color = c1, markersize = 7)
-        lines!(ax, osc2_pos, osc2_cy, color = c2, linewidth = 2, label = "osc2G")
+        lines!(ax, osc2_pos, osc2_cy, color = c2, linewidth = 2, label = "ODE_P")
         scatter!(ax, osc2_pos, osc2_cy, color = c2, markersize = 7)
-        ctrl_hline!(ax, osc1_ctrl, d -> d.center_y, c1, label = "osc1 ctrl")
-        ctrl_hline!(ax, osc2_ctrl, d -> d.center_y, c2, label = "osc2G ctrl")
+        ctrl_hline!(ax, osc1_ctrl, d -> d.center_y, c1, label = "ODE_G ctrl")
+        ctrl_hline!(ax, osc2_ctrl, d -> d.center_y, c2, label = "ODE_P ctrl")
         axislegend(ax, position = :lt)
         finish!(f, "03_center_y.png")
     end
@@ -262,12 +262,12 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
                 xlabel = "EOD Position (1/32 in)",
                 ylabel = "Ellipticity (FWHM_max / FWHM_min)",
             )
-            lines!(ax, osc1_pos, osc1_ellip, color = c1, linewidth = 2, label = "osc1")
+            lines!(ax, osc1_pos, osc1_ellip, color = c1, linewidth = 2, label = "ODE_G")
             scatter!(ax, osc1_pos, osc1_ellip, color = c1, markersize = 7)
-            lines!(ax, osc2_pos, osc2_ellip, color = c2, linewidth = 2, label = "osc2G")
+            lines!(ax, osc2_pos, osc2_ellip, color = c2, linewidth = 2, label = "ODE_P")
             scatter!(ax, osc2_pos, osc2_ellip, color = c2, markersize = 7)
-            ctrl_hline!(ax, osc1_ctrl, d -> d.ellipticity, c1, label = "osc1 ctrl")
-            ctrl_hline!(ax, osc2_ctrl, d -> d.ellipticity, c2, label = "osc2G ctrl")
+            ctrl_hline!(ax, osc1_ctrl, d -> d.ellipticity, c1, label = "ODE_G ctrl")
+            ctrl_hline!(ax, osc2_ctrl, d -> d.ellipticity, c2, label = "ODE_P ctrl")
             hlines!(ax, [1.0], color = :gray50, linestyle = :dot, linewidth = 1)
             axislegend(ax, position = :lt)
             finish!(f, "05_ellipticity.png")
@@ -279,12 +279,12 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
                 xlabel = "EOD Position (1/32 in)",
                 ylabel = "Extinction Ratio",
             )
-            lines!(ax, osc1_pos, osc1_extr, color = c1, linewidth = 2, label = "osc1")
+            lines!(ax, osc1_pos, osc1_extr, color = c1, linewidth = 2, label = "ODE_G")
             scatter!(ax, osc1_pos, osc1_extr, color = c1, markersize = 7)
-            lines!(ax, osc2_pos, osc2_extr, color = c2, linewidth = 2, label = "osc2G")
+            lines!(ax, osc2_pos, osc2_extr, color = c2, linewidth = 2, label = "ODE_P")
             scatter!(ax, osc2_pos, osc2_extr, color = c2, markersize = 7)
-            ctrl_hline!(ax, osc1_ctrl, d -> d.ext_ratio, c1, label = "osc1 ctrl")
-            ctrl_hline!(ax, osc2_ctrl, d -> d.ext_ratio, c2, label = "osc2G ctrl")
+            ctrl_hline!(ax, osc1_ctrl, d -> d.ext_ratio, c1, label = "ODE_G ctrl")
+            ctrl_hline!(ax, osc2_ctrl, d -> d.ext_ratio, c2, label = "ODE_P ctrl")
             axislegend(ax, position = :lt)
             finish!(f, "05_extinction_ratio.png")
         end
@@ -300,12 +300,12 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
                 xlabel = "EOD Position (1/32 in)",
                 ylabel = "ω (px)",
             )
-            lines!(ax, osc1_pos, osc1_omega, color = c1, linewidth = 2, label = "osc1")
+            lines!(ax, osc1_pos, osc1_omega, color = c1, linewidth = 2, label = "ODE_G")
             scatter!(ax, osc1_pos, osc1_omega, color = c1, markersize = 7)
-            lines!(ax, osc2_pos, osc2_omega, color = c2, linewidth = 2, label = "osc2G")
+            lines!(ax, osc2_pos, osc2_omega, color = c2, linewidth = 2, label = "ODE_P")
             scatter!(ax, osc2_pos, osc2_omega, color = c2, markersize = 7)
-            ctrl_hline!(ax, osc1_ctrl, d -> d.omega, c1, label = "osc1 ctrl")
-            ctrl_hline!(ax, osc2_ctrl, d -> d.omega, c2, label = "osc2G ctrl")
+            ctrl_hline!(ax, osc1_ctrl, d -> d.omega, c1, label = "ODE_G ctrl")
+            ctrl_hline!(ax, osc2_ctrl, d -> d.omega, c2, label = "ODE_P ctrl")
             axislegend(ax, position = :lt)
             finish!(f, "06_beam_omega.png")
         end
@@ -321,12 +321,12 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
                 xlabel = "EOD Position (1/32 in)",
                 ylabel = "Max photon count",
             )
-            lines!(ax, osc1_pos, osc1_maxph, color = c1, linewidth = 2, label = "osc1")
+            lines!(ax, osc1_pos, osc1_maxph, color = c1, linewidth = 2, label = "ODE_G")
             scatter!(ax, osc1_pos, osc1_maxph, color = c1, markersize = 7)
-            lines!(ax, osc2_pos, osc2_maxph, color = c2, linewidth = 2, label = "osc2G")
+            lines!(ax, osc2_pos, osc2_maxph, color = c2, linewidth = 2, label = "ODE_P")
             scatter!(ax, osc2_pos, osc2_maxph, color = c2, markersize = 7)
-            ctrl_hline!(ax, osc1_ctrl, d -> d.max_photons, c1, label = "osc1 ctrl")
-            ctrl_hline!(ax, osc2_ctrl, d -> d.max_photons, c2, label = "osc2G ctrl")
+            ctrl_hline!(ax, osc1_ctrl, d -> d.max_photons, c1, label = "ODE_G ctrl")
+            ctrl_hline!(ax, osc2_ctrl, d -> d.max_photons, c2, label = "ODE_P ctrl")
             axislegend(ax, position = :lt)
             finish!(f, "07_max_photons.png")
         end
@@ -342,12 +342,12 @@ function graph_beam_drift(data_dir::String = DATA_DIR)
                 xlabel = "EOD Position (1/32 in)",
                 ylabel = "R²",
             )
-            lines!(ax, osc1_pos, osc1_r2, color = c1, linewidth = 2, label = "osc1")
+            lines!(ax, osc1_pos, osc1_r2, color = c1, linewidth = 2, label = "ODE_G")
             scatter!(ax, osc1_pos, osc1_r2, color = c1, markersize = 7)
-            lines!(ax, osc2_pos, osc2_r2, color = c2, linewidth = 2, label = "osc2G")
+            lines!(ax, osc2_pos, osc2_r2, color = c2, linewidth = 2, label = "ODE_P")
             scatter!(ax, osc2_pos, osc2_r2, color = c2, markersize = 7)
-            ctrl_hline!(ax, osc1_ctrl, d -> best_r2(d), c1, label = "osc1 ctrl")
-            ctrl_hline!(ax, osc2_ctrl, d -> best_r2(d), c2, label = "osc2G ctrl")
+            ctrl_hline!(ax, osc1_ctrl, d -> best_r2(d), c1, label = "ODE_G ctrl")
+            ctrl_hline!(ax, osc2_ctrl, d -> best_r2(d), c2, label = "ODE_P ctrl")
             ylims!(ax, 0, 1.05)
             hlines!(ax, [0.99], color = :gray50, linestyle = :dot, linewidth = 1)
             axislegend(ax, position = :lb)

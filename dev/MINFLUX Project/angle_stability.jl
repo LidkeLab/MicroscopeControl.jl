@@ -246,3 +246,4 @@ for (gkey, points) in sort(collect(groups); by = first)
             "time span: 0 – $(round(points[end].time_s, digits=1)) s")
     plot_stability(points, gkey, DATA_DIR)
 end
+
