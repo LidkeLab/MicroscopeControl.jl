@@ -7,6 +7,7 @@
 
 using HDF5, GLMakie, Statistics
 
+
 const DATA_DIR        = "/Volumes/lidke-lrs/Projects/NSF-MINFLUX/projects/Data/Evaluation Experiments/EOD Driver test/beam characterizatiom/stability_laser/MAR_27"
 const PIXEL_SIZE_UM   = 5.2      # camera pixel size (µm)
 const EOD_DISTANCE_MM = 350.0    # EOD → camera sensor distance (mm)
