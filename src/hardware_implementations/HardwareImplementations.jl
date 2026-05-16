@@ -61,6 +61,10 @@ include("ok_xem/OK_XEM.jl")
 include("meadowlark_slm/Meadowlark.jl")
 @reexport using .Meadowlark
 
+# FPGA DAC implementation
+include("xem_dac/XEM_DAC.jl")
+@reexport using .XEM_DAC
+
 # Work in progress - uncomment when ready
 # include("triggerscope/Triggerscope.jl")
 # @reexport using .Triggerscope

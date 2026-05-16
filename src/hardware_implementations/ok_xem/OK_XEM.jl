@@ -11,6 +11,6 @@ module OK_XEM
     include("interface_methods.jl")
 
     export XEM
-    export setexposure, enable,setupIO #, initialize
+    export setexposure, enable,setupIO, setwirein, activetriggerin #, initialize
 
 end
