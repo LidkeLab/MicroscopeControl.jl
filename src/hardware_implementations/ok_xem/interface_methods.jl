@@ -117,3 +117,17 @@ function activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32)
     end
     return nothing
 end
+
+function getwireout(fpga::XEM, epaddr::UInt8)
+    # Update wire outs first (required!)
+    err = okFrontPanel_UpdateWireOuts(fpga.devicehandle)
+    if err != ok_ErrorCode(0)
+        println("Failed to update wire outs: " * string(err))
+        return nothing
+    end
+
+    # Read value
+    value = okFrontPanel_GetWireOutValue(fpga.devicehandle, epaddr)
+
+    return UInt32(value)
+end
