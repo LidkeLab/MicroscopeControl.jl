@@ -182,19 +182,25 @@ function set_property_i64(dHandle, idx, pkey, value)
     error_check!(errcode, msg="SetProperty_i64 failed (pkey=$pkey, idx=$idx)")
 end
 
-#Set max closed loop frequency (maxCLF) to 6 kHz
-channel = 0
-set_property_i32(dHandle, channel, SA_CTL_PKEY_MAX_CL_FREQUENCY, 6000)
 
-#set the hold time to 1000 ms.
-set_property_i32(dHandle, channel, SA_CTL_PKEY_HOLD_TIME, 1000)
+X_channel = 0
+Y_channel = 1
 
-# Set velocity to 1 mm/s   
-set_property_i64(dHandle, channel, SA_CTL_PKEY_MOVE_VELOCITY, 1_000_000_000)
+for channel in (X_channel, Y_channel)
 
-#Set acceleration to 10 mm/s2
-set_property_i64(dHandle, channel, SA_CTL_PKEY_MOVE_ACCELERATION, 1_000_000_000)
+    #Set max closed loop frequency (maxCLF) to 6 kHz
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_MAX_CL_FREQUENCY, 6000)
 
+    #set the hold time to 1000 ms.
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_HOLD_TIME, 1000)
+
+    # Set velocity to 1 mm/s   
+    set_property_i64(dHandle, channel, SA_CTL_PKEY_MOVE_VELOCITY, 1_000_000_000)
+
+    #Set acceleration to 1 mm/s2
+    set_property_i64(dHandle, channel, SA_CTL_PKEY_MOVE_ACCELERATION, 1_000_000_000)
+
+end
 
 
 function findReference(dHandle, channel)
@@ -209,8 +215,10 @@ function findReference(dHandle, channel)
     println("Referencing started.")
 end
 
-function wait_for_referencing(dHandle, channel)
+function wait_for_referencing(dHandle, channel; timeout = 60.0)
     println("Waiting for referencing to complete on channel $channel...")
+    
+    t0 = time()
 
     while true
         # Read channel state
@@ -220,17 +228,55 @@ function wait_for_referencing(dHandle, channel)
         is_referencing = (state & SA_CTL_CH_STATE_BIT_REFERENCING) != 0
 
         if !is_referencing
-            break
+            println("Referencing completed.")
+            return
+        end
+
+        if time() - t0 > timeout
+            error("Reference timeout after $timeout seconds")
         end
 
         sleep(0.1)   # avoid busy-waiting (100 ms)
     end
+end
+    
+function reference_all(dHandle)
 
-    println("Referencing completed.")
+    for channel in (X_channel, Y_channel)
+        findReference(dHandle, channel)
+    end
+
+    for channel in (X_channel, Y_channel)
+        wait_for_referencing(dHandle, channel)
+    end
+
 end
 
-findReference(dHandle, channel)
-wait_for_referencing(dHandle, channel)
+# findReference(dHandle, channel)
+# wait_for_referencing(dHandle, channel)
+reference_all(dHandle)
+
+#get position
+function get_position(dHandle, channel)
+    value = Ref{Int64}()
+
+    err = SA_CTL_GetProperty_i64(dHandle, channel, SA_CTL_PKEY_POSITION, value, Ref{Csize_t}(1))
+
+    error_check!(err)
+
+    return value[]
+end
+
+function get_xy_position(dHandle)
+
+    x = get_position(dHandle, X_channel)
+    y = get_position(dHandle, Y_channel)
+
+    return x, y 
+end
+
+# println(get_position(dHandle, channel), "pm")
+println("X = $x, Y = $y")
 
 # move the stage
 function move_abs(dHandle, channel, moveValue)
@@ -270,14 +316,24 @@ function wait_for_move(dHandle, channel; timeout=10.0)
     end
 end
 
+function move_xy(dHandle, x_target, y_target)
 
+    move_abs(dHandle, X_channel, x_target)
+
+    move_abs(dHandle,Y_channel,y_target)
+
+    wait_for_move(dHandle, X_channel)
+
+    wait_for_move(dHandle,Y_channel)
+
+end
 
 # Move to 100 µm = 100e6 pm
-moveValue = Int64(100e6)
+# moveValue = Int64(100e6)
+# move_abs(dHandle, channel, moveValue)
 
-move_abs(dHandle, channel, moveValue)
+move_xy(dHandle, Int64(100e6), Int64(-50e6))
 wait_for_move(dHandle, channel)
-
 
 
 function stop(dHandle, channel)
@@ -290,7 +346,7 @@ end
 
 stop(dHandle, channel)
 
-errcode = SA_CTL_Close(dHandle)
+errcode = SA_CTL_Close(dHandle[])
 error_check!(errcode, msg="Failed to close device")
 
 
