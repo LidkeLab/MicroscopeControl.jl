@@ -13,7 +13,8 @@ println("SmarActCTL library version: $(version).")
 
 function error_check!(errcode; msg="Operation failed")
     if errcode != SA_CTL_ERROR_NONE
-        error(msg)
+        sdk_msg = unsafe_string(SA_CTL_GetResultInfo(errcode))
+        error("$msg [SDK: $sdk_msg]")
     end
 end
 
@@ -40,28 +41,29 @@ else
 end
 
 # open device
-dHandle = Ref{SA_CTL_DeviceHandle_t}()
+device = Ref{SA_CTL_DeviceHandle_t}()
 
 
 locator = device_str   
-config = ""         
+config = C_NULL         
 
 # Call function
-errcode = SA_CTL_Open(dHandle,locator,config)
+errcode = SA_CTL_Open(device,locator,config)
 
 # Check result (same style as your example)
 error_check!(errcode, msg="Failed to open device.")
 
+dHandle = device[]
 
 println("Device opened successfully.")
-println("Device handle: ", dHandle[])
+println("Device handle: ", dHandle)
 
 
 # get device info
 
 
 function get_property_string(dHandle, idx, pkey; buf_len=SA_CTL_STRING_MAX_LENGTH+1)
-    buf = Vector{UInt8}(undef, buf_len)
+    buf = Vector{Cchar}(undef, buf_len)
     ioSize = Ref{Csize_t}(buf_len)
 
     errcode = SA_CTL_GetProperty_s(dHandle, idx, pkey, buf, ioSize)
@@ -81,8 +83,6 @@ function get_property_i32(dHandle, idx, pkey)
 
     return value[]
 end
-
-
 
 println("\nDevice Serial Number: ",
     get_property_string(dHandle, 0, SA_CTL_PKEY_DEVICE_SERIAL_NUMBER))
@@ -153,8 +153,7 @@ for i in 0:(noOfChannels - 1)
     println((state & SA_CTL_CH_STATE_BIT_AMPLIFIER_ENABLED) != 0 ? "yes" : "no")
 
     # Channel type-specific info
-    ch_type = get_property_i32(dHandle, i,
-        SA_CTL_PKEY_CHANNEL_TYPE)
+    ch_type = get_property_i32(dHandle, i, SA_CTL_PKEY_CHANNEL_TYPE)
 
     if ch_type == SA_CTL_STICK_SLIP_PIEZO_DRIVER
         maxCLF = get_property_i32(dHandle, i, SA_CTL_PKEY_MAX_CL_FREQUENCY)
@@ -187,6 +186,8 @@ X_channel = 0
 Y_channel = 1
 
 for channel in (X_channel, Y_channel)
+    #Set to closed-loop movement
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_MOVE_MODE, SA_CTL_MOVE_MODE_CL_ABSOLUTE)
 
     #Set max closed loop frequency (maxCLF) to 6 kHz
     set_property_i32(dHandle, channel, SA_CTL_PKEY_MAX_CL_FREQUENCY, 6000)
@@ -202,6 +203,12 @@ for channel in (X_channel, Y_channel)
 
 end
 
+for ch in (X_channel, Y_channel)
+    #Check if both channels are in closed-loop mode
+    mode = get_property_i32(dHandle, ch, SA_CTL_PKEY_MOVE_MODE)
+    println("Channel $ch move mode = $mode")
+
+end
 
 function findReference(dHandle, channel)
     println("MCS2 find reference on channel: $channel.")
@@ -215,7 +222,7 @@ function findReference(dHandle, channel)
     println("Referencing started.")
 end
 
-function wait_for_referencing(dHandle, channel; timeout = 60.0)
+function wait_for_referencing(dHandle, channel)
     println("Waiting for referencing to complete on channel $channel...")
     
     t0 = time()
@@ -228,12 +235,16 @@ function wait_for_referencing(dHandle, channel; timeout = 60.0)
         is_referencing = (state & SA_CTL_CH_STATE_BIT_REFERENCING) != 0
 
         if !is_referencing
-            println("Referencing completed.")
-            return
-        end
 
-        if time() - t0 > timeout
-            error("Reference timeout after $timeout seconds")
+            # Check if referenced
+            referenced = (state & SA_CTL_CH_STATE_BIT_IS_REFERENCED) !=0
+
+            if !referenced
+                error("Referencing failed on channel $channel")
+            end
+
+            println("Channel $channel referenced.")
+            return
         end
 
         sleep(0.1)   # avoid busy-waiting (100 ms)
@@ -267,6 +278,54 @@ function get_position(dHandle, channel)
     return value[]
 end
 
+function wait_for_move(dHandle, channel; timeout_s=60.0)
+    t0 = time()
+    while true
+        state  = get_property_i32(dHandle, channel, SA_CTL_PKEY_CHANNEL_STATE)
+        moving = (state & SA_CTL_CH_STATE_BIT_ACTIVELY_MOVING) != 0
+        moving || break
+        if time() - t0 > timeout_s
+            SA_CTL_Stop(dHandle, channel, 0)
+            error("Channel $channel: move timeout after $(timeout_s)s")
+        end
+        sleep(0.05)
+    end
+end
+
+function _drive_to_endstop(dHandle, channel, target_pm; timeout_s=60.0)
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_MOVE_MODE, SA_CTL_MOVE_MODE_CL_ABSOLUTE)
+
+    errcode = SA_CTL_Move(dHandle, channel, target_pm, 0)
+    error_check!(errcode, msg="Move command failed on channel $channel")
+
+    wait_for_move(dHandle, channel; timeout_s=timeout_s)
+
+    SA_CTL_Stop(dHandle, channel, 0)
+end
+
+function find_travel_range(dHandle, channel; overshoot_pm=Int64(70e9), timeout_s=60.0)
+    println("Channel $channel: driving to negative end stop ...")
+    _drive_to_endstop(dHandle, channel, -overshoot_pm; timeout_s=timeout_s)
+    min_pos = get_position(dHandle, channel)
+    println("  Negative end stop at $(min_pos/1e6) µm")
+
+    println("Channel $channel: driving to positive end stop ...")
+    _drive_to_endstop(dHandle, channel, overshoot_pm; timeout_s=timeout_s)
+    max_pos = get_position(dHandle, channel)
+    println("  Positive end stop at $(max_pos/1e6) µm")
+
+    range_mm = (max_pos - min_pos) / 1e9
+    println("Channel $channel: physical travel range ≈ $(range_mm) mm")
+
+    return min_pos, max_pos
+end
+
+function find_xy_travel_range(dHandle)
+    x_min, x_max = find_travel_range(dHandle, X_channel)
+    y_min, y_max = find_travel_range(dHandle, Y_channel)
+    return (x_min, x_max, y_min, y_max)
+end
+
 function get_xy_position(dHandle)
 
     x = get_position(dHandle, X_channel)
@@ -276,7 +335,47 @@ function get_xy_position(dHandle)
 end
 
 # println(get_position(dHandle, channel), "pm")
-println("X = $x, Y = $y")
+x, y = get_xy_position(dHandle)
+println("X = $(x/1e6) µm")
+println("Y = $(y/1e6) µm")
+
+#get travel limit/range
+function get_property_i64(dHandle, idx, pkey)
+
+    value = Ref{Int64}()
+
+    errcode = SA_CTL_GetProperty_i64(dHandle, idx, pkey, value, Ref{Csize_t}(1))
+
+    error_check!(errcode)
+
+    return value[]
+end
+
+function get_travel_range(dHandle, channel)
+
+    min_pos = get_property_i64(dHandle, channel, SA_CTL_PKEY_RANGE_LIMIT_MIN)
+    max_pos = get_property_i64(dHandle, channel, SA_CTL_PKEY_RANGE_LIMIT_MAX)
+
+    return min_pos, max_pos
+end
+
+#for both channels
+function get_xy_travel_range(dHandle)
+
+    x_min, x_max = get_travel_range(dHandle, X_channel)
+    y_min, y_max = get_travel_range(dHandle, Y_channel)
+
+    return (x_min, x_max, y_min, y_max)
+end
+
+# Software range limits (0/0 by default — these are configurable limits, not the physical range)
+x_min, x_max, y_min, y_max = get_xy_travel_range(dHandle)
+println("Software range limit  — X: $(x_min/1e6) → $(x_max/1e6) µm,  Y: $(y_min/1e6) → $(y_max/1e6) µm")
+
+# Physical travel range — drives the stage to each mechanical end stop
+px_min, px_max, py_min, py_max = find_xy_travel_range(dHandle)
+println("Physical travel range — X: $(px_min/1e6) → $(px_max/1e6) µm  (≈$((px_max-px_min)/1e9) mm)")
+println("Physical travel range — Y: $(py_min/1e6) → $(py_max/1e6) µm  (≈$((py_max-py_min)/1e9) mm)")
 
 # move the stage
 function move_abs(dHandle, channel, moveValue)
@@ -287,33 +386,6 @@ function move_abs(dHandle, channel, moveValue)
     error_check!(errcode, msg="Move command failed")
 
     println("Move started (non-blocking).")
-end
-
-function wait_for_move(dHandle, channel; timeout=10.0)
-    println("Waiting for move to complete on channel $channel...")
-
-    t0 = time()
-
-    while true
-        state = get_property_i32(dHandle, channel, SA_CTL_PKEY_CHANNEL_STATE)
-
-        moving = (state & SA_CTL_CH_STATE_BIT_ACTIVELY_MOVING) != 0
-        closed_loop = (state & SA_CTL_CH_STATE_BIT_CLOSED_LOOP_ACTIVE) != 0
-
-        # Movement is finished when not moving anymore
-        # (optionally also require closed-loop inactive depending on behavior)
-        if !moving
-            println("Move completed.")
-            return
-        end
-
-        if time() - t0 > timeout
-            @error "Move timeout!"
-            return
-        end
-
-        sleep(0.05)  # 50 ms polling
-    end
 end
 
 function move_xy(dHandle, x_target, y_target)
@@ -333,8 +405,10 @@ end
 # move_abs(dHandle, channel, moveValue)
 
 move_xy(dHandle, Int64(100e6), Int64(-50e6))
-wait_for_move(dHandle, channel)
 
+# Check if the move was successful
+x, y = get_xy_position(dHandle)
+println("X=$(x/1e6) µm, " * "Y=$(y/1e6) µm")
 
 function stop(dHandle, channel)
     println("MCS2 stop channel: $channel.")
@@ -344,9 +418,10 @@ function stop(dHandle, channel)
     error_check!(errcode, msg="Failed to stop channel $channel")
 end
 
-stop(dHandle, channel)
+stop(dHandle, X_channel)
+stop(dHandle, Y_channel)
 
-errcode = SA_CTL_Close(dHandle[])
+errcode = SA_CTL_Close(dHandle)
 error_check!(errcode, msg="Failed to close device")
 
 
