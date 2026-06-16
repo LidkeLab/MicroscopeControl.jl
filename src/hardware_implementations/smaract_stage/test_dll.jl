@@ -60,27 +60,25 @@ println("Device handle: ", dHandle)
 
 
 # get device info
-
-
 function get_property_string(dHandle, idx, pkey; buf_len=SA_CTL_STRING_MAX_LENGTH+1)
     buf = Vector{Cchar}(undef, buf_len)
     ioSize = Ref{Csize_t}(buf_len)
-
     errcode = SA_CTL_GetProperty_s(dHandle, idx, pkey, buf, ioSize)
-
     error_check!(errcode, msg="Failed to get string property (pkey=$pkey, idx=$idx)")
-
     return unsafe_string(pointer(buf))
 end
 
-
 function get_property_i32(dHandle, idx, pkey)
     value = Ref{Int32}()
-
     errcode = SA_CTL_GetProperty_i32(dHandle, idx, pkey, value, Ref{Csize_t}(1))
-
     error_check!(errcode, msg="Failed to get int32 property (pkey=$pkey, idx=$idx)")
+    return value[]
+end
 
+function get_property_i64(dHandle, idx, pkey)
+    value = Ref{Int64}()
+    errcode = SA_CTL_GetProperty_i64(dHandle, idx, pkey, value, Ref{Csize_t}(1))
+    error_check!(errcode)
     return value[]
 end
 
@@ -104,16 +102,13 @@ println("Hand Control Module present: ",
     (state & SA_CTL_DEV_STATE_BIT_HM_PRESENT) != 0 ? "yes" : "no")
 
 noOfBusModules = get_property_i32(dHandle, 0, SA_CTL_PKEY_NUMBER_OF_BUS_MODULES)
-
 noOfChannels = get_property_i32(dHandle, 0, SA_CTL_PKEY_NUMBER_OF_CHANNELS)
-
 println("Number of Bus Modules: ", noOfBusModules)
 println("Total Number of Channels: ", noOfChannels)
 
 # ===== Module info =====
 for i in 0:(noOfBusModules - 1)
     type = get_property_i32(dHandle, i, SA_CTL_PKEY_MODULE_TYPE)
-
     print("Module $i")
 
     if type == SA_CTL_STICK_SLIP_PIEZO_DRIVER
@@ -127,22 +122,17 @@ for i in 0:(noOfBusModules - 1)
     end
 
     num = get_property_i32(dHandle, i, SA_CTL_PKEY_NUMBER_OF_BUS_MODULE_CHANNELS)
-
     println("    Number of Bus Module Channels: $num")
-
     state = get_property_i32(dHandle, i, SA_CTL_PKEY_MODULE_STATE)
-
     print("    Sensor Module present: ")
     println((state & SA_CTL_MOD_STATE_BIT_SM_PRESENT) != 0 ? "yes" : "no")
 end
 
-   
 # ===== Channel info =====
 for i in 0:(noOfChannels - 1)
     println("        Channel: $i")
 
     pos_name = get_property_string(dHandle, i, SA_CTL_PKEY_POSITIONER_TYPE_NAME)
-
     type = get_property_i32(dHandle, i, SA_CTL_PKEY_POSITIONER_TYPE)
 
     println("        Positioner Type: $pos_name ($type)")
@@ -181,7 +171,6 @@ function set_property_i64(dHandle, idx, pkey, value)
     error_check!(errcode, msg="SetProperty_i64 failed (pkey=$pkey, idx=$idx)")
 end
 
-
 X_channel = 0
 Y_channel = 1
 
@@ -212,13 +201,11 @@ end
 
 function findReference(dHandle, channel)
     println("MCS2 find reference on channel: $channel.")
-
     set_property_i32(dHandle, channel, SA_CTL_PKEY_REFERENCING_OPTIONS, 0)
 
     errcode = SA_CTL_Reference(dHandle, channel, 0)
 
     error_check!(errcode, msg="Failed to start referencing on channel $channel")
-
     println("Referencing started.")
 end
 
@@ -263,8 +250,12 @@ function reference_all(dHandle)
 
 end
 
-# findReference(dHandle, channel)
-# wait_for_referencing(dHandle, channel)
+# Check for any physical position offset from (0, 0)
+x_offset = get_property_i64(dHandle, X_channel, SA_CTL_PKEY_LOGICAL_SCALE_OFFSET)
+y_offset = get_property_i64(dHandle, Y_channel, SA_CTL_PKEY_LOGICAL_SCALE_OFFSET)
+println("X logical scale offset: $(x_offset) pm")
+println("Y logical scale offset: $(y_offset) pm")
+
 reference_all(dHandle)
 
 #get position
@@ -321,9 +312,9 @@ function find_travel_range(dHandle, channel; overshoot_pm=Int64(70e9), timeout_s
 end
 
 function find_xy_travel_range(dHandle)
-    x_min, x_max = find_travel_range(dHandle, X_channel)
-    y_min, y_max = find_travel_range(dHandle, Y_channel)
-    return (x_min, x_max, y_min, y_max)
+    p_x_min, p_x_max = find_travel_range(dHandle, X_channel)
+    p_y_min, p_y_max = find_travel_range(dHandle, Y_channel)
+    return (p_x_min, p_x_max, p_y_min, p_y_max)
 end
 
 function get_xy_position(dHandle)
@@ -340,17 +331,6 @@ println("X = $(x/1e6) µm")
 println("Y = $(y/1e6) µm")
 
 #get travel limit/range
-function get_property_i64(dHandle, idx, pkey)
-
-    value = Ref{Int64}()
-
-    errcode = SA_CTL_GetProperty_i64(dHandle, idx, pkey, value, Ref{Csize_t}(1))
-
-    error_check!(errcode)
-
-    return value[]
-end
-
 function get_travel_range(dHandle, channel)
 
     min_pos = get_property_i64(dHandle, channel, SA_CTL_PKEY_RANGE_LIMIT_MIN)
@@ -368,14 +348,39 @@ function get_xy_travel_range(dHandle)
     return (x_min, x_max, y_min, y_max)
 end
 
-# Software range limits (0/0 by default — these are configurable limits, not the physical range)
-x_min, x_max, y_min, y_max = get_xy_travel_range(dHandle)
-println("Software range limit  — X: $(x_min/1e6) → $(x_max/1e6) µm,  Y: $(y_min/1e6) → $(y_max/1e6) µm")
+function set_travel_range(dHandle, channel, min_pm::Int64, max_pm::Int64)
+
+    set_property_i64(dHandle, channel, SA_CTL_PKEY_RANGE_LIMIT_MIN, min_pm)
+    set_property_i64(dHandle, channel, SA_CTL_PKEY_RANGE_LIMIT_MAX, max_pm)
+
+    # Read back to confirm what device actually stored
+    actual_min = get_property_i64(dHandle, channel, SA_CTL_PKEY_RANGE_LIMIT_MIN)
+    actual_max = get_property_i64(dHandle, channel, SA_CTL_PKEY_RANGE_LIMIT_MAX)
+
+    return actual_min, actual_max
+end
+
+function set_xy_travel_range(dHandle, min_pm::Int64, max_pm::Int64)
+
+    x_min, x_max = set_travel_range(dHandle, X_channel, min_pm, max_pm)
+    y_min, y_max = set_travel_range(dHandle, Y_channel, min_pm, max_pm)
+
+    return (x_min, x_max, y_min, y_max)
+end
 
 # Physical travel range — drives the stage to each mechanical end stop
-px_min, px_max, py_min, py_max = find_xy_travel_range(dHandle)
-println("Physical travel range — X: $(px_min/1e6) → $(px_max/1e6) µm  (≈$((px_max-px_min)/1e9) mm)")
-println("Physical travel range — Y: $(py_min/1e6) → $(py_max/1e6) µm  (≈$((py_max-py_min)/1e9) mm)")
+p_x_min, p_x_max, p_y_min, p_y_max = find_xy_travel_range(dHandle)
+println("Physical travel range — X: $(p_x_min/1e6) to $(p_x_max/1e6) µm  (≈$((p_x_max-p_x_min)/1e9) mm)")
+println("Physical travel range — Y: $(p_y_min/1e6) to $(p_y_max/1e6) µm  (≈$((p_y_max-p_y_min)/1e9) mm)")
+
+# Set software travel range limits
+min_position_pm = Int64(-20e9)
+max_position_pm = Int64(20e9)
+
+# Software range limits (0/0 by default — these are configurable limits, not the physical range)
+s_x_min, s_x_max, s_y_min, s_y_max = set_xy_travel_range(dHandle, min_position_pm,max_position_pm)
+println("Software travel range - X: $(s_x_min/1e6) to $(s_x_max/1e6) µm" )
+println("Software travel range - Y: $(s_y_min/1e6) to $(s_y_max/1e6) µm" )
 
 # move the stage
 function move_abs(dHandle, channel, moveValue)
@@ -399,10 +404,6 @@ function move_xy(dHandle, x_target, y_target)
     wait_for_move(dHandle,Y_channel)
 
 end
-
-# Move to 100 µm = 100e6 pm
-# moveValue = Int64(100e6)
-# move_abs(dHandle, channel, moveValue)
 
 move_xy(dHandle, Int64(100e6), Int64(-50e6))
 
