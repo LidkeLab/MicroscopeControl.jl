@@ -11,7 +11,7 @@ function gui(stage::MCS2Stage)
     fig = Figure(size = (620, 180 + n * 60))
 
     # Row 1: position display + STOP ALL
-    pos_um = Observable(round.(stage.pos ./ 1e6, digits = 3))
+    pos_um = Observable(round.(stage.pos_pm ./ 1e6, digits = 3))
 
     pos_string = @lift begin
         vals = join(["$(v) µm" for v in $pos_um], "   ")
@@ -30,7 +30,7 @@ function gui(stage::MCS2Stage)
         stopmotion!(stage)
         sleep(0.05)
         query_positions!(stage)
-        pos_um[] = round.(stage.pos ./ 1e6, digits = 3)
+        pos_um[] = round.(stage.pos_pm ./ 1e6, digits = 3)
     end
 
     # Separator
@@ -45,7 +45,7 @@ function gui(stage::MCS2Stage)
               "Ch $ch",
               width = 50, halign = :left)
 
-        if !stage.is_connected[i]
+        if !stage.connected[i]
             # Unconnected channel: show greyed-out "N/C" row 
             # The row still exists (so the layout/column widths stay
             # consistent and the channel slot is visually present), but
@@ -78,7 +78,7 @@ function gui(stage::MCS2Stage)
                 query_channel_states!(stage)
                 status_obs[] = _channel_status_string(stage, i)
                 query_positions!(stage)
-                pos_um[] = round.(stage.pos ./ 1e6, digits = 3)
+                pos_um[] = round.(stage.pos_pm ./ 1e6, digits = 3)
             catch e
                 @error "Referencing failed: $e"
             end
@@ -89,7 +89,7 @@ function gui(stage::MCS2Stage)
 
         on(btn_up.clicks) do _
             step = _parse_stepsize(stepsize_box)
-            target_pm = stage.pos[i] + round(Int64, step * 1e6)
+            target_pm = stage.pos_pm[i] + round(Int64, step * 1e6)
             try
                 move_abs!(stage, i, target_pm)
                 pos_um[] = round.(stage.pos_pm ./ 1e6, digits = 3)
@@ -101,10 +101,10 @@ function gui(stage::MCS2Stage)
 
         on(btn_dn.clicks) do _
             step = _parse_stepsize(stepsize_box)
-            target_pm = stage.pos[i] - round(Int64, step * 1e6)
+            target_pm = stage.pos_pm[i] - round(Int64, step * 1e6)
             try
                 move_abs!(stage, i, target_pm)
-                pos_um[] = round.(stage.pos ./ 1e6, digits = 3)
+                pos_um[] = round.(stage.pos_pm ./ 1e6, digits = 3)
                 status_obs[] = _channel_status_string(stage, i)
             catch e
                 @error "Move failed: $e"
@@ -121,10 +121,10 @@ function gui(stage::MCS2Stage)
 
     on(all_up.clicks) do _
         step = _parse_stepsize(stepsize_box)
-        targets = stage.pos .+ round(Int64, step * 1e6)
+        targets = stage.pos_pm .+ round(Int64, step * 1e6)
         try
             move!(stage, targets)
-            pos_um[] = round.(stage.pos ./ 1e6, digits = 3)
+            pos_um[] = round.(stage.pos_pm ./ 1e6, digits = 3)
         catch e
             @error "Move-all failed: $e"
         end
@@ -132,10 +132,10 @@ function gui(stage::MCS2Stage)
 
     on(all_dn.clicks) do _
         step = _parse_stepsize(stepsize_box)
-        targets = stage.pos .- round(Int64, step * 1e6)
+        targets = stage.pos_pm .- round(Int64, step * 1e6)
         try
             move!(stage, targets)
-            pos_um[] = round.(stage.pos ./ 1e6, digits = 3)
+            pos_um[] = round.(stage.pos_pm ./ 1e6, digits = 3)
         catch e
             @error "Move-all failed: $e"
         end
@@ -155,7 +155,7 @@ function gui(stage::MCS2Stage)
 
     Label(fig[settings_row, 3], "Vel (mm/s):", halign = :right, width = 90)
     velocity_box = Textbox(fig[settings_row, 4:5],
-                           placeholder = string(stage.velocity[1] / 1e9),
+                           placeholder = string(stage.velocity_pm_s[1] / 1e9),
                            width = 80, height = 30,
                            validator = Float64)
 

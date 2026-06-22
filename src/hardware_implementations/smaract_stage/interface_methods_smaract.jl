@@ -1,3 +1,12 @@
+#   initialize(stage)    → find USB device, connect, set reference,
+#                          query limits, set velocity
+#   shutdown(stage)      → disconnect if connected
+#   move(stage, pos)     → absolute move + getposition
+#   getposition(stage)   → query POS and update stage.pos
+#   home(stage)          → move to homepos
+#   stopmotion(stage)    → halt
+#   export_state(stage)  → return Dict of all state for logging/saving
+
 """
     initialize!(stage::MCS2Stage)
 
@@ -48,16 +57,16 @@ function initialize!(stage::MCS2Stage)
     if hw_channels < stage.n_channels
         @warn "Device has $hw_channels channels; stage configured for $(stage.n_channels). Truncating."
         stage.n_channels  = hw_channels
-        resize!(stage.channel_ids, hw_channels)
-        resize!(stage.pos, hw_channels)
-        resize!(stage.min_pos, hw_channels)
-        resize!(stage.max_pos, hw_channels)
-        resize!(stage.home, hw_channels)
-        resize!(stage.velocity, hw_channels)
-        resize!(stage.acceleration, hw_channels)
+        resize!(stage.channel_ids,  hw_channels)
+        resize!(stage.pos_pm,       hw_channels)
+        resize!(stage.min_pm,       hw_channels)
+        resize!(stage.max_pm,       hw_channels)
+        resize!(stage.home_pm,      hw_channels)
+        resize!(stage.velocity_pm_s, hw_channels)
+        resize!(stage.accel_pm_s2,  hw_channels)
         resize!(stage.is_calibrated, hw_channels)
         resize!(stage.is_referenced, hw_channels)
-        resize!(stage.is_connected, hw_channels)
+        resize!(stage.connected,     hw_channels)
     end
 
     # Per-channel setup 
@@ -68,11 +77,11 @@ function initialize!(stage::MCS2Stage)
                                SA_CTL_PKEY_CHANNEL_STATE, ch_state, Ref{Csize_t}(1))
         if state_result != SA_CTL_ERROR_NONE
             @warn "Channel $ch: could not read CHANNEL_STATE ($(unsafe_string(SA_CTL_GetResultInfo(state_result)))) — marking as not connected."
-            stage.is_connected[i] = false
+            stage.connected[i] = false
             continue
         end
         sensor_present = (ch_state[] & SA_CTL_CH_STATE_BIT_SENSOR_PRESENT) != 0
-        stage.is_connected[i] = sensor_present
+        stage.connected[i] = sensor_present
 
         if !sensor_present
             @info "Channel $ch: no positioner detected — skipping motion setup. (Shown as N/C in GUI.)"
@@ -86,12 +95,12 @@ function initialize!(stage::MCS2Stage)
             SA_CTL_SetProperty_i32(stage.dHandle[], ch,
                                    SA_CTL_PKEY_HOLD_TIME, Int32(1000))
             SA_CTL_SetProperty_i64(stage.dHandle[], ch,
-                                   SA_CTL_PKEY_MOVE_VELOCITY,     stage.velocity[i])
+                                   SA_CTL_PKEY_MOVE_VELOCITY,     stage.velocity_pm_s[i])
             SA_CTL_SetProperty_i64(stage.dHandle[], ch,
-                                   SA_CTL_PKEY_MOVE_ACCELERATION, stage.acceleration[i])
+                                   SA_CTL_PKEY_MOVE_ACCELERATION, stage.accel_pm_s2[i])
         catch e
             @warn "Channel $ch: failed to set motion parameters ($e). Marking as not connected."
-            stage.is_connected[i] = false
+            stage.connected[i] = false
             continue
         end
 
@@ -103,8 +112,8 @@ function initialize!(stage::MCS2Stage)
         r2 = SA_CTL_GetProperty_i64(stage.dHandle[], ch,
                                SA_CTL_PKEY_RANGE_LIMIT_MAX, lim_max, Ref{Csize_t}(1))
         if r1 == SA_CTL_ERROR_NONE && r2 == SA_CTL_ERROR_NONE
-            stage.min_pos[i] = lim_min[]
-            stage.max_pos[i] = lim_max[]
+            stage.min_pm[i] = lim_min[]
+            stage.max_pm[i] = lim_max[]
         else
             @warn "Channel $ch: could not read travel range — leaving default limits."
         end
@@ -141,7 +150,8 @@ end
 """
     move!(stage, targets_pm::Vector{Int64})
 
-Moves all channels to absolute positions given in picometres, then refreshes `stage.pos_pm`.
+Moves all channels to absolute positions given in picometres, then
+refreshes `stage.pos_pm`.
 """
 function move!(stage::MCS2Stage, targets_pm::Vector{Int64})
     move_all!(stage, targets_pm)
@@ -151,7 +161,8 @@ end
 """
     move_um!(stage, targets_um::Vector{Float64})
 
-Convenience overload: supply positions in micrometres (Float64). Internally converts to Int64 picometres.
+Convenience overload: supply positions in micrometres (Float64).
+Internally converts to Int64 picometres.
 """
 function move_um!(stage::MCS2Stage, targets_um::Vector{Float64})
     targets_pm = round.(Int64, targets_um .* 1e6)
@@ -162,22 +173,23 @@ end
 """
     getposition!(stage) -> Vector{Int64}
 
-Queries the current position of all channels, updates `stage.pos`, and returns the values in picometres.
+Queries the current position of all channels, updates `stage.pos_pm`,
+and returns the values in picometres.
 """
 function getposition!(stage::MCS2Stage) :: Vector{Int64}
     query_positions!(stage)
-    return copy(stage.pos)
+    return copy(stage.pos_pm)
 end
 
 
 """
     home!(stage)
 
-Moves all channels to `stage.home` (default: all zeros).
+Moves all channels to `stage.home_pm` (default: all zeros).
 """
 function home!(stage::MCS2Stage)
     @info "Moving to home position ..."
-    move!(stage, stage.home)
+    move!(stage, stage.home_pm)
 end 
 
 
@@ -204,13 +216,13 @@ function export_state(stage::MCS2Stage)
         "channel_ids"     => copy(stage.channel_ids),
         "connected"       => stage.connectionstatus,
         "handle"          => stage.dHandle[],
-        "position_pm"     => copy(stage.pos),
+        "position_pm"     => copy(stage.pos_pm),
         "position_um"     => stage.pos_pm ./ 1e6,
-        "min_pm"          => copy(stage.min_pos),
-        "max_pm"          => copy(stage.max_pos),
-        "home_pm"         => copy(stage.home),
-        "velocity_pm_s"   => copy(stage.velocity),
-        "accel_pm_s2"     => copy(stage.acceleration),
+        "min_pm"          => copy(stage.min_pm),
+        "max_pm"          => copy(stage.max_pm),
+        "home_pm"         => copy(stage.home_pm),
+        "velocity_pm_s"   => copy(stage.velocity_pm_s),
+        "accel_pm_s2"     => copy(stage.accel_pm_s2),
         "is_calibrated"   => copy(stage.is_calibrated),
         "is_referenced"   => copy(stage.is_referenced),
     )

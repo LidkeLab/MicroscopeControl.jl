@@ -1,3 +1,8 @@
+# Accepts an MCS2Stage plus any motion parameters.
+# Calls the low-level ccall wrappers from functions_smaract.jl.
+# Checks the error code and logs a message.
+# Updates the relevant fields on the stage struct so the GUI always
+# has an up-to-date view without an extra query round-trip.
 
 function _check!(errcode::SA_CTL_Result_t; msg::String = "Operation failed")
     if errcode != SA_CTL_ERROR_NONE
@@ -32,18 +37,20 @@ function _set_i64(stage::MCS2Stage, ch::Int32, pkey, value::Int64)
 end
 
 # Query current position from hardware and update stage struct
+
 function query_positions!(stage::MCS2Stage)
     for (i, ch) in enumerate(stage.channel_ids)
-        stage.is_connected[i] || continue   # skip channels with no positioner
-        stage.pos[i] = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
+        stage.connected[i] || continue   # skip channels with no positioner
+        stage.pos_pm[i] = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
     end
     @info "Positions (µm): $(round.(stage.pos_pm ./ 1e6, digits=3))"
 end
 
 # Query and cache channel state flags
+
 function query_channel_states!(stage::MCS2Stage)
     for (i, ch) in enumerate(stage.channel_ids)
-        stage.is_connected[i] || continue   # skip channels with no positioner
+        stage.connected[i] || continue   # skip channels with no positioner
         state = _get_i32(stage, ch, SA_CTL_PKEY_CHANNEL_STATE)
         stage.is_calibrated[i] = (state & SA_CTL_CH_STATE_BIT_IS_CALIBRATED) != 0
         stage.is_referenced[i] = (state & SA_CTL_CH_STATE_BIT_IS_REFERENCED)  != 0
@@ -51,20 +58,21 @@ function query_channel_states!(stage::MCS2Stage)
 end
 
 # Set velocity and acceleration
+
 function set_velocity!(stage::MCS2Stage, vel_pm_s::Int64)
     for (i, ch) in enumerate(stage.channel_ids)
-        stage.is_connected[i] || continue   # skip channels with no positioner
+        stage.connected[i] || continue   # skip channels with no positioner
         _set_i64(stage, ch, SA_CTL_PKEY_MOVE_VELOCITY, vel_pm_s)
-        stage.velocity[i] = vel_pm_s
+        stage.velocity_pm_s[i] = vel_pm_s
     end
     @info "Velocity set to $(vel_pm_s / 1e9) mm/s"
 end
 
 function set_acceleration!(stage::MCS2Stage, accel_pm_s2::Int64)
     for (i, ch) in enumerate(stage.channel_ids)
-        stage.is_connected[i] || continue   # skip channels with no positioner
+        stage.connected[i] || continue   # skip channels with no positioner
         _set_i64(stage, ch, SA_CTL_PKEY_MOVE_ACCELERATION, accel_pm_s2)
-        stage.acceleration[i] = accel_pm_s2
+        stage.accel_pm_s2[i] = accel_pm_s2
     end
     @info "Acceleration set to $(accel_pm_s2 / 1e9) mm/s²"
 end
@@ -111,7 +119,8 @@ function move_abs!(stage::MCS2Stage, ch_index::Int, target_pm::Int64;
         return
     end
 
-    # Set MOVE_MODE before moving
+    # Always set MOVE_MODE before moving. Without this the device uses whatever mode was 
+    # last active, which could be relative or step mode — leading to completely wrong positions.
     _set_i32(stage, ch, SA_CTL_PKEY_MOVE_MODE, Int32(SA_CTL_MOVE_MODE_CL_ABSOLUTE))
 
     @info "Moving channel $ch to $(target_pm / 1e6) µm ..."
@@ -132,7 +141,7 @@ function move_abs!(stage::MCS2Stage, ch_index::Int, target_pm::Int64;
     end
 
     # Refresh position
-    stage.pos[ch_index] = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
+    stage.pos_pm[ch_index] = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
     @info "Channel $ch at $(stage.pos_pm[ch_index] / 1e6) µm"
 end
 
@@ -140,8 +149,10 @@ end
 """
     move_all!(stage, targets_pm)
 
-Sends absolute move commands to all CONNECTED channels simultaneously, then waits for all of them to finish.
-`targets_pm` is a vector of Int64 positions, one per channel, entries for disconnected channels are ignored.
+Sends absolute move commands to all CONNECTED channels simultaneously,
+then waits for all of them to finish. `targets_pm` is a vector of Int64
+positions, one per channel — entries for disconnected channels (e.g.
+channel 2 on an XY-only stage) are simply ignored.
 """
 function move_all!(stage::MCS2Stage, targets_pm::Vector{Int64}; timeout_s::Float64 = 30.0)
     length(targets_pm) == stage.n_channels ||
@@ -150,7 +161,7 @@ function move_all!(stage::MCS2Stage, targets_pm::Vector{Int64}; timeout_s::Float
     # Set mode and fire moves only for connected channels
     moving_channels = Int32[]
     for (i, ch) in enumerate(stage.channel_ids)
-        stage.is_connected[i] || continue   # skip channels with no positioner
+        stage.connected[i] || continue   # skip channels with no positioner
         _set_i32(stage, ch, SA_CTL_PKEY_MOVE_MODE, Int32(SA_CTL_MOVE_MODE_CL_ABSOLUTE))
         _check!(SA_CTL_Move(stage.dHandle[], ch, targets_pm[i], Int32(0)),
                 msg = "Move command failed on channel $ch")
@@ -184,10 +195,11 @@ end
 """
     stop_channel!(stage, ch_index)
 
-Immediately stops motion on one channel. No-op if the channel has no positioner attached.
+Immediately stops motion on one channel (1-based index). No-op if the
+channel has no positioner attached.
 """
 function stop_channel!(stage::MCS2Stage, ch_index::Int)
-    stage.is_connected[ch_index] || return
+    stage.connected[ch_index] || return
     ch = stage.channel_ids[ch_index]
     SA_CTL_Stop(stage.dHandle[], ch, Int32(0))
     @info "Stop sent to channel $ch"
@@ -200,7 +212,7 @@ Stops all CONNECTED channels.
 """
 function stop_all!(stage::MCS2Stage)
     for (i, ch) in enumerate(stage.channel_ids)
-        stage.is_connected[i] || continue   # skip channels with no positioner
+        stage.connected[i] || continue   # skip channels with no positioner
         SA_CTL_Stop(stage.dHandle[], ch, Int32(0))
     end
     @info "Stop sent to all connected channels"
@@ -210,15 +222,34 @@ end
 """
     find_travel_range!(stage, ch_index; overshoot_pm=70_000_000_000, timeout_s=60.0)
  
-Discovers the PHYSICAL travel range of one channel by driving it to each mechanical end stop and 
-recording where it actually stops.
+Discovers the PHYSICAL travel range of one channel by driving it to each
+mechanical end stop and recording where it actually stops.
+ 
+This is different from `stage.min_pm` / `stage.max_pm`, which are SOFTWARE
+limits (see SA_CTL_PKEY_RANGE_LIMIT_MIN/MAX in the manual). By default those
+are 0/0 — "no software limit configured" — NOT "zero physical range". The
+MCS2 has no limit-switch property to query directly; instead the controller
+detects a mechanical end stop *while moving* and sets the
+END_STOP_REACHED state bit.
+ 
+HOW IT WORKS:
+  1. The channel must already be referenced (`find_reference!`), otherwise
+     positions are not meaningful.
+  2. Commands a move to `-overshoot_pm` (far beyond any real stage, e.g.
+     -70 mm by default). The stage physically stops at its negative end
+     stop; the SDK sets SA_CTL_CH_STATE_BIT_END_STOP_REACHED and the move
+     finishes normally (it is NOT an error).
+  3. Reads POSITION → this is the negative physical limit.
+  4. Repeats toward `+overshoot_pm` for the positive physical limit.
+  5. Returns (min_pm, max_pm). The difference is the physical travel range.
+ 
 """
 function find_travel_range!(stage::MCS2Stage, ch_index::Int;
-                            overshoot_pm::Int64 = 30_000_000_000,
+                            overshoot_pm::Int64 = 70_000_000_000,
                             timeout_s::Float64 = 60.0)
     ch = stage.channel_ids[ch_index]
  
-    if !stage.is_connected[ch_index]
+    if !stage.connected[ch_index]
         @warn "Channel $ch has no positioner attached — cannot find travel range."
         return (Int64(0), Int64(0))
     end
@@ -229,23 +260,23 @@ function find_travel_range!(stage::MCS2Stage, ch_index::Int;
     # --- Drive to negative end stop ----------------------------------------
     @info "Channel $ch: driving to negative end stop ..."
     _drive_to_endstop!(stage, ch, -overshoot_pm, timeout_s)
-    min_pos = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
-    @info "Channel $ch: negative end stop at $(min_pos / 1e6) µm"
+    min_pm = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
+    @info "Channel $ch: negative end stop at $(min_pm / 1e6) µm"
  
     # --- Drive to positive end stop ----------------------------------------
     @info "Channel $ch: driving to positive end stop ..."
     _drive_to_endstop!(stage, ch, overshoot_pm, timeout_s)
-    max_pos = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
-    @info "Channel $ch: positive end stop at $(max_pos / 1e6) µm"
+    max_pm = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
+    @info "Channel $ch: positive end stop at $(max_pm / 1e6) µm"
  
-    range_mm = (max_pos - min_pos) / 1e9
+    range_mm = (max_pm - min_pm) / 1e9
     @info "Channel $ch: physical travel range ≈ $(range_mm) mm"
  
     # Update the stage struct with the discovered physical limits.
-    stage.min_pos[ch_index] = min_pos
-    stage.max_pos[ch_index] = max_pos
+    stage.min_pm[ch_index] = min_pm
+    stage.max_pm[ch_index] = max_pm
  
-    return (min_pos, max_pos)
+    return (min_pm, max_pm)
 end
  
 """
@@ -276,7 +307,8 @@ function _drive_to_endstop!(stage::MCS2Stage, ch::Int32, target_pm::Int64, timeo
         sleep(0.05)
     end
  
-    # Clear the END_STOP_REACHED / MOVEMENT_FAILED flags so the channel is ready for the next move. 
-    # The manual states these flags persist until a new movement or SA_CTL_Stop is issued.
+    # Clear the END_STOP_REACHED / MOVEMENT_FAILED flags so the channel is
+    # ready for the next move. The manual states these flags persist until
+    # a new movement or SA_CTL_Stop is issued.
     SA_CTL_Stop(stage.dHandle[], ch, Int32(0))
 end
