@@ -317,9 +317,7 @@ function find_xy_travel_range(dHandle)
     return (p_x_min, p_x_max, p_y_min, p_y_max)
 end
 
-function get_xy
-    
-    _position(dHandle)
+function get_xy_position(dHandle)
 
     x = get_position(dHandle, X_channel)
     y = get_position(dHandle, Y_channel)
