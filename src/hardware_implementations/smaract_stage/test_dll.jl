@@ -201,7 +201,7 @@ end
 
 function findReference(dHandle, channel)
     println("MCS2 find reference on channel: $channel.")
-    set_property_i32(dHandle, channel, SA_CTL_PKEY_REFERENCING_OPTIONS, 0)
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_REFERENCING_OPTIONS, 2)
 
     errcode = SA_CTL_Reference(dHandle, channel, 0)
 
@@ -317,7 +317,9 @@ function find_xy_travel_range(dHandle)
     return (p_x_min, p_x_max, p_y_min, p_y_max)
 end
 
-function get_xy_position(dHandle)
+function get_xy
+    
+    _position(dHandle)
 
     x = get_position(dHandle, X_channel)
     y = get_position(dHandle, Y_channel)
