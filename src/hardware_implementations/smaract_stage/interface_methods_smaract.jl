@@ -1,11 +1,3 @@
-#   initialize(stage)    → find USB device, connect, set reference,
-#                          query limits, set velocity
-#   shutdown(stage)      → disconnect if connected
-#   move(stage, pos)     → absolute move + getposition
-#   getposition(stage)   → query POS and update stage.pos
-#   home(stage)          → move to homepos
-#   stopmotion(stage)    → halt
-#   export_state(stage)  → return Dict of all state for logging/saving
 
 """
     initialize!(stage::MCS2Stage)
@@ -91,9 +83,9 @@ function initialize!(stage::MCS2Stage)
         # Amplifier-side settings (safe to set; channel is connected)
         try
             SA_CTL_SetProperty_i32(stage.dHandle[], ch,
-                                   SA_CTL_PKEY_MAX_CL_FREQUENCY, Int32(6000))
+                                   SA_CTL_PKEY_MAX_CL_FREQUENCY, Int32(18500))
             SA_CTL_SetProperty_i32(stage.dHandle[], ch,
-                                   SA_CTL_PKEY_HOLD_TIME, Int32(1000))
+                                   SA_CTL_PKEY_HOLD_TIME, SA_CTL_HOLD_TIME_INFINITE)
             SA_CTL_SetProperty_i64(stage.dHandle[], ch,
                                    SA_CTL_PKEY_MOVE_VELOCITY,     stage.velocity_pm_s[i])
             SA_CTL_SetProperty_i64(stage.dHandle[], ch,

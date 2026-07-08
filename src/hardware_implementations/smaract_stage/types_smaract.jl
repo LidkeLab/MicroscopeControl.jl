@@ -1,15 +1,11 @@
-# types_smaract.jl  —  Data type definitions for the SmarAct MCS2 stage
-# The connection handle is SA_CTL_DeviceHandle_t (UInt32).
-# The GUI converts to µm for display.
-# `n_channels` records how many physical channels are active so the
-# GUI can build the right number of axis rows dynamically.
 
-mutable struct MCS2Stage
+mutable struct MCS2Stage <: Stage
     stagelabel       :: String
     n_channels       :: Int
     channel_ids      :: Vector{Int32}
     connectionstatus :: Bool
     dHandle          :: Ref{SA_CTL_DeviceHandle_t}
+    servostatus      :: Vector{Bool}
 
     pos_pm           :: Vector{Int64}   # picometres
     min_pm           :: Vector{Int64}
@@ -22,6 +18,17 @@ mutable struct MCS2Stage
     is_calibrated    :: Vector{Bool}
     is_referenced    :: Vector{Bool}
     connected        :: Vector{Bool}   # true = positioner attached & usable
+
+    dimensions       :: Int
+    real_x           :: Float64
+    real_y           :: Float64
+    real_z           :: Float64
+    targ_x           :: Float64
+    targ_y           :: Float64
+    targ_z           :: Float64
+    range_x          :: Tuple{Float64, Float64}
+    range_y          :: Tuple{Float64, Float64}
+    range_z          :: Tuple{Float64, Float64}
 end
 
 """
@@ -37,6 +44,7 @@ function MCS2Stage(;
     channel_ids      :: Vector{Int32}      = Int32[0, 1, 2],
     connectionstatus :: Bool               = false,
     dHandle          :: Ref{SA_CTL_DeviceHandle_t} = Ref{SA_CTL_DeviceHandle_t}(0),
+    servostatus      :: Vector{Bool}       = fill(false, 3),
 
     pos_pm           :: Vector{Int64}      = zeros(Int64, 3),
     min_pm           :: Vector{Int64}      = fill(Int64(-10_000_000_000), 3),  # –10 mm
@@ -49,12 +57,19 @@ function MCS2Stage(;
     is_calibrated    :: Vector{Bool}       = fill(false, 3),
     is_referenced    :: Vector{Bool}       = fill(false, 3),
 
-    connected        :: Vector{Bool}       = fill(true, 3))
+    connected        :: Vector{Bool}       = fill(true, 3)) dimensions       :: Int                = min(n_channels, 3),
+    real_x           :: Float64             = 0.0,
+    real_y           :: Float64             = 0.0,
+    real_z           :: Float64             = 0.0,
+    targ_x           :: Float64             = 0.0,
+    targ_y           :: Float64             = 0.0,
+    targ_z           :: Float64             = 0.0,
+    range_x          :: Tuple{Float64,Float64} = (min_pm[1] / 1e6, max_pm[1] / 1e6),
+    range_y          :: Tuple{Float64,Float64} = (min_pm[2] / 1e6, max_pm[2] / 1e6),
+    range_z          :: Tuple{Float64,Float64} = (n_channels >= 3 ? (min_pm[3] / 1e6, max_pm[3] / 1e6) : (0.0, 0.0))
 
     return MCS2Stage(
-        stagelabel, n_channels, channel_ids, connectionstatus, dHandle,
-        pos_pm, min_pm, max_pm, home_pm,
-        velocity_pm_s, accel_pm_s2,
-        is_calibrated, is_referenced, connected
+        stagelabel, n_channels, channel_ids, connectionstatus, dHandle, servostatus, pos_pm, min_pm, max_pm, home_pm, velocity_pm_s, accel_pm_s2,
+        is_calibrated, is_referenced, connected, dimensions, real_x, real_y, real_z, targ_x, targ_y, targ_z, range_x, range_y, range_z
     )
 end

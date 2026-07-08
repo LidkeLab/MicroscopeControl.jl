@@ -178,11 +178,11 @@ for channel in (X_channel, Y_channel)
     #Set to closed-loop movement
     set_property_i32(dHandle, channel, SA_CTL_PKEY_MOVE_MODE, SA_CTL_MOVE_MODE_CL_ABSOLUTE)
 
-    #Set max closed loop frequency (maxCLF) to 6 kHz
-    set_property_i32(dHandle, channel, SA_CTL_PKEY_MAX_CL_FREQUENCY, 6000)
+    #Set max closed loop frequency (maxCLF) to 18.5 kHz. Vendor software uses 18.5 kHz as default.
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_MAX_CL_FREQUENCY, 18500)
 
-    #set the hold time to 1000 ms.
-    set_property_i32(dHandle, channel, SA_CTL_PKEY_HOLD_TIME, 1000)
+    #set the hold time to infinite ms. Infinte hold time to prevent drift when the stage is not moving.
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_HOLD_TIME, SA_CTL_HOLD_TIME_INFINITE)
 
     # Set velocity to 1 mm/s   
     set_property_i64(dHandle, channel, SA_CTL_PKEY_MOVE_VELOCITY, 1_000_000_000)

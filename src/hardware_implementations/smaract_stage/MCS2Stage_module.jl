@@ -1,6 +1,7 @@
 module MCS2Stage_mod
 
-using GLMakie
+using ...MicroscopeControl.HardwareInterfaces.StageInterface
+import ...MicroscopeControl: export_state, initialize, shutdown
 
 # Path to the SmarAct DLL 
 const SmarAct = "C:\\Windows\\System32\\SmarActCTL.dll"
@@ -21,8 +22,8 @@ include("helper_smaract.jl")
 # 5. High-level interface methods (needs the helpers)
 include("interface_methods_smaract.jl")  
 
-# 6. GUI (needs everything above + GLMakie)
-include("gui_smaract.jl")         # gui(stage::MCS2Stage)
+# 6. Adapts MCS2Stage onto the shared StageInterface contract
+include("stageinterface_bridge_smaract.jl")
 
 # Public exports
 export MCS2Stage          # the stage struct + constructor
@@ -47,4 +48,4 @@ export stop_all!, stop_channel!
 # GUI
 export gui
 
-end # module MCS2Stage_mod
+end
