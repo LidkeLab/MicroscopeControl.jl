@@ -56,20 +56,33 @@ function MCS2Stage(;
 
     is_calibrated    :: Vector{Bool}       = fill(false, 3),
     is_referenced    :: Vector{Bool}       = fill(false, 3),
-
-    connected        :: Vector{Bool}       = fill(true, 3)) dimensions       :: Int                = min(n_channels, 3),
+    connected        :: Vector{Bool}       = fill(true, 3),
+    dimensions       :: Union{Int, Nothing} = nothing,
+    
     real_x           :: Float64             = 0.0,
     real_y           :: Float64             = 0.0,
     real_z           :: Float64             = 0.0,
     targ_x           :: Float64             = 0.0,
     targ_y           :: Float64             = 0.0,
     targ_z           :: Float64             = 0.0,
-    range_x          :: Tuple{Float64,Float64} = (min_pm[1] / 1e6, max_pm[1] / 1e6),
-    range_y          :: Tuple{Float64,Float64} = (min_pm[2] / 1e6, max_pm[2] / 1e6),
-    range_z          :: Tuple{Float64,Float64} = (n_channels >= 3 ? (min_pm[3] / 1e6, max_pm[3] / 1e6) : (0.0, 0.0))
+    range_x          :: Union{Tuple{Float64,Float64}, Nothing} = nothing,
+    range_y          :: Union{Tuple{Float64,Float64}, Nothing} = nothing,
+    range_z          :: Union{Tuple{Float64,Float64}, Nothing} = nothing)
+
+    dims = dimensions === nothing ? min(n_channels, 3) : dimensions
+    
+    rx = range_x === nothing ? (min_pm[1] / 1e6, max_pm[1] / 1e6) : range_x
+    ry = range_y === nothing ? (min_pm[2] / 1e6, max_pm[2] / 1e6) : range_y
+    rz = if range_z !== nothing
+        range_z
+    elseif n_channels >= 3
+        (min_pm[3] / 1e6, max_pm[3] / 1e6)
+    else
+        (0.0, 0.0)
+    end
 
     return MCS2Stage(
         stagelabel, n_channels, channel_ids, connectionstatus, dHandle, servostatus, pos_pm, min_pm, max_pm, home_pm, velocity_pm_s, accel_pm_s2,
-        is_calibrated, is_referenced, connected, dimensions, real_x, real_y, real_z, targ_x, targ_y, targ_z, range_x, range_y, range_z
+        is_calibrated, is_referenced, connected, dims, real_x, real_y, real_z, targ_x, targ_y, targ_z, rx, ry, rz
     )
 end
