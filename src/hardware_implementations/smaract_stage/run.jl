@@ -1,5 +1,5 @@
 using Pkg
-Pkg.activate("C:\\Users\\krai\\.julia\\dev\\MicroscopeControl.jl")
+Pkg.activate("C:\\Users\\nanol\\Documents\\GitHub\\MicroscopeControl.jl")
 using MicroscopeControl
 
 stage = MCS2Stage(
@@ -8,6 +8,6 @@ stage = MCS2Stage(
     channel_ids = Int32[0, 1, 2],
 )
 
-# initialize(stage)   # this is the step that would need real hardware — skip/comment out for now
+initialize(stage)
 
 MicroscopeControl.HardwareInterfaces.StageInterface.gui(stage)
