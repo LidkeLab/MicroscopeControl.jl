@@ -1,5 +1,5 @@
 using Pkg
-Pkg.activate("C:\\Users\\nanol\\Documents\\GitHub\\MicroscopeControl.jl")
+Pkg.activate("C:\\Users\\nanol\\.julia\\dev\\MicroscopeControl.jl")
 using MicroscopeControl
 
 stage = MCS2Stage(
