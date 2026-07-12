@@ -10,4 +10,7 @@ stage = MCS2Stage(
 
 initialize(stage)
 
+stage.range_x = (-20_000.0, 20_000.0)   # µm, since these fields are in micrometres, software limits only, not hardware limits. The hardware limits are in the device's firmware and cannot be changed from software.
+stage.range_y = (-20_000.0, 20_000.0)
+
 MicroscopeControl.HardwareInterfaces.StageInterface.gui(stage)
