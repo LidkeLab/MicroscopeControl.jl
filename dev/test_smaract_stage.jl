@@ -10,7 +10,7 @@ stage = MCS2Stage(
 
 initialize(stage)
 
-move_um!(stage, [10.0, 5.0 ,0.0]) 
+# move_um!(stage, [10.0, 5.0 ,0.0]) 
 
 stage.range_x = (-20_000.0, 20_000.0)   # µm, since these fields are in micrometres, software limits only, not hardware limits. The hardware limits are in the device's firmware and cannot be changed from software.
 stage.range_y = (-20_000.0, 20_000.0)

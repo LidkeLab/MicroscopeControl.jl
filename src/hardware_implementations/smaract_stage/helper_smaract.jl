@@ -293,8 +293,5 @@ function _drive_to_endstop!(stage::MCS2Stage, ch::Int32, target_pm::Int64, timeo
         sleep(0.05)
     end
  
-    # Clear the END_STOP_REACHED / MOVEMENT_FAILED flags so the channel is
-    # ready for the next move. The manual states these flags persist until
-    # a new movement or SA_CTL_Stop is issued.
     SA_CTL_Stop(stage.dHandle[], ch, Int32(0))
 end

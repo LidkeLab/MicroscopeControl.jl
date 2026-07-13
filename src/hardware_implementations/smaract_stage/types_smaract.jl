@@ -52,7 +52,7 @@ function MCS2Stage(;
     home_pm          :: Vector{Int64}      = zeros(Int64, 3),
 
     velocity_pm_s    :: Vector{Int64}      = fill(Int64(1_000_000_000), 3),    # 1 mm/s
-    accel_pm_s2      :: Vector{Int64}      = fill(Int64(10_000_000_000), 3),   # 10 mm/s²
+    accel_pm_s2      :: Vector{Int64}      = fill(Int64(1_000_000_000), 3),   # 1 mm/s²
 
     is_calibrated    :: Vector{Bool}       = fill(false, 3),
     is_referenced    :: Vector{Bool}       = fill(false, 3),
