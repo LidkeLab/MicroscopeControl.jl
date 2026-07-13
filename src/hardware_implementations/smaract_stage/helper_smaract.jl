@@ -1,8 +1,3 @@
-# Accepts an MCS2Stage plus any motion parameters.
-# Calls the low-level ccall wrappers from functions_smaract.jl.
-# Checks the error code and logs a message.
-# Updates the relevant fields on the stage struct so the GUI always
-# has an up-to-date view without an extra query round-trip.
 
 function _check!(errcode::SA_CTL_Result_t; msg::String = "Operation failed")
     if errcode != SA_CTL_ERROR_NONE
@@ -170,6 +165,7 @@ function move_all!(stage::MCS2Stage, targets_pm::Vector{Int64}; timeout_s::Float
 
     # Wait for those channels to finish
     t0 = time()
+    @async begin
     while true
         all_done = true
         for ch in moving_channels
@@ -186,7 +182,7 @@ function move_all!(stage::MCS2Stage, targets_pm::Vector{Int64}; timeout_s::Float
         end
         sleep(0.05)
     end
-
+    end
     # Refresh all positions
     query_positions!(stage)
 end
@@ -231,17 +227,7 @@ are 0/0 — "no software limit configured" — NOT "zero physical range". The
 MCS2 has no limit-switch property to query directly; instead the controller
 detects a mechanical end stop *while moving* and sets the
 END_STOP_REACHED state bit.
- 
-HOW IT WORKS:
-  1. The channel must already be referenced (`find_reference!`), otherwise
-     positions are not meaningful.
-  2. Commands a move to `-overshoot_pm` (far beyond any real stage, e.g.
-     -70 mm by default). The stage physically stops at its negative end
-     stop; the SDK sets SA_CTL_CH_STATE_BIT_END_STOP_REACHED and the move
-     finishes normally (it is NOT an error).
-  3. Reads POSITION → this is the negative physical limit.
-  4. Repeats toward `+overshoot_pm` for the positive physical limit.
-  5. Returns (min_pm, max_pm). The difference is the physical travel range.
+
  
 """
 function find_travel_range!(stage::MCS2Stage, ch_index::Int;
