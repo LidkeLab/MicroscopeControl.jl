@@ -26,6 +26,9 @@ include("lightsource_interface/LightSourceInterface.jl")
 include("daq_interface/DAQInterface.jl")
 @reexport using .DAQInterface
 
+include("attenuator_interface/AttenuatorInterface.jl")
+@reexport using .AttenuatorInterface
+
 # Commented out - not currently in use
 # include("triggerscope_interface/TrigInterface.jl")
 # @reexport using .TrigInterface

@@ -50,6 +50,10 @@ include("daq_transmission_light/TransmissionDaqControl.jl")
 include("crysta_laser_561/CrystaLaserControl.jl")
 @reexport using .CrystaLaserControl
 
+# Attenuator implementation (depends on NIDAQcard)
+include("lcc1620_attenuator/LCC1620Attenuator.jl")
+@reexport using .LCC1620Attenuator
+
 include("vortran_laser_488/VortranLaserControl.jl")
 @reexport using .VortranLaserControl
 
