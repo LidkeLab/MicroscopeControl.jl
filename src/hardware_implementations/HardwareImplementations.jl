@@ -50,7 +50,11 @@ include("daq_transmission_light/TransmissionDaqControl.jl")
 include("crysta_laser_561/CrystaLaserControl.jl")
 @reexport using .CrystaLaserControl
 
-# Attenuator implementation (depends on NIDAQcard)
+# Triggerscope V4 (serial DAC/TTL controller; must come before modules that depend on it)
+include("triggerscope/Triggerscope.jl")
+@reexport using .Triggerscope
+
+# Attenuator implementation (depends on Triggerscope)
 include("lcc1620_attenuator/LCC1620Attenuator.jl")
 @reexport using .LCC1620Attenuator
 
@@ -66,9 +70,6 @@ include("meadowlark_slm/Meadowlark.jl")
 @reexport using .Meadowlark
 
 # Work in progress - uncomment when ready
-# include("triggerscope/Triggerscope.jl")
-# @reexport using .Triggerscope
-
 # include("mcl_micro_positioner/MCLMicroPositioner.jl")
 # @reexport using .MCLMicroPositioner
 

@@ -29,10 +29,10 @@ include("daq_interface/DAQInterface.jl")
 include("attenuator_interface/AttenuatorInterface.jl")
 @reexport using .AttenuatorInterface
 
-# Commented out - not currently in use
-# include("triggerscope_interface/TrigInterface.jl")
-# @reexport using .TrigInterface
+include("triggerscope_interface/TrigInterface.jl")
+@reexport using .TrigInterface
 
+# Commented out - not currently in use
 # include("objective_positioner_interface/ObjPositionerInterface.jl")
 # @reexport using .ObjPositionerInterface
 

@@ -112,5 +112,4 @@ heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-l
 ### Work in Progress
 
 Some hardware modules are commented out in `MicroscopeControl.jl` while under development:
-- `Triggerscope` - external trigger synchronization
 - `MCLMicroPositioner` - Mad City Labs microdrive positioner

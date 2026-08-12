@@ -1,30 +1,27 @@
 """
     initialize(attenuator::LCC1620)
 
-Create the persistent analog output task and set the drive voltage to 0 V.
+Open the Triggerscope serial port (if not already open — the scope may be
+shared with another attenuator), set the DAC channel range to 0-5 V, and
+drive to `min_voltage`.
 """
 function initialize(attenuator::LCC1620)
-    if isempty(attenuator.ao_channel)
-        @warn "No AO channel available for LCC1620"
-        return nothing
-    end
-    if attenuator.task === nothing
-        attenuator.task = NIDAQcard.createtask(attenuator.daq, "AO", attenuator.ao_channel)
-    end
+    isopen(attenuator.scope.sp) || initialize(attenuator.scope)
+    setrange(attenuator.scope, attenuator.dac_channel, ZEROTOFIVE)
     setdrivevoltage(attenuator, attenuator.properties.min_voltage)
     return nothing
 end
 
 function AttenuatorInterface.setdrivevoltage(attenuator::LCC1620, voltage::Float64)
-    if attenuator.task === nothing
-        @warn "LCC1620 is not initialized, call initialize first"
+    if !isopen(attenuator.scope.sp)
+        @warn "Triggerscope port is not open for LCC1620, call initialize first"
         return
     end
     if voltage < attenuator.properties.min_voltage || voltage > attenuator.properties.max_voltage
         @error "The voltage should be between $(attenuator.properties.min_voltage) and $(attenuator.properties.max_voltage)"
         return
     end
-    NIDAQcard.setvoltage(attenuator.daq, attenuator.task, voltage)
+    setdac(attenuator.scope, attenuator.dac_channel, voltage)
     attenuator.properties.drive_voltage = voltage
     attenuator.properties.transmission = voltage_to_transmission(attenuator, voltage)
     return nothing
@@ -113,16 +110,22 @@ function interp1(x::Vector{Float64}, y::Vector{Float64}, xq::Float64)
     return y[i] + frac * (y[i+1] - y[i])
 end
 
+"""
+    shutdown(attenuator::LCC1620)
+
+Drive the DAC channel to `min_voltage` (0 V = full transmission on the
+LCC1620). The Triggerscope serial port is left open — it may be shared with
+another attenuator; shut the scope down separately when done with all
+channels.
+"""
 function shutdown(attenuator::LCC1620)
-    if attenuator.task === nothing
+    if !isopen(attenuator.scope.sp)
         return nothing
     end
-    NIDAQcard.setvoltage(attenuator.daq, attenuator.task, attenuator.properties.min_voltage)
+    setdac(attenuator.scope, attenuator.dac_channel, attenuator.properties.min_voltage)
     attenuator.properties.drive_voltage = attenuator.properties.min_voltage
     attenuator.properties.transmission =
         voltage_to_transmission(attenuator, attenuator.properties.min_voltage)
-    NIDAQcard.deletetask(attenuator.daq, attenuator.task)
-    attenuator.task = nothing
     return nothing
 end
 
@@ -140,16 +143,15 @@ function export_state(attenuator::LCC1620)
         # Calibration lookup table
         "cal_voltages" => copy(attenuator.properties.cal_voltages),
         "cal_transmissions" => copy(attenuator.properties.cal_transmissions),
-        # DAQ channel
-        "ao_channel" => attenuator.ao_channel
+        # Triggerscope channel
+        "dac_channel" => attenuator.dac_channel,
+        "scope_devicename" => attenuator.scope.devicename,
+        "scope_portname" => attenuator.scope.portname
     )
 
     data = nothing
 
-    # Include the DAQ state as a child component
-    children = Dict{String, Any}(
-        "daq" => export_state(attenuator.daq)
-    )
+    children = Dict{String, Any}()
 
     return attributes, data, children
 end

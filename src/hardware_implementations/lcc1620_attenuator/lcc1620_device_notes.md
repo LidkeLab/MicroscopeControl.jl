@@ -213,23 +213,41 @@ Everything below is ours, not Thorlabs'.
 
 ## Wiring
 
+The attenuators are driven by a **Triggerscope V4** (16-bit DACs, serial
+control), not the NIDAQ card:
+
 ```
-NI USB-6008 (Dev2)                    LCC1620/M
-------------------                    ---------
-AO 0  (pin 14) ── signal ──────────►  EXT. INPUT (SMC center)
-GND   (pin 13) ── return ──────────►  EXT. INPUT (SMC shell)
+Triggerscope V4                       LCC1620/M
+---------------                       ---------
+DAC 1 (SMA) ── coax ───────────────►  LCA 1 EXT. INPUT (SMC)
+DAC 2 (SMA) ── coax ───────────────►  LCA 2 EXT. INPUT (SMC)
 ```
 
-- One AO channel per attenuator; the second unit goes on AO 1 (pin 15) /
-  GND (pin 16). The 25 kΩ input impedance is an easy load for the USB-6008.
-- SMC is the small-thread coax connector (not SMA).
+- One DAC channel per attenuator; both `LCC1620` instances **share one
+  `Triggerscope4` object** (one serial port) with different `dac_channel`
+  values.
+- `initialize(att)` sets the channel's DAC range to **ZEROTOFIVE**, so the
+  full 16-bit resolution (65536 steps ≈ 76 µV/step) covers the LC's 0–5 V
+  input. The 25 kΩ input impedance is an easy load for the DAC.
+- The Triggerscope end is SMA; the LCC1620 end is SMC (small-thread coax,
+  not SMA) — use an SMA↔SMC cable/adapter.
+- The photodiode for calibration sweeps still reads through the **NIDAQ AI**
+  (the Triggerscope has no analog inputs — its inputs are TTL triggers).
 
 ## Driver implications
 
 - **0 V = maximum transmission, rising voltage = darker** (Fig. 7). So
   `shutdown`, which drives to `min_voltage` (0 V), leaves the attenuator
   **fully transmitting**, not blocked. A beam-blocked shutdown would mean
-  driving to 5 V instead — a deliberate change, not the default.
+  driving to 5 V instead — a deliberate change, not the default. `shutdown`
+  also leaves the shared Triggerscope serial port **open** (the other LCA may
+  still be using it) — close the scope separately when done with all
+  channels.
+- Each `setdrivevoltage` is a serial command round-trip
+  (write + response, paced by the scope's `compause`, 0.1 s each by
+  default ⇒ ~0.2 s per set). Fine for step-and-settle attenuation; not a
+  modulation path — for hardware-timed sequences use the Triggerscope's
+  PROG_DAC/ARM sequence mode instead.
 - The curve is **saturated dark by ~3 V** (Fig. 6/7: the 3 V and 5 V curves
   overlap at ≈0 %). Concentrate `set_calibration!` sweep points in
   **0–2.5 V**; the upper half of the range carries no information. The curve
