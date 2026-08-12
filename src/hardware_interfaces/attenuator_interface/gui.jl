@@ -24,12 +24,10 @@ function gui(attenuator::Attenuator)
 
     # call back for changing textbox and slider value
     on(textbox.stored_string) do s
-        val = parse(Float64, s)
-        set_close_to!(slider, val)
-        setdrivevoltage(attenuator, val)
+        set_close_to!(slider, parse(Float64, s))
     end
 
-    lift(slider.value) do x
+    on(slider.value) do x
         textbox.displayed_string = string(x)
         setdrivevoltage(attenuator, Float64(x))
     end
