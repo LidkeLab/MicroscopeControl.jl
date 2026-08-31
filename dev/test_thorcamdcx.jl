@@ -7,7 +7,7 @@ using MicroscopeControl.HardwareImplementations.ThorCamDCx
 cam = ThorcamDCXCamera()
 initialize(cam)
 
-gui(cam)
+MicroscopeControl.HardwareInterfaces.CameraInterface.gui(cam)
 
 cam.exposure_time = 0.01 # s
 cam.roi.x_start = 100

@@ -1,6 +1,10 @@
 
 
 function initialize(camera::ThorcamDCXCamera)
+    if camera.camera_handle != 0
+        is_ExitCamera(camera.camera_handle)
+        camera.camera_handle = 0
+    end
     dev_number = zeros(INT, 1)
     success = is_GetNumberOfCameras(dev_number)
     println("number of cameras: ", dev_number[1])
