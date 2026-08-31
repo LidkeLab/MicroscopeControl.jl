@@ -186,7 +186,7 @@ end
 # To run:
 # Close each camera gui before running the next one.
 # camera = ThorcamDCXCamera()
-# scope4 = Triggerscope4(compause = 1e-4)
+# scope4 = Triggerscope4(portname = "COM4", compause = 1e-4)
 # galvo_calibration_gui(camera, scope4)
 # saved_covariance_matrix =  [371.114 -0.0179705; -7.35754 279.314]
 # covariance_matrix = calibrate_galvo(camera, scope4; step_size = 0.01)
