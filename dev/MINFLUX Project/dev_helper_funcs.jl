@@ -7,19 +7,20 @@ using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner
 using GLMakie
 
-function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::Real = 10000, gain::Int32 = Int32(1), roi::CameraROI = CameraROI(0, 0, 1440, 1080)) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
+function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::Real = 10000, gain::Int32 = Int32(1), roi::Union{CameraROI,Nothing} = nothing) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
     # initalize camera
     initialize(camera)
 
     camera.exposure_time = exposure_time
     camera.frame_rate = frame_rate
-    camera.roi = roi
+    # Default to the full sensor (camera_format is populated by initialize); an explicit roi can still request a smaller region.
+    camera.roi = roi === nothing ? CameraROI(0, 0, camera.camera_format.x_pixels, camera.camera_format.y_pixels) : roi
     hasfield(typeof(camera), :gain) && (camera.gain = gain) # DCX camera has no gain field
 
 
     live(camera)
 
-    @info "Camera initialized with exposure time: $(getexposuretime(camera)[1]) μs, frame rate: $(getframerate(camera)[1]) Hz, ROI: $(getroisize(camera)) pixels, gain: $(getgain(camera)[1] / 10) dB "
+    @info "Camera initialized with exposure time: $(camera.exposure_time), frame rate: $(camera.frame_rate) Hz, ROI: $(camera.roi.width)x$(camera.roi.height) pixels" * (hasfield(typeof(camera), :gain) ? ", gain: $(camera.gain / 10) dB" : "")
     println()
 
     initial_frame = getlastframe(camera)'

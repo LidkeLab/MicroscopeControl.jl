@@ -94,7 +94,7 @@ function calibration_loop(
     while go == true && (positive ? voltage_counter <= max_voltage : voltage_counter >= min_voltage)
         setdac(scope, channel, voltage_counter)
         new_frame = getlastframe(camera)'
-        new_cx, new_cy = find_center(new_frame)
+        new_cx, new_cy = find_center_gaussian(new_frame)
 
         # push the positions and voltages to the arrays
         push!(positions, (new_cx, new_cy))
@@ -213,7 +213,7 @@ function galvo_calibration_gui(camera, scope::Triggerscope4; frame_rate::Float64
     # Async loop to update center with live camera feed
     @async begin 
         while Bool(camera.is_running) == 1
-            center_x[], center_y[] = find_center(frame_obs[])
+            center_x[], center_y[] = find_center_gaussian(frame_obs[])
             sleep(1 / frame_rate)
         end
     end
