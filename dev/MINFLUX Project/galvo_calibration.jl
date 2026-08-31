@@ -196,7 +196,7 @@ end
 
 
 # GUI for Galvo Calibration
-function galvo_calibration_gui(camera, scope::Triggerscope4; frame_rate::Float64 = 80.0, exposure_time = 10000, gain = Int32(480))
+function galvo_calibration_gui(camera, scope::Triggerscope4; frame_rate::Float64 = 80.0, exposure_time = 0.01, gain = Int32(480))
     # initalize triggerscope 
     initialize(scope)
     sleep(2)  # Allow time for instruments to initialize
@@ -221,8 +221,8 @@ end
 
 # To run:
 # Close each camera gui before running the next one.
-# camera = ThorCamCSCCamera()
+# camera = ThorcamDCXCamera()
 # scope = Triggerscope4()
 # galvo_calibration_gui(camera, scope)
 # calibration_matrix = calibrate_galvo(camera, scope, frame_margin = 0.25)
-# saved_calibration_matrix_CSC = [1017.56 24.7616; 6.11555 746.693]
+# saved_calibration_matrix_CSC = [1017.56 24.7616; 6.11555 746.693] # from a prior CSC-camera calibration run; re-calibrate for DCX

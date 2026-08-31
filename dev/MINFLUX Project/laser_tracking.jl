@@ -132,7 +132,7 @@ function laser_mouse_tracking(scope::Triggerscope4, camera, covariance_matrix::M
         setrange(scope, 2, PLUSMINUS10)
         setdac(scope, 1, 0.0)
         setdac(scope, 2, 0.0)
-        camera.exposure_time = 1500
+        camera.exposure_time = 0.0015 # seconds (DCX convention)
         scope.compause = 1e-4
     catch e
         @error "Error initializing camera or scope: $e"
@@ -185,7 +185,7 @@ end
 
 # To run:
 # Close each camera gui before running the next one.
-# camera = ThorCamCSCCamera()
+# camera = ThorcamDCXCamera()
 # scope4 = Triggerscope4(compause = 1e-4)
 # galvo_calibration_gui(camera, scope4)
 # saved_covariance_matrix =  [371.114 -0.0179705; -7.35754 279.314]

@@ -7,14 +7,14 @@ using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner
 using GLMakie
 
-function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::Int64 = 10000, gain::Int32 = Int32(1), roi::CameraROI = CameraROI(0, 0, 1440, 1080)) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
+function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::Real = 10000, gain::Int32 = Int32(1), roi::CameraROI = CameraROI(0, 0, 1440, 1080)) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
     # initalize camera
-    initialize(camera)    
+    initialize(camera)
 
     camera.exposure_time = exposure_time
     camera.frame_rate = frame_rate
     camera.roi = roi
-    camera.gain = gain
+    hasfield(typeof(camera), :gain) && (camera.gain = gain) # DCX camera has no gain field
 
 
     live(camera)
