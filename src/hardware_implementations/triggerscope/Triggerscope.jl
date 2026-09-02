@@ -1,5 +1,6 @@
 #=
 DEVICE INSTALLATION INSTRUCTIONS
+https://github.com/micro-manager/TriggerScopeMM.git
 
 
 
