@@ -84,7 +84,9 @@ function calibration_loop(
     channel = 1, # DAC channel on triggerscope to use
     margin = 0.1 # Margin of the frame size to stop the calibration loop
 )
-    frame_size = size(getlastframe(camera)')
+    first_frame = getlastframe(camera)
+    first_frame === nothing && error("calibration_loop: camera returned no frame — is it initialized and live?")
+    frame_size = size(first_frame')
     positions = []
     voltages = [] # create an array that is the same size as positions for graphing
     voltage_counter = 0.0 # keeps track of current voltage

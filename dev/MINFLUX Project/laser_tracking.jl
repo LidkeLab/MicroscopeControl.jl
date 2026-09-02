@@ -16,11 +16,12 @@ function live_makie_display(camera)
     start = time()
     
     # Get initial frame
-    initial_frame = getlastframe(camera)'
+    initial_frame = getlastframe(camera)
     if initial_frame === nothing
         @error "Failed to get initial frame"
         return
     end
+    initial_frame = initial_frame'
     
     # Create figure and axis
     fig = Figure(resolution = (1280, 1024))
@@ -133,6 +134,9 @@ function laser_mouse_tracking(scope::Triggerscope4, camera, covariance_matrix::M
         setdac(scope, 1, 0.0)
         setdac(scope, 2, 0.0)
         camera.exposure_time = 0.0015 # seconds (DCX convention)
+        # initialize() populates camera_format from the actual sensor; reset roi to match it
+        # (the ThorcamDCXCamera default roi may not match this camera's real sensor size)
+        camera.roi = CameraROI(0, 0, camera.camera_format.x_pixels, camera.camera_format.y_pixels)
         scope.compause = 1e-4
     catch e
         @error "Error initializing camera or scope: $e"
