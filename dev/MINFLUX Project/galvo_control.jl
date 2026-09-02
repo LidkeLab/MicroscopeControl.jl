@@ -15,6 +15,7 @@ using MicroscopeControl.HardwareImplementations.Triggerscope
 # Sets both channels to a known voltage range and zeroes them.
 # Call this once after `initialize(scope)`.
 function setup_galvos(scope::Triggerscope4; range::Range = PLUSMINUS10)
+    sleep(2)  # Triggerscope resets on port open (Arduino DTR reset) and needs time to boot before it responds
     clearall(scope)
     setrange(scope, 1, range)
     setrange(scope, 2, range)
@@ -49,7 +50,7 @@ function example_grid_scan(scope::Triggerscope4; step::Float64 = 1.0, points::In
 end
 
 # To run:
-# scope = Triggerscope4(portname = "COM4")
+# scope = Triggerscope4(portname = "COM3")
 # initialize(scope)
 # setup_galvos(scope)
 # move_galvo(scope, 2.0, -1.5)   # move to a specific voltage position
