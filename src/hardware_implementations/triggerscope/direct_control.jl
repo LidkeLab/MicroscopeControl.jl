@@ -17,8 +17,10 @@ function setdac(scope::Triggerscope4, dacnum::Int, voltvalue::Float64)
     #convert the voltage value to a 16 bit integer value depending on range
     dacoutput = volttooutput(scope, dacnum, voltvalue)
 
-    #create the command string (SAO<channel>-<value>, per the ARC Triggerscope MM firmware protocol)
-    commandstring = "SAO" * string(dacnum) * "-" * string(dacoutput) * "\n"
+    #command format depends on which firmware this unit runs (see FirmwareProtocol in types.jl)
+    commandstring = scope.protocol == MM_PROTOCOL ?
+        "SAO" * string(dacnum) * "-" * string(dacoutput) * "\n" :
+        "DAC" * string(dacnum) * "," * string(dacoutput) * "\n"
 
     #write the command to the serial port
     writecommand(scope, commandstring)
@@ -42,9 +44,12 @@ function setttl(scope::Triggerscope4, channel::Int, ttlval::Bool)
 end
 
 function setrange(scope::Triggerscope4, dacchannel::Int, range::Range)
-    #create the command string (SAR<channel>-<range code>, per the ARC Triggerscope MM firmware protocol)
     scope.dacranges[dacchannel] = range  # Update the range in the scope object
-    commandstring = "SAR" * string(dacchannel) * "-" * string(Int(scope.dacranges[dacchannel])) * "\n"
+
+    #command format depends on which firmware this unit runs (see FirmwareProtocol in types.jl)
+    commandstring = scope.protocol == MM_PROTOCOL ?
+        "SAR" * string(dacchannel) * "-" * string(Int(scope.dacranges[dacchannel])) * "\n" :
+        "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
 
     #write the command to the serial port
     writecommand(scope, commandstring)

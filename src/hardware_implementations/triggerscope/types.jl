@@ -18,6 +18,15 @@ end
     TTL = 2
 end
 
+# Different Triggerscope units run different firmware command sets over the same serial
+# framing. GENERIC_PROTOCOL is the original ARC scripting protocol (e.g. "DAC1,32767",
+# "RANGE1,4"). MM_PROTOCOL is the Micro-Manager/MetaMorph-specific firmware build (e.g.
+# "SAO1-32767", "SAR1-4"), identified by a "-MM" suffix in the device's version string.
+@enum FirmwareProtocol begin
+    GENERIC_PROTOCOL = 1
+    MM_PROTOCOL = 2
+end
+
 mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     #basic setup parameters
     devicename::String               #devicename for the scope, defaults to "Triggerscope4"
@@ -25,6 +34,7 @@ mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     baudrate::Int               #baudrate for serial communication
     rwtimeout::Float64              #timeout for read and write operations
     compause::Float64             #timeout for communication operations
+    protocol::FirmwareProtocol  #which command set this unit's firmware speaks
 
     #LibSerialPort object
     sp::SerialPort
@@ -60,6 +70,7 @@ function Triggerscope4(;
     baudrate::Int = 115200,
     rwtimeout::Float64 = 10.0,
     compause::Float64 = .1,
+    protocol::FirmwareProtocol = GENERIC_PROTOCOL,
 
     dacresolution::Int = 16,
     dacoutputs::Int = 16,
@@ -88,7 +99,7 @@ function Triggerscope4(;
     inputs = Vector{Input}(undef, 1) #TTL inputs
     inputs[1] = Input("TTL", Bool, ttlinputs, [false, true], ttlreadings, false)
 
-    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs)
+    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, protocol, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs)
 end
 
 mutable struct CommandSignal

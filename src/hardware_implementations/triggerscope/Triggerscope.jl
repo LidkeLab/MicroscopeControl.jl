@@ -1,4 +1,7 @@
 #=
+DEVICE INSTALLATION INSTRUCTIONS
+
+
 
 TRIGGERSCOPE 4 HARDWARE SPECIFICATIONS
 MCU @ 600 Mhz
@@ -35,6 +38,7 @@ module Triggerscope
     export arm, clearall, progfocus, progttl, progdac, progarray, cleartable, progdelay, progwave, timecycles, trigmode
     export TriggerMode, RISING, FALLING, CHANGE
     export Range, ZEROTOFIVE, ZEROTOTEN, PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5
+    export FirmwareProtocol, GENERIC_PROTOCOL, MM_PROTOCOL
     export openport, closeport
     export SignalArray, CommandType
     export gui

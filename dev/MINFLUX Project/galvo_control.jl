@@ -50,7 +50,7 @@ function example_grid_scan(scope::Triggerscope4; step::Float64 = 1.0, points::In
 end
 
 # To run:
-# scope = Triggerscope4(portname = "COM3")
+# scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
 # initialize(scope)
 # setup_galvos(scope)
 # move_galvo(scope, 2.0, -1.5)   # move to a specific voltage position
