@@ -39,6 +39,7 @@ MicroscopeControl.jl uses a **three-layer architecture** leveraging Julia's mult
 │  - LightSourceInterface        │  - SimulatedLight, TCube   │
 │  - DAQInterface                │  - NIDAQcard               │
 │  - SLMInterface                │  - OK_XEM (FPGA)           │
+│  - AttenuatorInterface         │  - LCC1620                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -72,6 +73,8 @@ Interfaces define method signatures with `@error "not implemented"` stubs. Imple
 **LightSource**: `setpower`, `light_on`, `light_off`
 
 **DAQ**: `showdevices`, `showchannels`, `createtask`, `setvoltage`, `readvoltage`, `deletetask`
+
+**Attenuator**: `setdrivevoltage`, `getdrivevoltage`, `settransmission`, `gettransmission`, `set_calibration!`
 
 ### GUI Components
 
@@ -109,5 +112,4 @@ heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-l
 ### Work in Progress
 
 Some hardware modules are commented out in `MicroscopeControl.jl` while under development:
-- `Triggerscope` - external trigger synchronization
 - `MCLMicroPositioner` - Mad City Labs microdrive positioner
