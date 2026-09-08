@@ -178,7 +178,10 @@ function move_all!(stage::MCS2Stage, targets_pm::Vector{Int64}; timeout_s::Float
             for ch in moving_channels
                 SA_CTL_Stop(stage.dHandle[], ch, Int32(0))
             end
-            error("Move-all timeout after $(timeout_s)s — all channels stopped")
+            # This runs inside the @async task: a thrown error would only
+            # surface as a failed Task, so log it instead.
+            @error "Move-all timeout after $(timeout_s)s — all channels stopped"
+            break
         end
         sleep(0.05)
     end

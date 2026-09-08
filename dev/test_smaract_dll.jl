@@ -1,7 +1,9 @@
 
 
-include("constants_smaract.jl")
-include("functions_smaract.jl")
+# Standalone SmarAct SDK smoke test (Windows, SmarActCTL.dll). Not part of the package.
+const _smaract_src = joinpath(@__DIR__, "..", "src", "hardware_implementations", "smaract_stage")
+include(joinpath(_smaract_src, "constants_smaract.jl"))
+include(joinpath(_smaract_src, "functions_smaract.jl"))
 
 const SmarAct = "C:\\Windows\\System32\\SmarActCTL.dll"
 
