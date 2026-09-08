@@ -30,7 +30,7 @@ include("simulated_stage/SimulatedStage.jl")
 include("mcl_stage/MadCityLabs.jl")
 @reexport using .MadCityLabs
 
-include("pi_N472/PI_N472.jl")
+include("pi_n472/PI_N472.jl")
 @reexport using .PI_N472
 
 include("smaract_stage/MCS2Stage_module.jl")

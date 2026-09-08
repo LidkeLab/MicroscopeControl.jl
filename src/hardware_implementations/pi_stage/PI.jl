@@ -13,8 +13,11 @@ module PI
 
     export PIStage
     # export initialize, shutdown
-    export servoxy, servox, servoy, driftcorrection, servo
-    export immediatestop, referencemove, stopmotion
-    export movexy, movex, movey, getposition, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait
+    # `servo`, `stopmotion` and `getposition` are PI-local implementations wrapped
+    # by the StageInterface methods in interface_methods.jl; exporting them here
+    # would shadow the generic interface functions at the top level.
+    export servoxy, servox, servoy, driftcorrection
+    export immediatestop, referencemove
+    export movexy, movex, movey, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait
     export gui
 end
