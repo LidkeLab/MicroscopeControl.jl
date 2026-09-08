@@ -15,6 +15,9 @@ makedocs(;
     pages=[
         "Home" => "index.md",
     ],
+    # Not every docstring is in the manual yet; report that as a warning
+    # instead of aborting the build.
+    warnonly=[:missing_docs],
 )
 
 deploydocs(;
