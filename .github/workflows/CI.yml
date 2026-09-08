@@ -78,13 +78,14 @@ jobs:
           Pkg.develop(PackageSpec(path=pwd()))
           Pkg.instantiate()
       - uses: julia-actions/julia-buildpkg@v1
+      # No xvfb-run prefix here: julia-docdeploy@v1 passes a multi-word prefix
+      # as a single command name (exit 127). DISPLAY from the Xvfb step above
+      # is enough for GLMakie.
       - uses: julia-actions/julia-docdeploy@v1
-        with:
-          prefix: xvfb-run -a
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Run doctests
-        shell: xvfb-run -a julia --project=docs --color=yes {0}
+        shell: julia --project=docs --color=yes {0}
         run: |
           using Documenter: DocMeta, doctest
           using MicroscopeControl
