@@ -21,7 +21,7 @@ julia --project -e 'using Pkg; Pkg.instantiate(); using MicroscopeControl'
 julia -e 'using Pkg; Pkg.develop(url="https://github.com/LidkeLab/MicroscopeControl.jl.git")'
 ```
 
-Tests use simulated devices only (`SimCamera`, `SimStage`, `SimLight`) - no hardware required. Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
+Tests use simulated devices only (`SimCamera`, `SimStage3d`/`SimStage2d`/`SimStage1d`, `SimLight`) - no hardware required. GLMakie needs a display: run under `xvfb-run -a` on a headless Linux box (CI does this). Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
 
 ## Architecture
 
@@ -66,7 +66,7 @@ Interfaces define method signatures with `@error "not implemented"` stubs. Imple
 
 ### Key Interface Methods
 
-**Camera**: `capture`, `live`, `sequence`, `abort`, `getlastframe`, `getdata`, `setexposuretime`, `setroi!`
+**Camera**: `capture`, `live`, `sequence`, `abort`, `getlastframe`, `getdata` (exposure and ROI are set through the `exposure_time` and `roi::CameraROI` fields)
 
 **Stage**: `move`, `getposition`, `getrange`, `stopmotion`
 
