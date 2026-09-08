@@ -33,6 +33,9 @@ include("mcl_stage/MadCityLabs.jl")
 include("pi_n472/PI_N472.jl")
 @reexport using .PI_N472
 
+include("smaract_stage/MCS2Stage_module.jl")
+@reexport using .MCS2Stage_mod
+
 # DAQ implementation (must come before modules that depend on it)
 include("nidaq/NIDAQcard.jl")
 @reexport using .NIDAQcard
@@ -68,6 +71,10 @@ include("ok_xem/OK_XEM.jl")
 # SLM implementation
 include("meadowlark_slm/Meadowlark.jl")
 @reexport using .Meadowlark
+
+# FPGA DAC implementation
+include("xem_dac/XEM_DAC.jl")
+@reexport using .XEM_DAC
 
 # Work in progress - uncomment when ready
 # include("mcl_micro_positioner/MCLMicroPositioner.jl")
