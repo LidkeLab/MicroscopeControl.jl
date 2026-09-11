@@ -216,6 +216,11 @@ end
 
 
 function shutdown(camera::ThorcamDCXCamera)
+    # Stop live/sequence capture and free allocated image buffers before releasing the
+    # handle, per the SDK's recommended teardown order (StopLiveVideo -> FreeImageMem ->
+    # ExitCamera). Previously this skipped straight to ExitCamera while capture could
+    # still be running.
+    camera.is_running == 1 && abort(camera)
     success = is_ExitCamera(camera.camera_handle)
     camera.is_running = 0
 end
