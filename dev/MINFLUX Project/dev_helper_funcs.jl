@@ -7,7 +7,7 @@ using MicroscopeControl.HardwareImplementations.ThorCamDCx
 using MicroscopeControl.HardwareImplementations.MCLMicroPositioner
 using GLMakie
 
-function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::Real = 10000, gain::Int32 = Int32(1), roi::Union{CameraROI,Nothing} = nothing) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
+function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::Real = 10000, gain::Int32 = Int32(1), roi::Union{CameraROI,Nothing} = nothing, window_size::Tuple{Int,Int} = (1400, 1050)) #Exposure time for ThorCam CSC is in microseconds (Int), for DCX it is in seconds (Float)
     # initalize camera
     initialize(camera)
 
@@ -28,7 +28,7 @@ function live_camera_display(camera; frame_rate::Float64 = 30.0, exposure_time::
     start = time()
 
     # initalize figure and axis
-    fig1 = Figure(size = (1000, 750))
+    fig1 = Figure(size = window_size)
     ax = Axis(fig1[1, 1], title = "Live Camera Feed"; aspect = DataAspect(), yreversed = true)
 
     # Create observables for the frame, duration, and center coordinates
