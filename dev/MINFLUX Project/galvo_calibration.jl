@@ -231,4 +231,4 @@ end
 # scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
 # galvo_calibration_gui(camera, scope)
 # calibration_matrix = calibrate_galvo(camera, scope, frame_margin = 0.25)  # run this while the gui window from above is still open
-# saved_calibration_matrix_CSC = [1017.56 24.7616; 6.11555 746.693] # from a prior CSC-camera calibration run; re-calibrate for DCX
+# saved_calibration_matrix_CSC = [-5634.05  42.0055;-319.584  -747.27] #new calibration matrix for CSC camera
