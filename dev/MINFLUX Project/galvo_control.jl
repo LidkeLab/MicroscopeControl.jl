@@ -67,7 +67,23 @@ function zero_galvos(scope::Triggerscope4)
 end
 
 # ── Example: step through a small grid of positions ──────────────────────────
-function example_grid_scan(scope::Triggerscope4; step::Float64 = 1.0, points::Int = 5, settle::Float64 = 0.2)
+# Smallest voltage increment the 16-bit DAC can actually address for a given channel's
+# currently-set range (e.g. ~305 uV for the default PLUSMINUS10; ~76 uV for PLUSMINUS2_5).
+function min_voltage_step(scope::Triggerscope4, channel::Int)
+    span = Dict(
+        PLUSMINUS10  => 20.0,
+        PLUSMINUS5   => 10.0,
+        ZEROTOTEN    => 10.0,
+        ZEROTOFIVE   => 5.0,
+        PLUSMINUS2_5 => 5.0,
+    )[scope.dacranges[channel]]
+    return span / 65535
+end
+
+# step defaults to the finest step the DAC can address (see min_voltage_step) — pass a
+# larger value if you want bigger jumps.
+function example_grid_scan(scope::Triggerscope4; step::Union{Float64,Nothing} = nothing, points::Int = 5, settle::Float64 = 0.2)
+    step = step === nothing ? min_voltage_step(scope, 1) : step
     half = (points - 1) / 2
     for i in 0:(points - 1), j in 0:(points - 1)
         x_volts = (i - half) * step
@@ -86,6 +102,8 @@ end
 # fig, ax, frame_obs = live_galvo_view(camera)   # opens the live view; keep this window open
 # move_galvo(scope, .2, -.2)   # move to a specific voltage position, watch it in the live view
 # zero_galvos(scope)    
-# example_grid_scan(scope)        # step through a small grid, then re-zero
+# example_grid_scan(scope)        # step through a small grid at the finest addressable voltage step
+# example_grid_scan(scope, step = 0.001)          # or force a specific step size, e.g. 1 mV
+# setup_galvos(scope, range = PLUSMINUS2_5); example_grid_scan(scope)  # switch to a narrower range for an even finer step (~76 uV vs ~305 uV)
 # shutdown(scope)
 # shutdown(camera)                # or just close the live view window, which does this for you
