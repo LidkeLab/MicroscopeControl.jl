@@ -32,6 +32,7 @@ function initialize(camera::ThorcamDCXCamera)
     maxWidth = INT(sensor_info[1].nMaxWidth)
     maxHeight = INT(sensor_info[1].nMaxHeight)
     pixelSize = INT(sensor_info[1].wPixelSize)/100 # um
+    println("Sensor max size (native, full FOV): ", maxWidth, " x ", maxHeight, " pixels")
 
     camera.camera_format = CameraFormat(maxWidth, maxHeight, pixelSize, 1, "CMOS")
 
@@ -244,6 +245,7 @@ function setroi!(camera::ThorcamDCXCamera)
 
     ROI =  IS_RECT()
     success = is_AOI(camera.camera_handle,IS_AOI_IMAGE_GET_AOI,Ref(ROI),sizeof(ROI))
+    println("Requested AOI: $(camera.roi.width)x$(camera.roi.height) @ ($(camera.roi.x_start),$(camera.roi.y_start)) -> Camera confirmed AOI: $(ROI.s32Width)x$(ROI.s32Height) @ ($(ROI.s32X),$(ROI.s32Y))")
     camera.roi.x_start = ROI.s32X
     camera.roi.y_start = ROI.s32Y
     camera.roi.width = ROI.s32Width
