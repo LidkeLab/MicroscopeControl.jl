@@ -10,6 +10,35 @@
 using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
+using MicroscopeControl.HardwareImplementations.ThorCamDCx
+using GLMakie
+include("./dev_helper_funcs.jl")
+
+# ── Live view ────────────────────────────────────────────────────────────────
+# Simple brightest-pixel finder — enough to show where the beam is without pulling in
+# the full donut/Gaussian fitting from beam_characterization.jl.
+find_beam_center(frame) = (peak = argmax(frame); (Float64(peak[1]), Float64(peak[2])))
+
+# Opens a live camera feed with a beam-center marker so you can watch the galvo move
+# as you call move_galvo/zero_galvos/example_grid_scan. Reuses live_camera_display from
+# dev_helper_funcs.jl (same as galvo_calibration_gui). Closing the window shuts the camera
+# down — don't close it until you're done driving the galvo with this camera.
+function live_galvo_view(camera; frame_rate::Float64 = 30.0, exposure_time::Real = 0.01)
+    fig, ax, frame_obs = live_camera_display(camera; frame_rate = frame_rate, exposure_time = exposure_time)
+
+    center_x = Observable(0.0)
+    center_y = Observable(0.0)
+    scatter!(ax, center_x, center_y, color = :teal, markersize = 10)
+
+    @async begin
+        while Bool(camera.is_running) == 1
+            center_x[], center_y[] = find_beam_center(frame_obs[])
+            sleep(1 / frame_rate)
+        end
+    end
+
+    return fig, ax, frame_obs
+end
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 # Sets both channels to a known voltage range and zeroes them.
@@ -53,7 +82,10 @@ end
 # scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
 # initialize(scope)
 # setup_galvos(scope)
-# move_galvo(scope, 2.0, -1.5)   # move to a specific voltage position
+# camera = ThorcamDCXCamera()
+# fig, ax, frame_obs = live_galvo_view(camera)   # opens the live view; keep this window open
+# move_galvo(scope, 2.0, -1.5)   # move to a specific voltage position, watch it in the live view
 # zero_galvos(scope)
 # example_grid_scan(scope)        # step through a small grid, then re-zero
 # shutdown(scope)
+# shutdown(camera)                # or just close the live view window, which does this for you
