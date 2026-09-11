@@ -13,8 +13,13 @@ module PI
 
     export PIStage
     # export initialize, shutdown
-    export servoxy, servox, servoy, driftcorrection, servo
-    export immediatestop, referencemove, stopmotion
-    export movexy, movex, movey, getposition, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait
+    # `servo`, `stopmotion` and `getposition` are PI-local bindings that shadow the
+    # StageInterface generics. Exporting them made those names ambiguous - and so
+    # unusable unqualified - for every stage in the package, so they stay internal
+    # (reach them as PI.servo, PI.stopmotion, PI.getposition). The StageInterface
+    # methods in interface_methods.jl forward to them for a PIStage.
+    export servoxy, servox, servoy, driftcorrection
+    export immediatestop, referencemove
+    export movexy, movex, movey, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait
     export gui
 end

@@ -35,7 +35,8 @@ MicroscopeControl.jl uses a **three-layer architecture** leveraging Julia's mult
 │  hardware_interfaces/          │  hardware_implementations/ │
 │  Abstract types + contracts    │  Concrete device drivers   │
 │  - CameraInterface             │  - SimulatedCamera, DCAM4  │
-│  - StageInterface              │  - SimulatedStage, PI, MCL │
+│  - StageInterface              │  - SimulatedStage, PI, MCL,│
+│                                │    SmarAct MCS2            │
 │  - LightSourceInterface        │  - SimulatedLight, TCube   │
 │  - DAQInterface                │  - NIDAQcard               │
 │  - SLMInterface                │  - OK_XEM (FPGA)           │
@@ -85,6 +86,7 @@ Hardware implementations use `ccall` for vendor SDKs:
 - `tcube_laser/tcubeapi.jl` - Thorlabs TCube
 - `ok_xem/functions_okFP.jl` - Opal Kelly FrontPanel
 - `mcl_stage/*.jl` - Mad City Labs NanoDrive
+- `smaract_mcs2/ctl_api.jl` - SmarAct MCS2 (SmarActCTL.dll, installed into the system directory)
 - Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
 
 ### Camera Image Data Convention

@@ -33,6 +33,9 @@ include("mcl_stage/MadCityLabs.jl")
 include("pi_N472/PI_N472.jl")
 @reexport using .PI_N472
 
+include("smaract_mcs2/SmarActMCS2.jl")
+@reexport using .SmarActMCS2
+
 # DAQ implementation (must come before modules that depend on it)
 include("nidaq/NIDAQcard.jl")
 @reexport using .NIDAQcard

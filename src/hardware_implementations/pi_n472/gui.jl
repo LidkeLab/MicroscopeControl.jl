@@ -1,4 +1,6 @@
-function gui(stage::N472)
+# Extend the StageInterface generic rather than defining a second `gui` binding:
+# a separate binding here makes the reexported `gui` ambiguous for every device.
+function StageInterface.gui(stage::N472)
     gui_fig = Figure(size=(600, 400))  #This is the Stage GUI Figure
 
     # create buttons to control individual axis

@@ -52,6 +52,7 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 - Mad City Labs nanopositioning stages
 - Physik Instrumente (PI) stages
 - PI N-472 linear stage
+- SmarAct stages on an MCS2 controller (developed against the SOM-MS-8070 XY microscope stage)
 - Simulated stage for testing
 
 ### Light Sources
