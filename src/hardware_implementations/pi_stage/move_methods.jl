@@ -3,7 +3,8 @@
 Function to move PI Stage to a specific position
 """
 function move(stage::PIStage, x::Float64, y::Float64)
-    @ccall gcs2path.PI_MOV(stage.id::Cint, "1 2"::Ptr{UInt8}, [Cdouble(x),Cdouble(y)]::Ptr{Cdouble})::Cint
+    ok = @ccall gcs2path.PI_MOV(stage.id::Cint, "1 2"::Ptr{UInt8}, [Cdouble(x),Cdouble(y)]::Ptr{Cdouble})::Cint
+    ok == 1 || @error "PI_MOV refused — stage not connected, not referenced, or servo off"
     stage.targ_x = x
     stage.targ_y = y
     @info "Stage moving to position: " * string(x) * ", " * string(y)
