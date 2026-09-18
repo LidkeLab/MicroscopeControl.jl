@@ -19,7 +19,10 @@ function initialize_original(stage::PIStage) #TODO: Error handling
     if numconnected > 0
         stage.connectionstatus = true
     else
-        @error "No devices connected"
+        # The DLL enumerates only controllers nobody has open: a C-867 that Device Manager
+        # still lists is held by another process (a second Julia with an initialized stage —
+        # under any Windows user —, PIMikroMove, or an open COM port).
+        @error "No PI C-867 found by the GCS2 library — controller absent, or held by another process"
         stage.connectionstatus = false
         return
     end
