@@ -15,9 +15,9 @@ using GLMakie
 include("./dev_helper_funcs.jl")
 
 # ── Live view ────────────────────────────────────────────────────────────────
-# Simple brightest-pixel finder — enough to show where the beam is without pulling in
-# the full donut/Gaussian fitting from beam_characterization.jl.
-find_beam_center(frame) = (peak = argmax(frame); (Float64(peak[1]), Float64(peak[2])))
+# The beam-center marker uses find_beam_centroid from dev_helper_funcs.jl — a sub-pixel,
+# background-subtracted centroid that is also correct for donut beams (a brightest-pixel
+# search lands on the ring, not the center).
 
 # Opens a live camera feed with a beam-center marker so you can watch the galvo move
 # as you call move_galvo/zero_galvos/example_grid_scan. Reuses live_camera_display from
@@ -32,7 +32,7 @@ function live_galvo_view(camera; frame_rate::Float64 = 30.0, exposure_time::Real
 
     @async begin
         while Bool(camera.is_running) == 1
-            center_x[], center_y[] = find_beam_center(frame_obs[])
+            center_x[], center_y[] = find_beam_centroid(frame_obs[])
             sleep(1 / frame_rate)
         end
     end

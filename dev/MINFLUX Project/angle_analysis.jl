@@ -30,9 +30,30 @@ function _background(frame; frac = 0.05)
     return mean(filter(<=(thresh), vec(frame)))
 end
 
-function _fit_fwhm(frame)
-    idx = argmax(frame)
-    cx, cy = idx[1], idx[2]
+# Sub-pixel, background-subtracted centroid. Used instead of argmax because argmax is
+# quantized to whole pixels, lands on the ring (not the center) for a donut beam, and
+# picks an arbitrary, biased pixel out of the plateau when the spot saturates.
+# thresh_frac drops the sensor-wide noise floor so it can't pull the centroid inward.
+function _centroid(frame; bg_frac = 0.05, thresh_frac = 0.2)
+    f = Float64.(frame)
+    w = max.(f .- quantile(vec(f), bg_frac), 0.0)
+    w = ifelse.(w .>= thresh_frac * maximum(w), w, 0.0)
+    total = sum(w)
+    if total <= 0
+        peak = argmax(f)
+        return Float64(peak[1]), Float64(peak[2])
+    end
+    cx = sum(vec(sum(w, dims = 2)) .* (1:size(w, 1))) / total
+    cy = sum(vec(sum(w, dims = 1)) .* (1:size(w, 2))) / total
+    return cx, cy
+end
+
+# Takes the profile slices through the supplied center so the FWHM/ellipticity are
+# measured about the same point everything else in this file reports. Previously this
+# recomputed its own argmax center, which disagreed with the stored center_x/center_y.
+function _fit_fwhm(frame, center_x, center_y)
+    cx = clamp(round(Int, center_x), 1, size(frame, 1))
+    cy = clamp(round(Int, center_y), 1, size(frame, 2))
     bg = _background(frame)
     xprof = max.(frame[:, cy] .- bg, 0.0)
     x_above = findall(>=(maximum(xprof) / 2), xprof)
@@ -79,15 +100,15 @@ function load_angle_data(dir)
                     h5open(joinpath(folder, fname), "r") do f
                         frame = read(f["frame"])
 
+                        frame_f = Float64.(frame)
+
                         cx = read_attr(f, "center_x", NaN)
                         cy = read_attr(f, "center_y", NaN)
                         if isnan(cx) || isnan(cy)
-                            idx = argmax(frame)
-                            cx, cy = Float64(idx[1]), Float64(idx[2])
+                            cx, cy = _centroid(frame_f)
                         end
 
-                        frame_f = Float64.(frame)
-                        fwhm_x, fwhm_y, ellip = _fit_fwhm(frame_f)
+                        fwhm_x, fwhm_y, ellip = _fit_fwhm(frame_f, cx, cy)
                         m = AngleMeasurement(
                             read_attr(f, "hva1_daq_output"),
                             read_attr(f, "hva1_monitor"),

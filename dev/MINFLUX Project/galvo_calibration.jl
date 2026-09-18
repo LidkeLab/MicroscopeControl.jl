@@ -96,7 +96,9 @@ function calibration_loop(
     while go == true && (positive ? voltage_counter <= max_voltage : voltage_counter >= min_voltage)
         setdac(scope, channel, voltage_counter)
         new_frame = getlastframe(camera)'
-        new_cx, new_cy = find_center_gaussian(new_frame)
+        # Centroid, not argmax: the calibration fits position vs voltage, so it needs a
+        # sub-pixel center that is also correct for a donut beam (see find_beam_centroid).
+        new_cx, new_cy = find_beam_centroid(new_frame)
 
         # push the positions and voltages to the arrays
         push!(positions, (new_cx, new_cy))
@@ -215,7 +217,7 @@ function galvo_calibration_gui(camera, scope::Triggerscope4; frame_rate::Float64
     # Async loop to update center with live camera feed
     @async begin 
         while Bool(camera.is_running) == 1
-            center_x[], center_y[] = find_center_gaussian(frame_obs[])
+            center_x[], center_y[] = find_beam_centroid(frame_obs[])
             sleep(1 / frame_rate)
         end
     end
@@ -231,4 +233,4 @@ end
 # scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
 # galvo_calibration_gui(camera, scope)
 # calibration_matrix = calibrate_galvo(camera, scope, frame_margin = 0.25)  # run this while the gui window from above is still open
-# saved_calibration_matrix_CSC = [-5634.05  42.0055;-319.584  -747.27] #new calibration matrix for CSC camera
+# saved_calibration_matrix_CSC = [ -5439.56    150.988;-467.425  -837.187] #new calibration matrix for CSC camera
