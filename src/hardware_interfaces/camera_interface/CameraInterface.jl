@@ -7,8 +7,8 @@ using GLMakie
 using Images
 using ...MicroscopeControl
 
-# import ...MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
-import ...MicroscopeControl: gui
+# import ...MicroscopeControl: AbstractInstrument, initialize, shutdown
+import ...MicroscopeControl: gui, export_state
 
 
 export Camera, CameraFormat, CameraROI

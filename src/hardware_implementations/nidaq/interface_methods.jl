@@ -259,3 +259,23 @@ function export_state(daq::NIdaq)
     children = Dict()
     return attributes, data, children
 end
+
+"""
+    initialize(daq::NIdaq)
+
+No-op. DAQmx tasks are created and deleted per operation via `createtask`
+and `deletetask`, so `NIdaq` has no persistent hardware connection to open.
+"""
+function initialize(daq::NIdaq)
+    return nothing
+end
+
+"""
+    shutdown(daq::NIdaq)
+
+No-op. DAQmx tasks are created and deleted per operation via `createtask`
+and `deletetask`, so `NIdaq` has no persistent hardware connection to close.
+"""
+function shutdown(daq::NIdaq)
+    return nothing
+end

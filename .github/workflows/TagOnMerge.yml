@@ -5,20 +5,35 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
+# Two merges to main landing close together must tag one at a time, not race
+# each other's "does the tag already exist" check.
+concurrency:
+  group: tag-on-merge
+  cancel-in-progress: false
 
 jobs:
   tag:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write # to trigger CI.yml's workflow_dispatch for the new tag
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Tag the merged version if it doesn't exist yet
+        id: tag
         run: |
-          version=$(grep -m1 '^version' Project.toml | sed -E 's/version *= *"(.*)"/\1/')
+          # Local tag refs from checkout can be stale; get the real state of
+          # the remote before deciding whether the tag already exists.
+          git fetch --tags --force
+
+          # ubuntu-latest ships Python >=3.11, so tomllib is stdlib. Kept on
+          # one physical line: a `run: |` block scalar requires every line to
+          # carry the step's own indentation, and Python does not tolerate an
+          # indented first line.
+          version=$(python3 -c 'import re, sys, tomllib; v = tomllib.load(sys.stdin.buffer)["version"]; print(v) if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", v) else sys.exit(f"invalid version for tagging: {v}")' < Project.toml)
           tag="v${version}"
 
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
@@ -34,3 +49,14 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$tag" -m "Release $tag"
           git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # A tag pushed with GITHUB_TOKEN doesn't fire CI.yml's `tags: ['*']`
+      # push trigger (GitHub suppresses events from the default token to
+      # avoid infinite loops), so kick its workflow_dispatch explicitly.
+      # Skipped when the tag already existed (no output set above).
+      - name: Trigger CI for the new tag
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run CI.yml --ref "${{ steps.tag.outputs.tag }}"

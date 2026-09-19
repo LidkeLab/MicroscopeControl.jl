@@ -32,6 +32,13 @@ function StageInterface.getposition(stage::PIStage)
     getposition(stage)
 end
 
+"""
+Function to update the position range of the PI Stage
+"""
+function StageInterface.getrange(stage::PIStage)
+    getrange(stage)
+end
+
 
 """
 Move to home position
