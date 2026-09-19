@@ -10,7 +10,7 @@
 # end
 
 """
-    reset(trig::TRIG)
+    Base.reset(trig::TRIG)
 
 Reset the trigger/DAQ device to its default state.
 
@@ -24,23 +24,6 @@ just recreate the top-level ambiguity this generic is meant to resolve.
 function Base.reset(trig::TRIG)
     error("reset not implemented for $(typeof(trig))")
 end
-
-#=
-These functions are redundant when using the Output and Input objects
-
-#Query the Datatypes, Ranges, Number of Channels; Channel names set to datatype + channel number
-function getdatatypes(daq::DAQ)
-    @error "getdatatypes not implemented"
-end
-
-function getranges(daq::DAQ)
-    @error "getranges not implemented"
-end
-
-function getnumchannels(daq::DAQ)
-    @error "getnumchannels not implemented"
-end
-=#
 
 #Functions to set and read values from the DAQ device
 function setoutputvalue(trig::TRIG, output::Output, channel::Int, value::Any)

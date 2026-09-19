@@ -21,8 +21,12 @@ jobs:
           version=$(grep -m1 '^version' Project.toml | sed -E 's/version *= *"(.*)"/\1/')
           tag="v${version}"
 
-          if git rev-parse "$tag" >/dev/null 2>&1; then
-            echo "Tag $tag already exists, nothing to do."
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            if [ "$(git rev-parse "refs/tags/$tag")" != "$(git rev-parse HEAD)" ]; then
+              echo "main has moved past $tag without a version bump; bump Project.toml"
+              exit 1
+            fi
+            echo "Tag $tag already exists at HEAD, nothing to do."
             exit 0
           fi
 

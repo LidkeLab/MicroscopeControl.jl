@@ -52,6 +52,23 @@ jobs:
       - uses: codecov/codecov-action@v6
         with:
           files: lcov.info
+  version-bumped:
+    name: Version bumped
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Check Project.toml version isn't already tagged
+        run: |
+          version=$(grep -m1 '^version' Project.toml | sed -E 's/version *= *"(.*)"/\1/')
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "bump Project.toml version; $tag is already tagged"
+            exit 1
+          fi
   docs:
     name: Documentation
     runs-on: ubuntu-latest

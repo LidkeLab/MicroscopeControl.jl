@@ -11,8 +11,8 @@ are interface changes, patch bumps are everything else).
 
 ## [0.1.0] - 2026-09-19
 
-Untested on hardware: none. This release is a dispatch/naming-only change;
-no driver's runtime behavior was modified.
+Hardware verification: not required (dispatch, exports and tests only; no
+driver runtime paths changed).
 
 ### Changed
 - Unified every `gui(device)` method onto a single generic in

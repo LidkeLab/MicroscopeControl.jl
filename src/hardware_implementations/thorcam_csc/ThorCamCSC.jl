@@ -5,11 +5,12 @@ module ThorCamCSC
 using ...MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
 
-import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
+import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera, setexposuretime!
 import ...MicroscopeControl: export_state, initialize, shutdown
 
 export ThorCamCSCCamera, gui, shutdown
 export getlastframe, capture, live, sequence, abort, getdata
+export setexposuretime!
 # `set_exposuretime`, `set_triggermode`, `set_roi` were exported but never
 # implemented for this camera; dropped.
 
