@@ -41,9 +41,10 @@ driver runtime paths changed).
   logged and returned `nothing`. Still affected after this PR: `ThorCamCSCCamera`
   (`initialize`, `export_state`); `TCubeLaser` (its own `export_state` takes
   an extra, unused positional argument, so the 1-arg contract call never
-  reaches it and falls through to the throwing stub); `MLSLM` and
-  `Triggerscope4` (outside the `AbstractInstrument` hierarchy entirely, so
-  they never had these methods regardless). A downstream loop that calls
+  reaches it and falls through to the throwing stub); `MLSLM` (outside the
+  `AbstractInstrument` hierarchy and with no lifecycle methods at all) and
+  `Triggerscope4` (also outside the hierarchy; it implements `initialize` and
+  `shutdown` but has no `export_state`). A downstream loop that calls
   `shutdown` on every device in turn should wrap each call in `try`/`catch`
   until these are fixed, or one throwing device aborts the rest of the loop.
 - `NIdaq` gained concrete no-op `initialize`/`shutdown` (DAQmx tasks are

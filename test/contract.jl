@@ -166,6 +166,15 @@ end
         # N472 must dispatch its own gui method, not just avoid shadowing.
         @test which(MC.gui, Tuple{MC.N472}).sig.parameters[2] === MC.N472
 
+        # The PI private helpers excluded above are only acceptable because
+        # every one of them has a qualified public wrapper; assert each
+        # top-level generic actually dispatches to a PIStage-specific method.
+        @test which(MC.move, Tuple{MC.PIStage,Float64,Float64}).sig.parameters[2] === MC.PIStage
+        @test which(MC.getposition, Tuple{MC.PIStage}).sig.parameters[2] === MC.PIStage
+        @test which(MC.getrange, Tuple{MC.PIStage}).sig.parameters[2] === MC.PIStage
+        @test which(MC.stopmotion, Tuple{MC.PIStage}).sig.parameters[2] === MC.PIStage
+        @test which(MC.servo, Tuple{MC.PIStage,Bool,Bool}).sig.parameters[2] === MC.PIStage
+
         # Negative control: the fixture above IS a shadow, so the guard must
         # flag it as such (demonstrates the guard actually detects shadows,
         # not just that it passes on a clean codebase).

@@ -5,11 +5,11 @@ on:
     branches:
       - main
 
-# Two merges to main landing close together must tag one at a time, not race
-# each other's "does the tag already exist" check.
-concurrency:
-  group: tag-on-merge
-  cancel-in-progress: false
+# No `concurrency` group here on purpose: GitHub keeps at most one pending run
+# per group and cancels the older one even with cancel-in-progress: false, so a
+# queued merge could silently lose its tag. Without a group, two merges landing
+# close together both run; the loser's `git push` of the tag is rejected and
+# the job goes red, which is a visible failure rather than a silent drop.
 
 jobs:
   tag:
@@ -41,7 +41,10 @@ jobs:
               echo "main has moved past $tag without a version bump; bump Project.toml"
               exit 1
             fi
-            echo "Tag $tag already exists at HEAD, nothing to do."
+            # Still emit the tag so a rerun (e.g. after a transient dispatch
+            # failure) triggers the tag CI run instead of skipping it.
+            echo "Tag $tag already exists at HEAD, nothing to tag."
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -54,7 +57,7 @@ jobs:
       # A tag pushed with GITHUB_TOKEN doesn't fire CI.yml's `tags: ['*']`
       # push trigger (GitHub suppresses events from the default token to
       # avoid infinite loops), so kick its workflow_dispatch explicitly.
-      # Skipped when the tag already existed (no output set above).
+      # Skipped only when the tag exists at a different commit (job failed).
       - name: Trigger CI for the new tag
         if: steps.tag.outputs.tag != ''
         env:
