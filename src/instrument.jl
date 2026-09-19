@@ -42,6 +42,18 @@ function shutdown(instrument::AbstractInstrument)
     @error "Shutdown not implemented for this instrument"
 end
 
+"""
+    gui(instrument::AbstractInstrument)
+
+Open a GUI control panel for the instrument.
+
+# Arguments
+- `instrument::AbstractInstrument`: The instrument to build a GUI for.
+"""
+function gui(instrument::AbstractInstrument)
+    error("gui not implemented for $(typeof(instrument))")
+end
+
 # =============================================================================
 # AbstractSystem - Composite of instruments
 # =============================================================================

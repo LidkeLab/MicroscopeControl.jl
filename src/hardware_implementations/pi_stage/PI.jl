@@ -16,8 +16,10 @@ module PI
     # `servo`, `stopmotion` and `getposition` are PI-local implementations wrapped
     # by the StageInterface methods in interface_methods.jl; exporting them here
     # would shadow the generic interface functions at the top level.
-    export servoxy, servox, servoy, driftcorrection
+    # `servoxy`, `movexy`, `isxmoving`, `isymoving` were exported but never
+    # implemented (dead exports left MicroscopeControl.<name> undefined); dropped.
+    export servox, servoy, driftcorrection
     export immediatestop, referencemove
-    export movexy, movex, movey, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait
+    export movex, movey, getxposition, getyposition, ismoving, moveandwait
     export gui
 end

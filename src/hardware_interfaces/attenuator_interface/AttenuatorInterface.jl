@@ -6,6 +6,7 @@ module AttenuatorInterface
 
 using GLMakie
 using ...MicroscopeControl
+import ...MicroscopeControl: gui
 
 export Attenuator, AttenuatorProperties
 export setdrivevoltage, getdrivevoltage, settransmission, gettransmission, set_calibration!

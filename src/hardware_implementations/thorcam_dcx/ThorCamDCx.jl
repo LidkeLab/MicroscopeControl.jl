@@ -6,7 +6,7 @@ using ...MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
 using CEnum
 
-import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
+import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera, setexposuretime!, setroi!
 import ...MicroscopeControl: export_state, initialize, shutdown
 
 export ThorcamDCXCamera, gui, shutdown

@@ -10,7 +10,8 @@ import ...MicroscopeControl: export_state, initialize, shutdown
 
 export ThorCamCSCCamera, gui, shutdown
 export getlastframe, capture, live, sequence, abort, getdata
-export set_exposuretime, set_triggermode, set_roi
+# `set_exposuretime`, `set_triggermode`, `set_roi` were exported but never
+# implemented for this camera; dropped.
 
 # include statements
 

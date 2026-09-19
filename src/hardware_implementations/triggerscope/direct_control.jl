@@ -65,7 +65,7 @@ function runtest(scope::Triggerscope4)
     return readresponse(scope)
 end
 
-function reset(scope::Triggerscope4)
+function Base.reset(scope::Triggerscope4)
     #create the command string
     commandstring = "RESET\n"
     writecommand(scope, commandstring)

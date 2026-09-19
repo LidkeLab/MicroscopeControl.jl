@@ -11,12 +11,14 @@ module DCAM4
 using ...MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
 
-import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera
+import ...MicroscopeControl.HardwareInterfaces.CameraInterface: Camera, setexposuretime!, setroi!, settriggermode!
 import ...MicroscopeControl: export_state, initialize, shutdown
 
 export DCAM4Camera, gui, start_sequence, start_live
 export getlastframe, capture, live, sequence, abort, getdata
-export setexposuretime, settriggermode, setroi!, setexposuretime!
+# `setexposuretime` and `settriggermode` (no bang) were exported but never
+# implemented; the real methods are `setexposuretime!` and `settriggermode!`.
+export setexposuretime!, setroi!, settriggermode!
 export dcamprop_getvalue, DCAM_IDPROP_INTERNALFRAMERATE, CameraROI, dcamapi_uninit
 # export export_state
 

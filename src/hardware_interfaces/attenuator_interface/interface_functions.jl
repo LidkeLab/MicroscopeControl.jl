@@ -10,7 +10,7 @@ Set the raw drive voltage of the attenuator.
 """
 function setdrivevoltage(attenuator::Attenuator, voltage::Float64)
     # set the drive voltage of the attenuator
-    @error "setdrivevoltage not implemented"
+    error("setdrivevoltage not implemented for $(typeof(attenuator))")
 end
 
 """
@@ -26,7 +26,7 @@ Get the current drive voltage of the attenuator.
 """
 function getdrivevoltage(attenuator::Attenuator)
     # get the drive voltage of the attenuator
-    @error "getdrivevoltage not implemented"
+    error("getdrivevoltage not implemented for $(typeof(attenuator))")
 end
 
 """
@@ -41,7 +41,7 @@ voltage-to-transmission calibration (see `set_calibration!`).
 """
 function settransmission(attenuator::Attenuator, transmission::Float64)
     # set the transmission of the attenuator
-    @error "settransmission not implemented"
+    error("settransmission not implemented for $(typeof(attenuator))")
 end
 
 """
@@ -58,7 +58,7 @@ calibration has been set.
 """
 function gettransmission(attenuator::Attenuator)
     # get the transmission of the attenuator
-    @error "gettransmission not implemented"
+    error("gettransmission not implemented for $(typeof(attenuator))")
 end
 
 """
@@ -75,5 +75,5 @@ Store a voltage-to-transmission calibration lookup table, measured externally
 """
 function set_calibration!(attenuator::Attenuator, voltages::Vector{Float64}, transmissions::Vector{Float64})
     # store the calibration lookup table
-    @error "set_calibration! not implemented"
+    error("set_calibration! not implemented for $(typeof(attenuator))")
 end
