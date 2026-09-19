@@ -49,8 +49,9 @@ All hardware inherits from `AbstractInstrument` (defined in `instrument.jl`):
 - `initialize(device)` - setup hardware connection
 - `shutdown(device)` - close hardware connection
 - `export_state(device)` - returns `(attributes::Dict, data, children::Dict)` for HDF5 serialization
+- `gui(device)` - open a GUI control panel for the device
 
-Interfaces define method signatures with `@error "not implemented"` stubs. Implementations provide concrete methods that dispatch on the device type.
+Interfaces define method signatures with throwing `error("<name> not implemented for $(typeof(...)))")` stubs (see `test/contract.jl`'s "Interface Contract" testset). Implementations provide concrete methods that dispatch on the device type.
 
 ### Data Persistence
 
@@ -113,3 +114,7 @@ heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-l
 
 Some hardware modules are commented out in `MicroscopeControl.jl` while under development:
 - `MCLMicroPositioner` - Mad City Labs microdrive positioner
+
+### Versioning
+
+This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. Policy: a minor bump (`0.x.0`) means an interface change (a signature, export, or dispatch contract changed), a patch bump (`0.0.x`) is everything else, and every merge to `main` is tagged automatically by `.github/workflows/TagOnMerge.yml`. Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is CI (`.github/workflows/CI.yml`) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above.
