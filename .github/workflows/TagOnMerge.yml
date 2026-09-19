@@ -22,7 +22,7 @@ jobs:
           tag="v${version}"
 
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            if [ "$(git rev-parse "refs/tags/$tag")" != "$(git rev-parse HEAD)" ]; then
+            if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
               echo "main has moved past $tag without a version bump; bump Project.toml"
               exit 1
             fi
