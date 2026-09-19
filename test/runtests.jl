@@ -128,4 +128,6 @@ const HDF5 = MicroscopeControl.HDF5
             end
         end
     end
+
+    include("contract.jl")
 end
