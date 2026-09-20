@@ -22,7 +22,7 @@ MicroscopeControl.export_state(r::_ParametricRig{T}) where {T} = (Dict{String,An
     @testset "list_skills" begin
         @test !isempty(available)
         @test available == sort(available)
-        @test available == ["mc-acquire", "mc-api-map", "mc-driver-issue", "mc-sim-testing", "mc-wire-device"]
+        @test available == ["mc-acquire", "mc-add-driver", "mc-add-interface", "mc-api-map", "mc-driver-issue", "mc-sim-testing", "mc-system-design"]
     end
 
     @testset "full install" begin

@@ -22,8 +22,12 @@ Hardware verification: not required (no driver runtime paths changed).
   tracking installed files by SHA-256 so a locally edited file is never
   silently overwritten (pass `force=true` to override). `uninstall_skills`
   reverses this using the same manifest, leaving unrelated skills alone.
-- Five skill sources under `skills/`: `mc-api-map`, `mc-wire-device`,
-  `mc-acquire`, `mc-sim-testing`, `mc-driver-issue`. `mc-api-map` also gets a
+- Seven skill sources under `skills/`: `mc-system-design` (the entry point:
+  responsibility split, upstream/downstream boundary test, design principles,
+  worked composition example; absorbs and replaces the pre-release
+  `mc-wire-device`, renamed before 0.2.0 shipped), `mc-add-driver`,
+  `mc-add-interface`, `mc-api-map`, `mc-acquire`, `mc-sim-testing`,
+  `mc-driver-issue`. `mc-api-map` also gets a
   generated `references/api-map.md`, built by introspecting the installed
   module rather than hand-maintained, listing each device type's
   device-specific and interface-inherited methods.

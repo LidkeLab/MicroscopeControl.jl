@@ -82,9 +82,9 @@ This package follows a 0.x versioning policy: every merge to `main` is tagged (`
 
 ## Claude Code skills
 
-Downstream repos that compose MicroscopeControl.jl devices (rather than write
-drivers against it) can install a set of Claude Code skills describing this
-package's API, from the downstream repo's own root:
+Downstream repos that build an instrument out of MicroscopeControl.jl devices,
+or write a driver against it, can install a set of Claude Code skills describing
+this package's design and API, from the downstream repo's own root:
 
 ```julia
 using MicroscopeControl
@@ -95,16 +95,18 @@ This copies skill sources into `.claude/skills/` in the current directory,
 one subdirectory per skill, each stamped with the installed package version
 and tracked in a manifest so a locally edited skill file is never silently
 overwritten (pass `install_skills(force=true)` to overwrite anyway). The
-five skills:
+seven skills:
 
+- `mc-system-design` — start here: the driver/system responsibility split, the upstream/downstream boundary test, the design principles the source expresses, and a worked composition example with rollback and provenance.
+- `mc-add-driver` — implement an existing interface (Camera, Stage, LightSource, ...) for a new device, downstream or as an upstream contribution.
+- `mc-add-interface` — define a new device class: interface scaffold, wiring, the hand-maintained interface lists, and the simulated implementation that ships with it.
 - `mc-api-map` — which methods you can call on each device type, generated per installed version.
-- `mc-wire-device` — add a MicroscopeControl device to a downstream system struct.
 - `mc-acquire` — capture/sequence/live patterns, safe live-view stop order, z-stacks.
 - `mc-sim-testing` — SimCamera/SimStage/SimLight, headless testing under xvfb.
 - `mc-driver-issue` — report a driver defect upstream, or override a method locally.
 
 Reinstalling (`install_skills()` again) after advancing the pinned tag
-refreshes all five, including the generated API map, to match the new
+refreshes all seven, including the generated API map, to match the new
 version.
 
 ---

@@ -114,7 +114,14 @@ heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-l
 
 `skills/` holds the sources for Claude Code skills that `install_skills()`
 copies into a downstream repo's `.claude/skills/` (see `src/skills.jl` and
-the README's "Claude Code skills" section). `mc-api-map`'s
+the README's "Claude Code skills" section). `list_skills()` reads the
+directory, so adding a skill is adding a directory with a `SKILL.md`; only
+`test/skills.jl`'s expected-name list needs a matching edit. The seven skills
+are `mc-system-design` (entry point; design and composition), `mc-add-driver`,
+`mc-add-interface`, `mc-api-map`, `mc-acquire`, `mc-sim-testing` and
+`mc-driver-issue`. Every architectural statement in a skill is labelled as an
+existing guarantee, a current limitation, or a recommended system policy;
+keep that discipline when editing them. `mc-api-map`'s
 `references/api-map.md` is generated at install time by introspecting the
 loaded module and must never be committed with generated content; the
 repo-tracked copy should only ever contain the `.gitkeep` placeholder.
