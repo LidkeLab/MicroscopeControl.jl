@@ -109,7 +109,7 @@ value differs:
 |---|---|
 | `DCAM4Camera` | logs `@error`, sets `cam.last_error`, returns `nothing` (or the copy step returns `nothing` with `@error "DCAM Failed to Copy Frame"`) |
 | `ThorcamDCXCamera` | logs `@error`, returns `nothing` |
-| `ThorCamCSCCamera` | **returns `zeros(UInt16, 1080, 1440)`**. `getlastframe` substitutes an all-zero image when the SDK reports no pending frame, after an `@error "Frame not collected"`. A `=== nothing` check passes it as valid data. Detect it by `all(iszero, frame)` or by watching the log; do not rely on a `nothing` check for this camera. |
+| `ThorCamCSCCamera` | **returns `zeros(UInt16, 1080, 1440)`**. `getlastframe` substitutes an all-zero image whenever the frame fetch yields nothing, and that happens on two paths (`thorcamcsc_camcontrol.jl`): the SDK call fails (logged, `@error "Frame not collected"`), or the SDK call succeeds but hands back a null buffer (**not logged at all**). So the placeholder can arrive silently. A `=== nothing` check passes it as valid data, and the log cannot be relied on. The only detection is `all(iszero, frame)`, and that is a heuristic: a genuinely black frame is indistinguishable from the placeholder. Treat an all-zero CSC frame as suspect, not as data. |
 | `SimCamera` | cannot fail |
 
 A zero-filled frame in a z-stack is a worse failure than a thrown error, because it
