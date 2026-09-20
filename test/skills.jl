@@ -54,6 +54,24 @@ using TOML
             @test !isempty(text)
             @test occursin("SimCamera", text)
             @test occursin("SimStage3d", text)
+
+            # `laser_561_gui` is just `gui` imported under a driver-specific
+            # alias (same Function object); it must not be listed as if it
+            # were its own method on every device.
+            @test !occursin("laser_561_gui(", text)
+
+            # `setexposuretime!` is a throwing interface-contract stub for
+            # SimCamera (it has no device-specific method), not a real
+            # shared implementation like `gui` -- it must be placed under
+            # the "throws" heading, not "shared implementation".
+            m = match(r"### SimCamera\n(.*?)\n(?:###|## )"s, text)
+            @test m !== nothing
+            section = m.captures[1]
+            throws_idx = findfirst("**Not implemented for this device (throws):**", section)
+            @test throws_idx !== nothing
+            before_throws, after_throws = section[1:first(throws_idx)-1], section[first(throws_idx):end]
+            @test !occursin("setexposuretime!", before_throws)
+            @test occursin("setexposuretime!", after_throws)
         end
     end
 

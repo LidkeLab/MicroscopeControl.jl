@@ -19,6 +19,18 @@ const _SKILLS_MANIFEST_NAME = ".microscopecontrol-skills.toml"
 # hash reflects exactly what is (or was) written, not an in-memory guess.
 _file_hash(path::AbstractString) = bytes2hex(SHA.sha2_256(read(path)))
 
+# True if a resolved method's source file is one of this package's own
+# interface-contract fallbacks (an `interface_functions.jl` under
+# `hardware_interfaces/<iface>/`, or the AbstractInstrument-level stubs in
+# `instrument.jl`) rather than a real shared implementation such as a
+# `gui.jl`. Normalizes path separators first so this also works for a
+# `Method.file` recorded with Windows-style backslashes.
+function _is_contract_stub_file(path::AbstractString)
+    normalized = replace(path, '\\' => '/')
+    file = last(rsplit(normalized, '/'; limit=2))
+    return file == "interface_functions.jl" || file == "instrument.jl"
+end
+
 """
     list_skills() -> Vector{String}
 
@@ -54,12 +66,29 @@ function _generate_api_map()
     version = string(pkgversion(MC))
     generated = string(Dates.today())
 
-    exported_functions = Symbol[]
+    # Several drivers import a generic under a device-specific alias (e.g.
+    # `import ...LightSourceInterface: gui as laser_488_gui`) purely so it's
+    # exported alongside the driver; the alias is the *same* Function object
+    # as the original, not a new method. Group exported names by function
+    # identity so each generic is only listed once, under its shortest name.
+    alias_groups = Dict{UInt64,Vector{Symbol}}()
     for n in names(MC)
         isdefined(MC, n) || continue
-        getfield(MC, n) isa Function || continue
-        push!(exported_functions, n)
+        f = getfield(MC, n)
+        f isa Function || continue
+        push!(get!(alias_groups, objectid(f), Symbol[]), n)
     end
+
+    canonical_of = Dict{UInt64,Symbol}()
+    alias_notes = Tuple{Symbol,Vector{Symbol}}[]
+    for (key, group_names) in alias_groups
+        ordered = sort(group_names; by=n -> (length(String(n)), String(n)))
+        canonical_of[key] = ordered[1]
+        length(ordered) > 1 && push!(alias_notes, (ordered[1], sort(ordered[2:end])))
+    end
+    sort!(alias_notes; by=first)
+
+    exported_functions = sort(collect(values(canonical_of)))
 
     io = IOBuffer()
     println(io, "# MicroscopeControl.jl API map")
@@ -69,6 +98,10 @@ function _generate_api_map()
     println(io)
     println(io, "Every name below is callable unqualified after `using MicroscopeControl`. ",
                  "This file is regenerated on every `install_skills()` call; do not hand-edit it.")
+    for (canonical, aliases) in alias_notes
+        also = join(String.(aliases), ", ", " and ")
+        println(io, "`$(canonical)` is also exported as $(also); they are the same function.")
+    end
 
     interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG)
 
@@ -84,7 +117,8 @@ function _generate_api_map()
             println(io, "### $(nameof(T))")
 
             device_specific = Symbol[]
-            inherited = Symbol[]
+            shared = Symbol[]
+            stub = Symbol[]
             inherited_method = Dict{Symbol,Method}()
             for fname in exported_functions
                 f = getfield(MC, fname)
@@ -93,8 +127,8 @@ function _generate_api_map()
                 elseif hasmethod(f, Tuple{T})
                     m = which(f, Tuple{T})
                     if length(m.sig.parameters) >= 2 && m.sig.parameters[2] === iface
-                        push!(inherited, fname)
                         inherited_method[fname] = m
+                        push!(_is_contract_stub_file(String(m.file)) ? stub : shared, fname)
                     end
                 end
             end
@@ -115,17 +149,36 @@ function _generate_api_map()
                 end
             end
 
-            println(io)
-            println(io, "**Inherited from the interface:**")
-            println(io)
-            if isempty(inherited)
-                println(io, "- (none)")
-            else
-                for fname in sort(inherited)
+            if !isempty(shared)
+                println(io)
+                println(io, "**Inherited (shared implementation):**")
+                println(io)
+                for fname in sort(shared)
                     m = inherited_method[fname]
                     args = join(m.sig.parameters[3:end], ", ")
                     println(io, "- `$(fname)($(nameof(iface))$(isempty(args) ? "" : ", " * args))`")
                 end
+            end
+
+            if !isempty(stub)
+                println(io)
+                println(io, "**Not implemented for this device (throws):**")
+                println(io)
+                println(io, "These are interface contract stubs, not device-specific code; ",
+                             "calling one on this device typically raises an error naming the type.")
+                println(io)
+                for fname in sort(stub)
+                    m = inherited_method[fname]
+                    args = join(m.sig.parameters[3:end], ", ")
+                    println(io, "- `$(fname)($(nameof(iface))$(isempty(args) ? "" : ", " * args))`")
+                end
+            end
+
+            if isempty(shared) && isempty(stub)
+                println(io)
+                println(io, "**Inherited from the interface:**")
+                println(io)
+                println(io, "- (none)")
             end
         end
     end
