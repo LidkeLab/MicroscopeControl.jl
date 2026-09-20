@@ -29,7 +29,7 @@ function gui(stage::Stage)
     elseif stage.dimensions == 3
         return gui3d(stage)
     else
-        @error "Stage dimension not supported"
+        error("gui not implemented for $(typeof(stage)) with dimensions $(stage.dimensions)")
     end
 end
 

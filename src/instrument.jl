@@ -15,7 +15,7 @@ Export the state of the instrument as a tuple of attributes, data, and children.
 - A tuple of dictionaries containing the attributes, data, and children of the instrument.
 """
 function export_state(instrument::AbstractInstrument)
-    @error "Export state not implemented for this instrument"
+    error("export_state not implemented for $(typeof(instrument))")
 end
 
 """
@@ -27,7 +27,7 @@ Initialize the instrument.
 - `instrument::AbstractInstrument`: The instrument to initialize.
 """
 function initialize(instrument::AbstractInstrument)
-    @error "Initialize not implemented for this instrument"
+    error("initialize not implemented for $(typeof(instrument))")
 end
 
 """
@@ -39,7 +39,19 @@ Shuts down the instrument.
 - `instrument::AbstractInstrument`: The instrument to shut down.
 """
 function shutdown(instrument::AbstractInstrument)
-    @error "Shutdown not implemented for this instrument"
+    error("shutdown not implemented for $(typeof(instrument))")
+end
+
+"""
+    gui(instrument::AbstractInstrument)
+
+Open a GUI control panel for the instrument.
+
+# Arguments
+- `instrument::AbstractInstrument`: The instrument to build a GUI for.
+"""
+function gui(instrument::AbstractInstrument)
+    error("gui not implemented for $(typeof(instrument))")
 end
 
 # =============================================================================

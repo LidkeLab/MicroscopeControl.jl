@@ -9,37 +9,36 @@
 #     @error "shutdown not implemented"
 # end
 
-#=
-These functions are redundant when using the Output and Input objects
+"""
+    Base.reset(trig::TRIG)
 
-#Query the Datatypes, Ranges, Number of Channels; Channel names set to datatype + channel number
-function getdatatypes(daq::DAQ)
-    @error "getdatatypes not implemented"
-end
+Reset the trigger/DAQ device to its default state.
 
-function getranges(daq::DAQ)
-    @error "getranges not implemented"
-end
+Extends `Base.reset` (rather than a locally-exported generic) because
+`reset` is already an exported Base binding; a same-named export here would
+just recreate the top-level ambiguity this generic is meant to resolve.
 
-function getnumchannels(daq::DAQ)
-    @error "getnumchannels not implemented"
+# Arguments
+- `trig::TRIG`: A TRIG type.
+"""
+function Base.reset(trig::TRIG)
+    error("reset not implemented for $(typeof(trig))")
 end
-=#
 
 #Functions to set and read values from the DAQ device
 function setoutputvalue(trig::TRIG, output::Output, channel::Int, value::Any)
-    @error "setvalue not implemented"
+    error("setoutputvalue not implemented for $(typeof(trig))")
 end
 
 function setoutputrange(trig::TRIG, output::Output, channel::Int, range::Any)
-    @error "setrange not implemented"
+    error("setoutputrange not implemented for $(typeof(trig))")
 end
 
 function getoutputvalue(trig::TRIG, output::Output, channel::Int)
-    @error "getvalue not implemented"
+    error("getoutputvalue not implemented for $(typeof(trig))")
 end
 
 function getinputvalue(trig::TRIG, input::Input, channel::Int)
-    @error "getvalue not implemented"
+    error("getinputvalue not implemented for $(typeof(trig))")
 end
 

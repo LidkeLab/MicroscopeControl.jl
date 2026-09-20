@@ -31,7 +31,9 @@ module Triggerscope
 
     export Triggerscope4
 
-    export setdac, setttl, acknowledgetest, focus, setrange, getstatus, runtest, reset, savesettings
+    # `reset` extends Base.reset (see TrigInterface's interface_functions.jl)
+    # and is not exported here to avoid re-colliding with the Base binding.
+    export setdac, setttl, acknowledgetest, focus, setrange, getstatus, runtest, savesettings
     export arm, clearall, progfocus, progttl, progdac, progarray, cleartable, progdelay, progwave, timecycles, trigmode
     export TriggerMode, RISING, FALLING, CHANGE
     export Range, ZEROTOFIVE, ZEROTOTEN, PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5

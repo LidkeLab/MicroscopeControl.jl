@@ -28,13 +28,12 @@ include("stageinterface_bridge_smaract.jl")
 # Public exports
 export MCS2Stage          # the stage struct + constructor
 
-# Interface methods (exports: initialize, shutdown, gui)
-export initialize!
-export shutdown!
-export move!, move_um!
-export getposition!
-export home!
-export stopmotion!
+# `initialize!`, `shutdown!`, `move!`, `move_um!`, `getposition!`, `home!` and
+# `stopmotion!` are internal bang-named implementations, not exported: the
+# public API is the shared StageInterface contract (initialize, shutdown,
+# move, getposition, home, stopmotion) bridged onto them in
+# stageinterface_bridge_smaract.jl. Nothing outside this directory calls the
+# bang names directly.
 export export_state
 
 # Motion helpers 

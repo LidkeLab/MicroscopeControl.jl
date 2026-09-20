@@ -15,7 +15,7 @@ using Reexport
 include("instrument.jl")
 export AbstractInstrument
 export AbstractSystem, AbstractSystemState
-export export_state, initialize, shutdown, get_state, set_state
+export export_state, initialize, shutdown, get_state, set_state, gui
 
 # Hardware interfaces (abstract types + method signatures)
 include("hardware_interfaces/HardwareInterfaces.jl")

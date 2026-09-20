@@ -1,4 +1,21 @@
 
+"""
+    initialize(camera::SimCamera)
+
+No-op: the simulated camera needs no hardware connection.
+"""
+function initialize(camera::SimCamera)
+    return nothing
+end
+
+"""
+    shutdown(camera::SimCamera)
+
+No-op: the simulated camera needs no hardware connection to close.
+"""
+function shutdown(camera::SimCamera)
+    return nothing
+end
 
 function CameraInterface.getlastframe(camera::SimCamera)
     # Get the last image frame from the camera

@@ -69,12 +69,16 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 
 ## Installation Notes
 
-Since this package is under active development and not yet registered, install it using:
+Since this package is under active development and not yet registered, install it pinned to a released tag:
 
 ```julia
 using Pkg
-Pkg.develop(url="https://github.com/LidkeLab/MicroscopeControl.jl.git")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.1.0")
 ```
+
+Advance the pinned tag deliberately when you want a newer release. `Pkg.develop` (tracking `main` directly, no tag) is for contributors working on the package itself, not for rig code that depends on it.
+
+This package follows a 0.x versioning policy: every merge to `main` is tagged (`.github/workflows/TagOnMerge.yml`), a minor bump (`0.x.0`) means an interface change, and a patch bump (`0.0.x`) is everything else. Hardware verification is not tracked here; it is recorded by the downstream rig repo that pins to a given tag.
 ---
 
 

@@ -52,6 +52,45 @@ jobs:
       - uses: codecov/codecov-action@v6
         with:
           files: lcov.info
+  version-bumped:
+    name: Version bumped
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Fetch base branch
+        # Explicit refspec: actions/checkout's fetch config isn't guaranteed
+        # to update refs/remotes/origin/<branch> for a plain `git fetch
+        # origin <branch>`, and `git show origin/<base>:...` below needs it.
+        run: git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}" --depth=1
+      - name: Check Project.toml version is a real, untagged bump
+        run: |
+          # ubuntu-latest ships Python >=3.11, so tomllib is stdlib. Each
+          # snippet below is kept on one physical line on purpose: a `run: |`
+          # block scalar requires every line to carry the step's own
+          # indentation, and Python does not tolerate an indented first line.
+          read_version() {
+            python3 -c 'import re, sys, tomllib; v = tomllib.load(sys.stdin.buffer)["version"]; print(v) if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", v) else sys.exit(f"invalid version for tagging: {v}")'
+          }
+          pr_version=$(read_version < Project.toml)
+          # The base may still carry a prerelease version (e.g. 1.0.0-DEV before
+          # the 0.x reset); parse it leniently and only compare against a plain X.Y.Z.
+          base_version=$(git show "origin/${{ github.base_ref }}:Project.toml" | python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["version"])')
+
+          tag="v${pr_version}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "bump Project.toml version; $tag is already tagged"
+            exit 1
+          fi
+
+          if [[ "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            python3 -c 'import sys; parse = lambda v: tuple(int(x) for x in v.split(".")); pr, base = sys.argv[1], sys.argv[2]; sys.exit(f"Project.toml version {pr} must be greater than base branch version {base}") if not (parse(pr) > parse(base)) else None' "$pr_version" "$base_version"
+          else
+            echo "base branch version $base_version is a prerelease; skipping ordering check (version reset)"
+          fi
   docs:
     name: Documentation
     runs-on: ubuntu-latest

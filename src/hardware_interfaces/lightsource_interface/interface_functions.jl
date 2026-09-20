@@ -10,7 +10,7 @@ Set the power of the lightsource.
 """
 function setpower(lightsource::LightSource, power::Float64)
     # set the power of the lightsource
-    @error "setpower not implemented"
+    error("setpower not implemented for $(typeof(lightsource))")
 end
 
 """
@@ -24,7 +24,7 @@ Turn on the light source.
 """
 function light_on(lightsource::LightSource, ipower::Float64)
     # turn on the lightsource
-    @error "on not implemented"
+    error("light_on not implemented for $(typeof(lightsource))")
 end
 
 """
@@ -37,5 +37,5 @@ Turn off the light source.
 """
 function light_off(lightsource::LightSource)
     # turn off the lightsource
-    @error "off not implemented"
+    error("light_off not implemented for $(typeof(lightsource))")
 end

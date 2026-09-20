@@ -26,7 +26,10 @@ include("interface_methods.jl")
 
 export TCubeLaser
 export red_laser_gui
-export light_on, light_off, setpower, shutdown, tcube_get_current, tcube_refresh, setupIO
+export light_on, light_off, setpower, shutdown, tcube_get_current, tcube_refresh
 export export_state
+# `setupIO` is kept unexported here: OK_XEM also exports an unrelated `setupIO`
+# for its own FPGA IO pins, and the two collided as distinct top-level bindings.
+# Qualified access remains: TCubeLaserControl.setupIO(laser).
 
 end

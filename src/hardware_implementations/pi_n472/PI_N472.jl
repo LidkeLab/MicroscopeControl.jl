@@ -2,7 +2,7 @@ module PI_N472
     using ...MicroscopeControl.HardwareInterfaces.StageInterface
     using GLMakie
 
-    import ...MicroscopeControl: export_state, initialize, shutdown
+    import ...MicroscopeControl: export_state, initialize, shutdown, gui
 
     const PI_GCS2 = "C:\\Program Files (x86)\\Physik Instrumente (PI)\\Software Suite\\Development\\C++\\API\\PI_GCS2_DLL_x64.dll"
 
@@ -15,6 +15,8 @@ module PI_N472
     include("gui.jl")
 
     export N472
-    export setvel, reference
+    # `reference` was exported but never implemented (only `reference_ref` is
+    # defined, unexported, in helper.jl); dropped.
+    export setvel
     export gui
 end
