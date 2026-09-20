@@ -9,6 +9,31 @@ are interface changes, patch bumps are everything else).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-20
+
+Hardware verification: NOT DONE. This changes PI C-867 driver runtime paths
+and was tested only against the simulated devices in CI. The downstream rig
+repository that pins this tag should verify on the instrument before relying
+on it.
+
+### Fixed
+- `PI_SVO` now receives `Cint` (32-bit `BOOL`) flags, one per axis, instead of
+  a `UInt8` array. The DLL read axis 2's flag from whatever byte followed the
+  array, so the Y servo was silently left off and every `PI_MOV` was refused
+  with GCS error 5. The old packing happened to work on Julia 1.10 and failed
+  on 1.13.
+- `servox`/`servoy` assign a new `servostatus` tuple instead of mutating one
+  element of an immutable tuple.
+- `PI_EnumerateUSB`'s buffer-size argument is passed as `Cint`, matching the
+  DLL signature.
+
+### Changed
+- `initialize` on a PI stage now fails loudly when the controller is present
+  but held by another process (a second Julia session with an initialized
+  stage, PIMikroMove, or an open COM port), and when `PI_ConnectUSB` returns
+  a negative id, instead of continuing with a bad handle.
+- `shutdown` clears `connectionstatus` on an already-disconnected stage.
+
 ## [0.1.0] - 2026-09-19
 
 Hardware verification: not required (dispatch, exports and tests only; no

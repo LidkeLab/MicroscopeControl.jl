@@ -11,7 +11,7 @@ function initialize_original(stage::PIStage) #TODO: Error handling
     bufferstring = Vector{UInt8}(undef, 1024)
 
     #Find number of connected USB devices, specifically the PI C-867 controller
-    numconnected = @ccall gcs2path.PI_EnumerateUSB(bufferstring::Ptr{UInt8}, 1024::Int, "PI C-867"::Ptr{UInt8})::Cint
+    numconnected = @ccall gcs2path.PI_EnumerateUSB(bufferstring::Ptr{UInt8}, 1024::Cint, "PI C-867"::Ptr{UInt8})::Cint
 
     @info "Number of connected devices: " * string(numconnected)
 
@@ -19,7 +19,10 @@ function initialize_original(stage::PIStage) #TODO: Error handling
     if numconnected > 0
         stage.connectionstatus = true
     else
-        @error "No devices connected"
+        # The DLL enumerates only controllers nobody has open: a C-867 that Device Manager
+        # still lists is held by another process (a second Julia with an initialized stage —
+        # under any Windows user —, PIMikroMove, or an open COM port).
+        @error "No PI C-867 found by the GCS2 library — controller absent, or held by another process"
         stage.connectionstatus = false
         return
     end
@@ -27,6 +30,14 @@ function initialize_original(stage::PIStage) #TODO: Error handling
     stage.id = @ccall gcs2path.PI_ConnectUSB(bufferstring::Ptr{UInt8})::Cint
 
     @info "Device ID: " * string(stage.id)
+
+    if stage.id < 0
+        # The connect itself failed (id -1): typically another process already holds the
+        # controller (a second Julia with an initialized stage, PIMikroMove, an open COM port).
+        stage.connectionstatus = false
+        @error "PI_ConnectUSB failed — the controller is probably held by another process"
+        return
+    end
 
     #Set servo mode to on for both axes, noting axis X is labeled "1" and axis Y is labeled "2"
     servo(stage, true, true)
@@ -79,6 +90,7 @@ function shutdown_original(stage::PIStage)
         end
     else
         @error "Stage already disconnected"
+        stage.connectionstatus = false
     end
 end
 
@@ -86,7 +98,10 @@ end
 Sets the servo state of both the x and y axis
 """
 function servo(stage::PIStage, xtoggle::Bool, ytoggle::Bool)
-    istoggled = @ccall gcs2path.PI_SVO(stage.id::Cint, "1 2"::Ptr{UInt8}, [UInt8(xtoggle), UInt8(ytoggle)]::Ptr{UInt8})::Cint
+    # PI_SVO takes `const BOOL*` = 32-bit ints, one per axis. Passing two UInt8 made the DLL
+    # read axis 2's flag from whatever byte followed the array: servo silently OFF on Y,
+    # every PI_MOV refused with GCS error 5 (worked by luck on Julia 1.10, failed on 1.13).
+    istoggled = @ccall gcs2path.PI_SVO(stage.id::Cint, "1 2"::Ptr{UInt8}, Cint[xtoggle, ytoggle]::Ptr{Cint})::Cint
     stage.servostatus = (xtoggle, ytoggle)
 
     if istoggled == 1
@@ -100,8 +115,8 @@ end
 Sets the servo state of the x axis
 """
 function servox(stage::PIStage, xtoggle::Bool)
-    @ccall gcs2path.PI_SVO(stage.id::Cint, "1"::Ptr{UInt8}, [UInt8(xtoggle)]::Ptr{UInt8})::Cint
-    stage.servostatus[1] = xtoggle
+    @ccall gcs2path.PI_SVO(stage.id::Cint, "1"::Ptr{UInt8}, Cint[xtoggle]::Ptr{Cint})::Cint
+    stage.servostatus = (xtoggle, stage.servostatus[2])
 end
 
 
@@ -109,8 +124,8 @@ end
 Sets the servo state of the y axis
 """
 function servoy(stage::PIStage, ytoggle::Bool)
-    @ccall gcs2path.PI_SVO(stage.id::Cint, "2"::Ptr{UInt8}, [UInt8(ytoggle)]::Ptr{UInt8})::Cint
-    stage.servostatus[2] = ytoggle
+    @ccall gcs2path.PI_SVO(stage.id::Cint, "2"::Ptr{UInt8}, Cint[ytoggle]::Ptr{Cint})::Cint
+    stage.servostatus = (stage.servostatus[1], ytoggle)
 end
 
 
