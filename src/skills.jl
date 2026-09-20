@@ -86,15 +86,23 @@ function _resolve_path(path::AbstractString)
     return isempty(tail) ? base : joinpath(base, tail...)
 end
 
-# Path components after normalizing `\` to `/` *unconditionally*, no matter
-# the current OS. A manifest or a resolved path can be Windows-style (this
-# package's primary users run Windows) even while running this package's own
-# tests on Linux, so containment is decided by component structure, not by a
-# hardcoded separator or the host OS's own path-splitting convention.
-_path_components(path::AbstractString) = filter(!isempty, split(replace(path, '\\' => '/'), '/'))
-
 # True if `path` -- once every symlink already on disk in its ancestry is
 # resolved -- is `root` itself or somewhere inside it. `root` must exist.
+#
+# Compares path *components* (via `splitpath`, native to the current OS),
+# not a hardcoded-separator string prefix: `root_real * "/"` failed a
+# legitimate Windows child like `C:\repo\.claude\skills\mc-acquire`, and an
+# earlier fix for that unconditionally treated `\` as a separator on every
+# OS -- but `\` is a legal filename character on POSIX, so that made a
+# sibling directory literally named `skills\evil` compare as a *child* of
+# `skills`. `splitpath` is the right tool precisely because it is
+# OS-aware: it splits on `\` (and `/`) on Windows and only on `/` on POSIX,
+# matching how `root_real`/`target_real` (both freshly produced by
+# `realpath`/`_resolve_path` on *this* process) are actually laid out --
+# unlike a manifest string, a live resolved path is never "foreign-OS"
+# relative to the process that just resolved it. Manifest-string separator
+# normalization (a stored path written on a different OS) is a distinct
+# concern, handled separately where manifest entries are read.
 #
 # RULING: if `root` itself sits under a symlinked ancestor (e.g. the user's
 # own `.claude` is a symlink), `realpath(root)` follows it, and this compares
@@ -105,8 +113,8 @@ _path_components(path::AbstractString) = filter(!isempty, split(replace(path, '\
 function _contained_in(root::AbstractString, path::AbstractString)
     root_real = realpath(root)
     target_real = _resolve_path(path)
-    root_parts = _path_components(root_real)
-    target_parts = _path_components(target_real)
+    root_parts = splitpath(root_real)
+    target_parts = splitpath(target_real)
     return length(target_parts) >= length(root_parts) && target_parts[1:length(root_parts)] == root_parts
 end
 
@@ -123,10 +131,14 @@ end
 # own filesystem, not a service exposed to an adversary running alongside
 # it, so full protection against a concurrent attacker is out of scope.
 # `install_skills`/`uninstall_skills` do the cheap mitigation instead -- an
-# `islink` re-check immediately before each write and each remove, which
-# narrows but does not eliminate the window. Full protection would need
-# descriptor-based (openat/*at-style) operations, which are deliberately not
-# attempted here.
+# `islink` re-check immediately before each write and each remove *of a
+# tracked file* (`_safe_write`/`_safe_remove` below), which narrows but does
+# not eliminate the window. This does not extend to the incidental
+# now-empty-directory pruning in `uninstall_skills`, which still calls
+# `rm` directly: those directories were only ever reachable by walking down
+# from an already-validated, non-symlinked `dest_dir`. Full protection would
+# need descriptor-based (openat/*at-style) operations, which are
+# deliberately not attempted here.
 function _safe_dest_path(dest_root::AbstractString, name::AbstractString, relfile::Union{Nothing,AbstractString}=nothing)
     _safe_component(name) || return nothing
     dest_dir = joinpath(dest_root, name)
@@ -418,6 +430,14 @@ function install_skills(target::AbstractString=pwd(); skills=:all, force::Bool=f
     mkpath(dest_root)
 
     manifest_path = joinpath(dest_root, _SKILLS_MANIFEST_NAME)
+    # Refuse before doing any file work at all, not just right before the
+    # final write: writing skill files first and only then discovering the
+    # manifest can't be persisted would leave those files on disk but
+    # unrecorded, so a later run would see them as untracked local edits.
+    # The equivalent check right before the final write (below) stays too,
+    # in case the manifest becomes a symlink during this call.
+    islink(manifest_path) &&
+        error("install_skills: refused to write outside the skills directory or through a symlink: $(manifest_path)")
     manifest = isfile(manifest_path) ? TOML.parsefile(manifest_path) : Dict{String,Any}()
 
     version = string(pkgversion(@__MODULE__))
@@ -572,6 +592,12 @@ directory -- is refused and reported rather than touched. Never touches
 function uninstall_skills(target::AbstractString=pwd(); quiet::Bool=false)
     dest_root = joinpath(target, ".claude", "skills")
     manifest_path = joinpath(dest_root, _SKILLS_MANIFEST_NAME)
+    # Refuse up front, symmetrically with install_skills: reading through a
+    # symlinked manifest would mean acting on some unrelated file's content
+    # as if it were this target's ownership records, and the final write
+    # (below) must not follow it either way.
+    islink(manifest_path) &&
+        error("uninstall_skills: refused to touch entries outside the skills directory or through a symlink: $(manifest_path)")
     isfile(manifest_path) || return String[]
 
     manifest = TOML.parsefile(manifest_path)
@@ -628,15 +654,23 @@ function uninstall_skills(target::AbstractString=pwd(); quiet::Bool=false)
             end
         end
 
-        if isdir(dest_dir)
+        # Whether this skill's manifest entry survives is decided by
+        # `kept_files` -- what we actually still need to track -- not by
+        # whether `dest_dir` happens to still exist on disk. A refused
+        # traversal entry (e.g. `../../outside.txt`) never created anything
+        # *inside* `dest_dir`, so the directory can end up empty and get
+        # pruned above even though `kept_files` still (correctly) holds
+        # that entry; gating on `isdir(dest_dir)` would silently drop it
+        # from `remaining_manifest` right after computing it.
+        if isempty(kept_files)
+            push!(removed, name)
+        else
             remaining_manifest[name] = Dict(
                 "version" => get(entry, "version", ""),
                 "installed" => get(entry, "installed", ""),
                 "files" => kept_files,
                 "hashes" => kept_hashes,
             )
-        else
-            push!(removed, name)
         end
 
         quiet || println("uninstalled $(name) -> $(dest_dir)")
