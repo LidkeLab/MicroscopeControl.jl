@@ -51,11 +51,16 @@ all). `MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy
 entirely (`SLM` and `TRIG` are `abstract type ... end` with no supertype), so they
 never had fallbacks to begin with.
 
-One known mislabel: the SLM interface file contains no `error` calls. Its 1-arg
-`displayimage(::SLM)` is an empty no-op and its 2-arg form assigns to the abstract
-type name rather than the instance. The map still files `displayimage(SLM)` under the
-throws group because the classification is by file, not by behaviour. Treat SLM
-interface calls as "silently does nothing", not "throws".
+One known misclassification, both signatures executed on `MLSLM()`:
+
+| Call | Behaviour | Map label |
+|---|---|---|
+| `displayimage(slm)` | empty body, returns `nothing`; no error, no effect | filed under the throws group, because the classification is by source file, not behaviour |
+| `displayimage(slm, phase::Matrix{Float64})` | throws `setfield! fields of Types should not be changed`: the body assigns to the abstract type `SLM.phase` instead of the instance | a bug in the interface file, not a contract stub |
+
+Neither is a "not implemented" stub in the sense of the other entries. Treat any
+SLM-interface entry in the map as "inspect the source before relying on it", and
+do not write code that expects a `not implemented` error from either form.
 
 ## Checking at the REPL
 

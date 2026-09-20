@@ -96,7 +96,10 @@ end
 ```
 
 The hardware branch above is a placeholder for your drivers' constructor calls
-and was not executed; consult the API map for each device's fields. Abstract field
+and was not executed; consult the API map for each device's fields. Note that
+`DCAM4Camera()` opens the camera and `CrystaLaser()` runs NI-DAQ discovery at
+construction (see `mc-wire-device`, "Constructor side effects"), so the hardware
+branch is not free of side effects the way the Sim branch is. Abstract field
 types cost a dynamic dispatch per call, which is irrelevant at camera frame rates.
 Set `RIG_SIMULATE=true` in the test environment (or pass `simulate=true` from the
 test) and the whole `initialize`/acquire/`export_state`/`shutdown` path runs with

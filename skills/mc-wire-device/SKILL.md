@@ -17,11 +17,11 @@ MicroscopeControl.jl v0.2.0.
    `ErrorException("... not implemented for <Type>")` instead of logging and
    returning `nothing`. A `shutdown` loop that hits one unimplemented device
    aborts the rest of the loop and leaves hardware open. Guard every call.
-2. **Construction is not connection.** Every device is built with its own
-   constructor (keyword arguments, all defaulted for the Sim devices) and does
-   nothing to hardware until `initialize(dev)`. Exceptions are noted below.
-3. **Some devices own another device.** They must receive an already-constructed
-   (and for hardware, already-initialized) dependency. See "Ordering".
+2. **Some constructors open hardware.** Most device constructors only fill a struct
+   and touch nothing until `initialize(dev)`, but not all. See "Constructor side
+   effects" below before writing a constructor-only setup path.
+3. **Some devices own another device.** They take an already-constructed dependency
+   as a keyword argument, or build their own. See "Ordering and ownership".
 
 ## The composition pattern
 
@@ -93,29 +93,63 @@ Notes on the pattern:
   hold a Sim device in tests and hardware on the rig (see `mc-sim-testing`).
 - `move` takes `Float64`. `move(stage, 1, 2, 3)` is a `MethodError`.
 
-## Ordering
+## Constructor side effects
+
+Traced from each driver's `types.jl`; the Sim constructors were executed. "Pure"
+means the constructor assembles the struct and calls no SDK.
+
+| Constructor | Side effect at construction | Cleanup the caller then owes |
+|---|---|---|
+| `SimCamera()`, `SimStage*()`, `SimLight()` | pure | none |
+| `PIStage()`, `N472()`, `MCLStage()`, `MCS2Stage()` | pure (`connectionstatus=false`, handle 0) | none until `initialize` |
+| `ThorcamDCXCamera()` | pure | none until `initialize` |
+| `TCubeLaser(serialNo; daq=NIdaq())` | pure; stores the Kinesis serial number and a DAQ handle | none until `initialize` |
+| `Triggerscope4(; portname="COM3")` | creates a `LibSerialPort.SerialPort` object for the port | `shutdown`, if `initialize` opened it |
+| `LCC1620(; scope=Triggerscope4(), dac_channel=1)` | constructs its own `Triggerscope4` unless you pass `scope`; validates `dac_channel` against `scope.dacoutputs` | as for the scope it holds |
+| **`DCAM4Camera(dev_id=0)`** | **calls `dcamapi_init` and `dcamdev_open`, reads sensor size and exposure.** The camera is claimed before `initialize`. On failure it `@error`s and returns the error code, not a camera. | `shutdown(cam)` (`dcamdev_close` + `dcamapi_uninit`) even if you never called `initialize` |
+| **`ThorCamCSCCamera()`** | **initializes the Thorlabs SDK, discovers cameras, and opens the first one.** The camera is claimed at construction. There is no `initialize` method, so a lifecycle loop that calls `initialize(cam)` throws *after* the device is already open. | `shutdown(cam)` (closes the camera and uninitializes the SDK) |
+| **`CrystaLaser()`, `VortranLaser()`, `DaqTrLight(; device_index=2)`** | **construct their own `NIdaq()` and run NI-DAQ device and channel discovery** (`showdevices`, `showchannels`) inside a `try`; on failure they `@warn` and continue with empty channel lists | none for the DAQ (tasks are per-operation); but a constructor that warned has no channels and every later call will fail |
+
+So "construct all devices, then initialize" is right for the Sim, PI, MCL, N472,
+SmarAct, DCx and TCube devices, and wrong for DCAM4, ThorCam CSC and the three
+DAQ-backed lights, which have already talked to hardware by the time the constructor
+returns. Check the return type of `DCAM4Camera()` before storing it in a typed field.
+Guard construction the same way as shutdown if a partially built system must clean
+up after a failed constructor.
+
+## Ordering and ownership
 
 The include order in `src/hardware_implementations/HardwareImplementations.jl`
-encodes real dependencies. The same order applies to constructing and initializing
-your devices:
+(NIDAQcard before the light sources, Triggerscope before the attenuator, NIDAQcard
+before the FPGA) is **module load order**: a dependent module needs the dependency's
+type defined before its own file is compiled. It is not a runtime rule about
+initialization. The runtime constraints come from object ownership:
 
-| Construct and initialize first | Then | Why |
-|---|---|---|
-| `NIdaq` | `DaqTrLight` (field `daq::NIdaq`) | The transmission light drives an analog-output channel on the shared card. `NIdaq` has no-op `initialize`/`shutdown`; DAQmx tasks are created and deleted per operation. |
-| `NIdaq` | `XEM` FPGA (module `OK_XEM`, field `daq::NIdaq`, defaults to `NIdaq()`; `XEM` is not an `AbstractInstrument`, so it has no lifecycle generics and is absent from the API map) | The FPGA module uses the card for I/O. |
-| `Triggerscope4` | `LCC1620` attenuator (field `scope::Triggerscope4`, `dac_channel::Int`) | The attenuator sets its drive voltage through a Triggerscope DAC channel. |
+| Dependent | Holds | How the dependency gets there | Required order |
+|---|---|---|---|
+| `LCC1620` | `scope::Triggerscope4` | keyword `scope=`; defaults to a fresh `Triggerscope4()` on `COM3` | construct the scope first if you want to share it. `initialize(att)` calls `initialize(att.scope)` itself when the scope's port is not open, then sets the DAC range and drive voltage. |
+| `XEM` (module `OK_XEM`) | `daq::NIdaq` | keyword `daq=`; defaults to `NIdaq()` | none: `NIdaq` holds no connection (tasks are created and deleted per operation, `initialize`/`shutdown` are no-ops) |
+| `TCubeLaser` | `daq::NIdaq` for the modulation channel | keyword `daq=` | none, as above |
+| `CrystaLaser`, `VortranLaser`, `DaqTrLight` | `daq::NIdaq` | **built internally**; no keyword, cannot be shared | none; each constructor does its own discovery (see side effects) |
 
-Pass one shared instance, not a fresh default per dependent. `LCC1620()` with no
-`scope` argument constructs its own `Triggerscope4()`, and `Triggerscope4()`
-defaults to `portname="COM3"` and builds a `LibSerialPort.SerialPort` for it in the
-constructor. Two Triggerscope objects for one physical port is a fight over the COM
-port, not a driver bug.
+Because `NIdaq` is a stateless handle, several devices each holding their own
+`NIdaq()` is fine. The only shared *connection* in the package is the Triggerscope's
+serial port, so it is the only place where sharing one instance matters:
 
-Independent devices (cameras, stages, lasers on their own serial port or SDK) have
-no ordering constraint among themselves. Initialize them in the order that makes
-the failure mode cheapest: light sources off, then stages, then cameras is a
-reasonable default. Shut down in the reverse order so a dependent releases the
-shared device before the shared device closes.
+```julia
+ts  = Triggerscope4(portname="COM5")            # one object for the physical port
+att = LCC1620(scope=ts, dac_channel=3)          # shares it; LCC1620() alone would build a second Triggerscope4 on COM3
+initialize(att)                                 # opens the scope if needed, then configures the DAC channel
+```
+
+Signatures traced from `lcc1620_attenuator/types.jl` and `triggerscope/types.jl`;
+not executed (no serial port here). Two `Triggerscope4` objects for one physical port
+fight over the COM port; that is a wiring error, not a driver bug.
+
+Recommended, not required, order for the rest: light sources off first, then stages,
+then cameras, so the failure mode of an aborted setup is cheapest. Shut down in the
+reverse order so a dependent releases the shared device before the shared device
+closes.
 
 ## Devices that throw on the lifecycle calls (v0.2.0)
 
@@ -131,7 +165,12 @@ is confirmed in `test/contract.jl` upstream:
 
 The Sim devices, `DCAM4Camera`, `PIStage`, `MCLStage`, `N472`, `MCS2Stage`,
 `NIdaq`, `LCC1620`, and the four other light sources implement all of
-`initialize`/`shutdown`/`export_state`.
+`initialize`/`shutdown`/`export_state`. `XEM` (Opal Kelly FPGA, module `OK_XEM`) is
+not an `AbstractInstrument` and so is absent from the API map, but it **does** extend
+the shared `initialize` (constructs the FrontPanel handle and opens the board) and
+`shutdown` (destructs the handle). Call both. It has no `export_state` or `gui`.
+Absence from the map means the generator did not walk that type, not that the
+methods do not exist; check with `hasmethod`.
 
 ## `gui`
 
