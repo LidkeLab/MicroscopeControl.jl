@@ -217,9 +217,16 @@ MicroscopeControl.export_state(r::_ParametricRig{T}) where {T} = (Dict{String,An
             open(io -> TOML.print(io, after), manifest_path, "w")
 
             @test_throws Exception MicroscopeControl.install_skills(tmp; skills=["mc-acquire"], quiet=true)
-            @test isfile(old_file)
+            # The edited bytes on disk must be untouched (not reverted, not
+            # deleted), and the manifest must keep the *original* ownership
+            # hash (what the file would be if unmodified), not the edited
+            # content's hash -- otherwise the edit would be silently
+            # "adopted" as the new baseline instead of being reported.
+            @test read(old_file, String) == "old content, no longer shipped, and now edited too"
             final = TOML.parsefile(manifest_path)
-            @test "old.md" in final["mc-acquire"]["files"]
+            idx = findfirst(==("old.md"), final["mc-acquire"]["files"])
+            @test idx !== nothing
+            @test final["mc-acquire"]["hashes"][idx] == old_hash
         end
     end
 
@@ -263,8 +270,15 @@ MicroscopeControl.export_state(r::_ParametricRig{T}) where {T} = (Dict{String,An
             write(victim, "keep me")
             h = bytes2hex(SHA.sha2_256(read(victim)))
             skills_dir = joinpath(tmp, ".claude", "skills")
-            mkpath(skills_dir)
-            traversal = relpath(victim, skills_dir) # e.g. "../../<tmp>/outside.txt"
+            # uninstall resolves a manifest entry's "files" relative to
+            # `skills_dir/<name>`, not `skills_dir` itself -- the traversal
+            # string and the skill directory it's read from must match that
+            # exactly, or the resolved path silently lands one level off
+            # from `victim` and the test would pass even with no
+            # containment check at all.
+            skill_dir = joinpath(skills_dir, "evil")
+            mkpath(skill_dir)
+            traversal = relpath(victim, skill_dir) # e.g. "../../<outside_dir>/outside.txt"
             open(joinpath(skills_dir, ".microscopecontrol-skills.toml"), "w") do io
                 TOML.print(io, Dict("evil" => Dict("version" => "0.2.0", "installed" => "x",
                                                     "files" => [traversal], "hashes" => [h])))
@@ -274,6 +288,83 @@ MicroscopeControl.export_state(r::_ParametricRig{T}) where {T} = (Dict{String,An
             @test isfile(victim)
             @test read(victim, String) == "keep me"
         end
+
+        mktempdir() do tmp
+            # A *dangling* symlink at the final destination: `ispath` is
+            # false for it (its target doesn't exist), which must not be
+            # mistaken for "just a not-yet-existing filename" -- `write`
+            # would otherwise follow it and create the file outside.
+            outside_dir = mktempdir()
+            dangling_target = joinpath(outside_dir, "new.md")
+            skills_dir = joinpath(tmp, ".claude", "skills")
+            skill_dir = joinpath(skills_dir, "mc-acquire")
+            mkpath(skill_dir)
+            symlink(dangling_target, joinpath(skill_dir, "SKILL.md"))
+
+            @test_throws Exception MicroscopeControl.install_skills(tmp; skills=["mc-acquire"], quiet=true)
+            @test !ispath(dangling_target)
+        end
+
+        mktempdir() do tmp
+            # The manifest file itself as a symlink to an outside file: the
+            # final write must not be allowed to follow it and clobber that
+            # file. An empty TOML document is valid (parses as no prior
+            # entries) so this reaches the write path rather than failing
+            # to parse first.
+            outside_dir = mktempdir()
+            outside_manifest = joinpath(outside_dir, "clobbered.toml")
+            write(outside_manifest, "")
+            skills_dir = joinpath(tmp, ".claude", "skills")
+            mkpath(skills_dir)
+            symlink(outside_manifest, joinpath(skills_dir, ".microscopecontrol-skills.toml"))
+
+            @test_throws Exception MicroscopeControl.install_skills(tmp; skills=["mc-acquire"], quiet=true)
+            @test read(outside_manifest, String) == ""
+        end
+
+        mktempdir() do tmp
+            # Refusal must not lose ownership records: install a skill
+            # legitimately, then corrupt its destination into a symlink
+            # (standing in for "something else clobbered it later"), and
+            # confirm uninstall's refusal still preserves the original
+            # manifest entry rather than silently dropping it.
+            MicroscopeControl.install_skills(tmp; skills=["mc-acquire"], quiet=true)
+            manifest_path = joinpath(tmp, ".claude", "skills", ".microscopecontrol-skills.toml")
+            original = TOML.parsefile(manifest_path)["mc-acquire"]
+
+            skill_dir = joinpath(tmp, ".claude", "skills", "mc-acquire")
+            rm(skill_dir; recursive=true)
+            symlink(mktempdir(), skill_dir)
+
+            @test_throws Exception MicroscopeControl.uninstall_skills(tmp; quiet=true)
+            after = TOML.parsefile(manifest_path)
+            @test haskey(after, "mc-acquire")
+            @test after["mc-acquire"]["files"] == original["files"]
+            @test after["mc-acquire"]["hashes"] == original["hashes"]
+        end
+    end
+
+    @testset "containment comparison is separator-agnostic (Windows regression)" begin
+        # Pure string-level check, no filesystem involved: containment must
+        # be decided by path *components*, not a hardcoded "/" prefix test,
+        # or a legitimate Windows child such as
+        # `C:\repo\.claude\skills\mc-acquire` fails a naive
+        # `startswith(child, root * "/")` check and every ordinary install
+        # on Windows -- the platform this package's rig actually runs on --
+        # would be wrongly refused.
+        root = "C:\\repo\\.claude\\skills"
+        child = "C:\\repo\\.claude\\skills\\mc-acquire\\SKILL.md"
+        sibling_escape = "C:\\repo\\.claude\\skills-evil\\SKILL.md"
+
+        root_parts = MicroscopeControl._path_components(root)
+        @test root_parts == ["C:", "repo", ".claude", "skills"]
+
+        child_parts = MicroscopeControl._path_components(child)
+        @test length(child_parts) >= length(root_parts)
+        @test child_parts[1:length(root_parts)] == root_parts
+
+        escape_parts = MicroscopeControl._path_components(sibling_escape)
+        @test !(length(escape_parts) >= length(root_parts) && escape_parts[1:length(root_parts)] == root_parts)
     end
 
     @testset "non-existent target directory" begin

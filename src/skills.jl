@@ -86,19 +86,47 @@ function _resolve_path(path::AbstractString)
     return isempty(tail) ? base : joinpath(base, tail...)
 end
 
+# Path components after normalizing `\` to `/` *unconditionally*, no matter
+# the current OS. A manifest or a resolved path can be Windows-style (this
+# package's primary users run Windows) even while running this package's own
+# tests on Linux, so containment is decided by component structure, not by a
+# hardcoded separator or the host OS's own path-splitting convention.
+_path_components(path::AbstractString) = filter(!isempty, split(replace(path, '\\' => '/'), '/'))
+
 # True if `path` -- once every symlink already on disk in its ancestry is
 # resolved -- is `root` itself or somewhere inside it. `root` must exist.
+#
+# RULING: if `root` itself sits under a symlinked ancestor (e.g. the user's
+# own `.claude` is a symlink), `realpath(root)` follows it, and this compares
+# against *that* resolved location -- which is correct, not a boundary
+# violation: the resolved location IS the user's real skills directory, and
+# operating inside it is exactly what should happen. We deliberately do not
+# special-case or reject a symlinked ancestor of `dest_root`.
 function _contained_in(root::AbstractString, path::AbstractString)
     root_real = realpath(root)
     target_real = _resolve_path(path)
-    return target_real == root_real || startswith(target_real, root_real * "/")
+    root_parts = _path_components(root_real)
+    target_parts = _path_components(target_real)
+    return length(target_parts) >= length(root_parts) && target_parts[1:length(root_parts)] == root_parts
 end
 
 # Validate a (skill name[, relative file]) pair against `dest_root` and
 # return the literal filesystem path to operate on, or `nothing` if it must
-# be refused: an unsafe name/path component, a symlinked skill directory
-# (never followed, regardless of where it points), or a resolved location
-# outside `dest_root`.
+# be refused: an unsafe name/path component, a symlinked skill directory or
+# final destination (never followed, dangling or not, regardless of where it
+# points), or a resolved location outside `dest_root`.
+#
+# RULING (TOCTOU): this validates at one point in time; nothing here stops a
+# concurrent actor from replacing a parent directory with a symlink between
+# this check and the write/remove that follows it. This package is a
+# documentation installer that a repository's own owner runs against their
+# own filesystem, not a service exposed to an adversary running alongside
+# it, so full protection against a concurrent attacker is out of scope.
+# `install_skills`/`uninstall_skills` do the cheap mitigation instead -- an
+# `islink` re-check immediately before each write and each remove, which
+# narrows but does not eliminate the window. Full protection would need
+# descriptor-based (openat/*at-style) operations, which are deliberately not
+# attempted here.
 function _safe_dest_path(dest_root::AbstractString, name::AbstractString, relfile::Union{Nothing,AbstractString}=nothing)
     _safe_component(name) || return nothing
     dest_dir = joinpath(dest_root, name)
@@ -109,8 +137,30 @@ function _safe_dest_path(dest_root::AbstractString, name::AbstractString, relfil
         _safe_relpath(relfile) || return nothing
         joinpath(dest_dir, relfile)
     end
+    # `ispath` (stat, follows symlinks) is false for a *dangling* symlink, so
+    # `_resolve_path` would otherwise treat one as "just a not-yet-existing
+    # filename" under a legitimate parent and let it through; `islink` (lstat,
+    # does not follow) catches the symlink itself regardless of whether its
+    # target exists.
+    islink(path) && return nothing
     _contained_in(dest_root, path) || return nothing
     return path
+end
+
+# Re-check `islink` immediately before the actual write/remove syscall (see
+# the TOCTOU ruling above), then perform it. Returns `false` (performing
+# nothing) if the target became a symlink since `_safe_dest_path` validated
+# it; callers treat that exactly like any other refusal.
+function _safe_write(path::AbstractString, bytes)
+    islink(path) && return false
+    write(path, bytes)
+    return true
+end
+
+function _safe_remove(path::AbstractString)
+    islink(path) && return false
+    rm(path)
+    return true
 end
 
 """
@@ -246,8 +296,14 @@ function _generate_api_map()
                 println(io)
                 for fname in sort(shared)
                     params = _sig_parameters(inherited_method[fname])
+                    # The declaring type is whichever of `iface` or
+                    # `AbstractInstrument` the method actually resolved to
+                    # (params[2]), not always `iface` itself -- otherwise an
+                    # AbstractInstrument-level fallback prints under the
+                    # wrong type name.
+                    declaring = params[2]
                     args = join(params[3:end], ", ")
-                    println(io, "- `$(fname)($(nameof(iface))$(isempty(args) ? "" : ", " * args))`")
+                    println(io, "- `$(fname)($(nameof(declaring))$(isempty(args) ? "" : ", " * args))`")
                 end
             end
 
@@ -262,8 +318,9 @@ function _generate_api_map()
                 println(io)
                 for fname in sort(stub)
                     params = _sig_parameters(inherited_method[fname])
+                    declaring = params[2]
                     args = join(params[3:end], ", ")
-                    println(io, "- `$(fname)($(nameof(iface))$(isempty(args) ? "" : ", " * args))`")
+                    println(io, "- `$(fname)($(nameof(declaring))$(isempty(args) ? "" : ", " * args))`")
                 end
             end
 
@@ -398,6 +455,17 @@ function install_skills(target::AbstractString=pwd(); skills=:all, force::Bool=f
             dest_path = _safe_dest_path(dest_root, name, relfile)
             if dest_path === nothing
                 push!(refused, joinpath(dest_dir, relfile))
+                # A refusal is not the same as "never installed": if this
+                # file was previously tracked (e.g. it got swapped for a
+                # symlink after a legitimate install), keep its ownership
+                # record instead of losing it -- otherwise a later, entirely
+                # unrelated reinstall would see it as untracked and (per the
+                # obsolete-file reconciliation below) never touch it again.
+                expected = get(prior_hashes, relfile, nothing)
+                if expected !== nothing
+                    push!(final_files, relfile)
+                    push!(final_hashes, expected)
+                end
                 continue
             end
 
@@ -415,7 +483,15 @@ function install_skills(target::AbstractString=pwd(); skills=:all, force::Bool=f
             end
 
             mkpath(dirname(dest_path))
-            write(dest_path, _rendered_bytes(src_dir, relfile, version))
+            if !_safe_write(dest_path, _rendered_bytes(src_dir, relfile, version))
+                push!(refused, dest_path)
+                expected = get(prior_hashes, relfile, nothing)
+                if expected !== nothing
+                    push!(final_files, relfile)
+                    push!(final_hashes, expected)
+                end
+                continue
+            end
             push!(final_files, relfile)
             push!(final_hashes, _file_hash(dest_path))
         end
@@ -436,7 +512,11 @@ function install_skills(target::AbstractString=pwd(); skills=:all, force::Bool=f
             end
             isfile(dest_path) || continue
             if _file_hash(dest_path) == expected
-                rm(dest_path)
+                if !_safe_remove(dest_path)
+                    push!(refused, dest_path)
+                    push!(final_files, relfile)
+                    push!(final_hashes, expected)
+                end
             else
                 push!(modified, dest_path)
                 push!(final_files, relfile)
@@ -454,8 +534,14 @@ function install_skills(target::AbstractString=pwd(); skills=:all, force::Bool=f
         quiet || println("installed $(name) -> $(dest_dir)")
     end
 
-    open(manifest_path, "w") do io
-        TOML.print(io, manifest)
+    if islink(manifest_path)
+        # `open(path, "w")` follows an existing symlink and would otherwise
+        # truncate/overwrite whatever outside file it points to.
+        push!(refused, manifest_path)
+    else
+        open(manifest_path, "w") do io
+            TOML.print(io, manifest)
+        end
     end
 
     if !isempty(refused)
@@ -498,7 +584,13 @@ function uninstall_skills(target::AbstractString=pwd(); quiet::Bool=false)
         dest_dir = _safe_dest_path(dest_root, name)
         if dest_dir === nothing
             push!(refused, name)
-            continue # never touch anything under an unsafe or symlinked skill name
+            # Never touch anything under an unsafe or symlinked skill name --
+            # but keep its ownership record exactly as read, untouched, so
+            # that repairing the problem (e.g. removing the symlink) leaves
+            # a later uninstall able to find these files again instead of
+            # having permanently forgotten them.
+            remaining_manifest[name] = entry
+            continue
         end
 
         files = [replace(string(f), '\\' => '/') for f in get(entry, "files", String[])]
@@ -516,7 +608,11 @@ function uninstall_skills(target::AbstractString=pwd(); quiet::Bool=false)
             end
             isfile(path) || continue
             if _file_hash(path) == expected_hash
-                rm(path)
+                if !_safe_remove(path)
+                    push!(refused, path)
+                    push!(kept_files, relfile)
+                    push!(kept_hashes, expected_hash)
+                end
             else
                 push!(modified, path)
                 push!(kept_files, relfile)
@@ -546,7 +642,12 @@ function uninstall_skills(target::AbstractString=pwd(); quiet::Bool=false)
         quiet || println("uninstalled $(name) -> $(dest_dir)")
     end
 
-    if isempty(remaining_manifest)
+    if islink(manifest_path)
+        # Same reasoning as install_skills: `open(path, "w")` would follow
+        # an existing symlink and overwrite whatever outside file it points
+        # to, so refuse outright rather than writing or deleting through it.
+        push!(refused, manifest_path)
+    elseif isempty(remaining_manifest)
         rm(manifest_path)
     else
         open(manifest_path, "w") do io
