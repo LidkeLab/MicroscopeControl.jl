@@ -91,7 +91,7 @@ from each driver's `interface_methods.jl`; only the Sim row was executed.
 | `SimCamera` | the enum, not a frame | the frame. This is the only driver where this is the right call. |
 | `DCAM4Camera` | the frame `(H, W)`, after allocating one buffer, snapping, reading, and **releasing** the buffer | waits on a cycle-end event for an acquisition that no longer exists, then copies from released buffers. Do not call it. |
 | `ThorcamDCXCamera` | the frame, then frees the image memory | in any mode reads `sequence_length` frames from `pImage_Mem` and calls `abort`; only valid after `sequence`. |
-| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, i.e. a *new* frame, not the captured one. The `SEQUENCE` branch references an undefined variable `sequence_frames` and hard-codes 1080 x 1440; it will error. |
+| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch references an undefined variable `sequence_frames` and hard-codes 1080 x 1440; it will error. |
 
 So on every hardware driver in the package, the frame is the **return value of
 `capture`**, and `getdata` is for sequences. Put the difference in one place in your
@@ -102,8 +102,18 @@ snap(cam::SimCamera) = (capture(cam); getdata(cam))     # executed
 snap(cam::Camera)    = capture(cam)                     # DCAM4, DCX, CSC: frame is the return value (traced)
 ```
 
-Check the result before indexing: every hardware `capture` returns `nothing` on an
-SDK failure after logging an `@error` (and sets `cam.last_error` on DCAM4).
+Check the result before indexing, and check it **per driver**, because the failure
+value differs:
+
+| Driver | `capture` on SDK failure |
+|---|---|
+| `DCAM4Camera` | logs `@error`, sets `cam.last_error`, returns `nothing` (or the copy step returns `nothing` with `@error "DCAM Failed to Copy Frame"`) |
+| `ThorcamDCXCamera` | logs `@error`, returns `nothing` |
+| `ThorCamCSCCamera` | **returns `zeros(UInt16, 1080, 1440)`**. `getlastframe` substitutes an all-zero image when the SDK reports no pending frame, after an `@error "Frame not collected"`. A `=== nothing` check passes it as valid data. Detect it by `all(iszero, frame)` or by watching the log; do not rely on a `nothing` check for this camera. |
+| `SimCamera` | cannot fail |
+
+A zero-filled frame in a z-stack is a worse failure than a thrown error, because it
+saves cleanly.
 
 ## Exposure and ROI are fields, with driver-specific types and units
 
@@ -129,10 +139,21 @@ cam.exposure_time = 0.02                  # Sim / DCAM4 / DCX
 cam.roi = CameraROI(1, 1, 512, 256)       # x_start, y_start, width, height
 ```
 
-`CameraROI(x_start, y_start, width, height)`: the returned frame is
-`(height, width)` on every driver. Whether `x_start = 1` means the first column or
-the second depends on the SDK the driver forwards it to; the interface does not
-define a 1-based origin. Keep the `(H, W[, N])` storage convention (below) separate
+`CameraROI(x_start, y_start, width, height)`. The returned frame is `(H, W)`
+column-major on every driver, but **whether `H, W` equal `roi.height, roi.width`
+is per driver**:
+
+| Driver | Frame size returned |
+|---|---|
+| `SimCamera` | `(roi.height, roi.width)` (executed) |
+| `DCAM4Camera` | the SDK's current sub-array, `(height, width)` from `dcamprop_getsize`, which is the ROI as the SDK accepted it (the driver `@warn`s if the SDK rounded your offsets) |
+| `ThorcamDCXCamera` | `(roi.height, roi.width)`; `capture` allocates image memory of exactly that size |
+| `ThorCamCSCCamera` | **always `(1080, 1440)`**. The driver never forwards `roi` to the SDK and hard-codes the full sensor in `getlastframe`, so `cam.roi = CameraROI(1, 1, 512, 256)` changes nothing and preallocation sized from `roi` fails on assignment. |
+
+Preallocate from the first returned frame (`similar(frame, size(frame)..., N)`)
+rather than from `roi`, or the CSC path breaks. Whether `x_start = 1` means the
+first column or the second depends on the SDK the driver forwards it to; the
+interface does not define a 1-based origin. Keep the `(H, W[, N])` storage convention (below) separate
 from SDK coordinate conventions: the first is enforced by the drivers at the DLL
 boundary, the second is not.
 
@@ -199,9 +220,22 @@ From each driver's `types.jl` and `move` method; only `SimStage3d` was executed:
 | `N472` (PI N-472) | `(stage, pos::Vector{Float64})`, not x/y/z | **millimetres** (`units = "mm"`) | `stage.pos::Vector`, not `real_*` | no `getrange`; `minpos`/`maxpos` vectors |
 | `MCS2Stage` (SmarAct) | `(stage, x, y[, z])` | **micrometres**, converted to picometres for the SDK | `real_x/y/z`, `targ_x/y/z` | `range_x/y/z` set by `initialize` from the controller |
 
-`move(stage, 1, 2, 3)` with integers is a `MethodError` on every stage. Read
-`stage.units` at runtime and assert the value your code assumes before the first
-move on a new rig. Settling time is the driver's business; the Sim stage moves
+`move(stage, 1, 2, 3)` with integers is a `MethodError` on every stage. Only
+`PIStage`, `MCLStage` and `N472` carry a `units` field; `SimStage*` and `MCS2Stage`
+do not, and `stage.units` on them throws. Guard the check, and hard-code the
+SmarAct unit from the table (micrometres), which is fixed by its bridge code:
+
+```julia
+expected = Dict(PIStage => "Milimeters", MCLStage => "Microns", N472 => "mm")   # spelled as the drivers spell them
+if hasfield(typeof(stage), :units)
+    stage.units == expected[typeof(stage)] || error("stage units are $(stage.units); code assumes $(expected[typeof(stage)])")
+end
+```
+
+Executed against the constructed (unconnected) stage objects: `PIStage().units ==
+"Milimeters"`, `MCLStage().units == "Microns"`, `N472().units == "mm"`,
+`hasfield(MCS2Stage, :units) == false`, `hasfield(SimStage3d, :units) == false`.
+Do the check before the first move on a new rig. Settling time is the driver's business; the Sim stage moves
 instantly, so on hardware poll `getposition` until the position field is within
 tolerance before exposing.
 
