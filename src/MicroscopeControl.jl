@@ -29,4 +29,8 @@ include("hardware_implementations/HardwareImplementations.jl")
 include("h5_file_saving.jl")
 export save_h5, save_attributes_and_data
 
+# Claude Code skill installer for downstream repos
+include("skills.jl")
+export install_skills, uninstall_skills, list_skills
+
 end

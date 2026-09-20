@@ -110,6 +110,15 @@ heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-l
 
 **Saving (HDF5):** No transform needed if getdata follows convention. Save `(H, W, N)` directly.
 
+### Claude Code Skills
+
+`skills/` holds the sources for Claude Code skills that `install_skills()`
+copies into a downstream repo's `.claude/skills/` (see `src/skills.jl` and
+the README's "Claude Code skills" section). `mc-api-map`'s
+`references/api-map.md` is generated at install time by introspecting the
+loaded module and must never be committed with generated content; the
+repo-tracked copy should only ever contain the `.gitkeep` placeholder.
+
 ### Work in Progress
 
 Some hardware modules are commented out in `MicroscopeControl.jl` while under development:

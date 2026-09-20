@@ -130,4 +130,5 @@ const HDF5 = MicroscopeControl.HDF5
     end
 
     include("contract.jl")
+    include("skills.jl")
 end

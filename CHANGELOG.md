@@ -9,6 +9,27 @@ are interface changes, patch bumps are everything else).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-20
+
+Hardware verification: not required (no driver runtime paths changed).
+
+### Added
+- `install_skills`/`uninstall_skills`/`list_skills`, a Claude Code skill
+  installer for downstream repos that compose MicroscopeControl.jl devices.
+  `install_skills(target)` copies the package's `skills/` sources into
+  `target/.claude/skills/`, stamps each installed `SKILL.md` with the
+  package version, and writes a manifest (`.microscopecontrol-skills.toml`)
+  tracking installed files by SHA-256 so a locally edited file is never
+  silently overwritten (pass `force=true` to override). `uninstall_skills`
+  reverses this using the same manifest, leaving unrelated skills alone.
+- Five skill sources under `skills/`: `mc-api-map`, `mc-wire-device`,
+  `mc-acquire`, `mc-sim-testing`, `mc-driver-issue`. `mc-api-map` also gets a
+  generated `references/api-map.md`, built by introspecting the installed
+  module rather than hand-maintained, listing each device type's
+  device-specific and interface-inherited methods.
+- New `[deps]`: `SHA`, `TOML`, `InteractiveUtils` (all stdlib; `Dates` was
+  already a dependency), needed by the installer.
+
 ## [0.1.1] - 2026-09-20
 
 Hardware verification: NOT DONE. This changes PI C-867 driver runtime paths
