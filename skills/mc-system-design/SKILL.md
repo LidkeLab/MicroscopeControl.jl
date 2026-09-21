@@ -43,7 +43,7 @@ gives the assembled instrument its meaning. Neither can do the other's job.
 |---|---|---|
 | **Physical connection** | which object holds the handle, and whether the constructor or `initialize` opens it. **[limitation]** this differs per driver: DCAM4 and ThorCam CSC open in the constructor; PI, MCL, N472, SmarAct, DCx, TCube and the Sims open in `initialize`; see `references/driver-caveats.md`. | one owner per physical port or SDK session; every other holder borrows. Construct the shared object once and pass it in. |
 | **Readiness** | `initialize` returns without throwing when its own steps ran. **[limitation]** a normal return is not readiness: `initialize(::CrystaLaser)` only sets `is_on = false` and succeeds with an empty channel list; `initialize(::DCAM4Camera)` is a no-op because the constructor did the work. | **[policy]** verify after `initialize`: read a position, check `connectionstatus`, inspect channel lists, or take one frame. Decide what "ready" means for each device and check it. |
-| **Background tasks** | **[limitation]** a driver may start a task the caller never receives: `sequence(::DCAM4Camera)` spawns a poller on the camera handle and discards it with an explicit `return` (traced); `sequence(::SimCamera)` and `sequence(::ThorcamDCXCamera)` return theirs only because the `@async` is the last expression, and the interface promises `nothing`. Those tasks read mutable device fields (`exposure_time`, `is_running`) on every iteration. | **[policy]** treat the camera as single-owner and single-acquisition: one blocking acquisition at a time on one task, no cancellation, no configuration change in flight, and a process restart rather than recovery when an abort fails. This is a restriction the drivers impose, not a design preference (worked example, Decision 3). |
+| **Background tasks** | **[limitation]** a driver may start a task the caller never receives: `sequence(::DCAM4Camera)` spawns a poller on the camera handle and discards it with an explicit `return` (traced); `sequence(::SimCamera)` and `sequence(::ThorcamDCXCamera)` return theirs only because the `@async` is the last expression, and the interface promises `nothing`. Those tasks read mutable device state as they run: the Sim's timer rereads `camera.exposure_time` every iteration and writes `is_running`; DCAM4's and DCx's pollers reread `camera.camera_handle` through the SDK every iteration (DCAM4 writes `is_running = 0` once at the end; neither reads it). | **[policy]** treat the camera as single-owner and single-acquisition: one blocking acquisition at a time on one task, no cancellation, no configuration change in flight, and a process restart rather than recovery when an abort fails. This is a restriction the drivers impose, not a design preference (worked example, Decision 3). |
 | **State** | the device's own fields (`exposure_time`, `roi`, `targ_x`, `properties.power`) are the configuration the driver pushes to hardware; **[guarantee]** shared code reads those fields by name (see Principle 2). | the instrument-level configuration (`AbstractSystemState`), when it is captured, and which fields are requested values versus measured ones (see "Three kinds of state"). |
 | **Failure recovery** | **[guarantee]** since v0.1.0 the stubs of the five `AbstractInstrument` interfaces (`Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator`) and the `AbstractInstrument` lifecycle stubs throw `ErrorException("... not implemented for T")` instead of returning `nothing`. **[limitation]** `SLM`'s `displayimage(::SLM)` has an empty body and returns `nothing`, and `SLM`/`TRIG` devices get `MethodError`, not the stub, for lifecycle calls (`references/driver-caveats.md`). Drivers mostly `@warn`/`@error` and return on hardware errors. **[limitation]** the `AbstractSystem` fallbacks still `@error` and return `nothing`. | **[policy]** rollback on partial initialization, a shutdown that reports what it could not close, and a saved record that says what is missing. All three are in the worked example below; none is provided by MC. |
 | **Units, axes, conventions** | its own: PI in millimetres, MCL in micrometres, Sim stages unitless (0..100); cameras return `(H, W)` / `(H, W, N)` arrays **[guarantee]** for Sim and DCAM4 (executed / traced). | **[policy]** one normalisation layer in the system (a function per device, not a conversion at every call site). |
@@ -178,8 +178,8 @@ Each is stated as what the code does today; the label says how far to trust it.
 | **Saved metadata** | the `export_state` tree in the HDF5 file | `attrs["Main/camera"]["exposure_time"]` | a record of the above at snapshot time, plus whatever the system adds (which is missing, which is requested versus measured). |
 
 **[policy]** name attributes so the reader can tell the kinds apart
-(`power_requested` versus `power_measured`), snapshot after the acquisition
-task has joined, and never let a missing child look like an empty one.
+(`power_requested` versus `power_measured`), snapshot after the blocking acquisition call
+has returned, and never let a missing child look like an empty one.
 
 ## Worked example: a bench that forces four decisions
 
@@ -239,13 +239,19 @@ driver: `sequence(::DCAM4Camera)` spawns a poller on the camera handle and
 `sequence(::ThorcamDCXCamera)` return their poller only because the `@async` is
 the function's last expression (Sim executed, DCX traced), while the interface
 docstring promises `nothing`, so a test that joins the Sim's task passes where
-`DCAM4Camera` never can; `ThorCamCSCCamera` spawns none. The Sim's timer reads
-`camera.exposure_time` on every iteration (executed: with 20 frames at 0.01 s
-remaining, raising `exposure_time` to 0.05 s after the start made the task run
-0.93 s more). Consequently a system **cannot prove that a previous acquisition
-has stopped**, and **no wait computed at the caller fixes it**: any deadline
-derived when the acquisition started is invalidated by the next configuration
-change. Two reproduced consequences of earlier versions of this example that
+`DCAM4Camera` never can; `ThorCamCSCCamera` spawns none. Each task reads
+mutable device state as it runs, and which state differs per driver: the Sim's
+timer rereads `camera.exposure_time` on every iteration and writes
+`is_running` at the end (executed: with 20 frames at 0.01 s remaining, raising
+`exposure_time` to 0.05 s after the start made the task run 0.93 s more);
+DCAM4's poller rereads `camera.camera_handle` through `dcamcap_status` every
+iteration and writes `is_running = 0` once when the SDK reports idle; DCx's
+poller rereads `camera.camera_handle` through `is_CameraStatus` and stops live
+video at the end; neither hardware poller reads `is_running` (traced). The
+exposure measurement is Sim-only; the general point is not. Consequently a
+system **cannot prove that a previous acquisition has stopped**, and **no wait
+computed at the caller fixes it**: any deadline derived when the acquisition
+started depends on state the driver's task may read again later. Two reproduced consequences of earlier versions of this example that
 tried a caller-side quiescence deadline: a caller admitted during `shutdown`'s
 wait had its driver task alive when the camera closed, about 0.7 s before the
 deadline recorded for it, in five of five runs; and a `set_state` lengthening
@@ -386,7 +392,7 @@ end
 # --- Acquisition: ONE call, on the calling task, start to finish. No cancellation, no concurrent callers. ---
 # [limitation] the camera drivers spawn tasks the caller never receives (DCAM4 discards its poller; Sim and
 # DCX return theirs only by accident; the interface promises `nothing`), and those tasks read mutable device
-# fields (`exposure_time`, `is_running`) on every iteration. So this system cannot prove a previous
+# state as they run (Sim: `exposure_time` each iteration; DCAM4/DCx: `camera_handle` via the SDK). So this system cannot prove a previous
 # acquisition has stopped, and no wait computed here could. It therefore does not try: one acquisition at
 # a time, blocking, and a camera that could not be aborted is unavailable until the process is rebuilt.
 function acquire!(sys::Bench, n::Int)
