@@ -47,8 +47,8 @@ certainty, and do not rely on either.
    **[limitation]** the drivers themselves spawn tasks you cannot join
    (`sequence(::SimCamera)`'s timer, DCAM4's handle poller), so "one task"
    is a rule for *your* code, not a property you can establish of the process;
-   `mc-system-design`, Decision 3, measures the consequence and gives the
-   mitigations.
+   `mc-system-design`, Decision 3, gives the evidence, the resulting
+   single-owner restriction, and the upstream fix.
 
 ```julia
 cam.is_running = 1

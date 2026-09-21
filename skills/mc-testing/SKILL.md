@@ -20,7 +20,7 @@ shortfall, **[policy]** recommended. Everything marked executed ran under
 |---|---|---|
 | every device the system holds has its **own** `initialize`/`shutdown`/`export_state` method, so no lifecycle call lands on the throwing `AbstractInstrument` stub | the dispatch check below, on the *hardware* types too (it needs no hardware) | that the method works: dispatch establishes method selection only. A concrete method can throw on the hardware path (`initialize(::Triggerscope4)` opens the serial port with `LibSerialPort.open`, which throws on a missing port; traced), log and return (`initialize(::PIStage)` `@error`s and leaves `connectionstatus == false`), or do nothing useful (`stopmotion(::MCLStage)` logs `STOP MOTION NOT IMPLEMENTED` and returns `nothing`; executed). The check does catch the fourth case, a missing method: `ThorCamCSCCamera` has no `initialize`, so dispatch reaches the throwing stub |
 | `initialize` rolls back what it opened when a later device fails, including devices claimed at construction | Sim devices plus a bare `struct Broken <: LightSource end` whose stubs throw, and a fake that is "open" from its constructor (`mc-system-design`, worked example) | that a real SDK's failure surfaces as an exception rather than an `@error` and a normal return, which most drivers do (`mc-extend`, section 1) |
-| one task owns the camera; completion, cancellation and task failure all release it; `set_state` is refused while it runs | `SimCamera` (`sequence` runs an `@async` task that clears `is_running`; `sequence_length = -1` makes `getdata` throw inside the task) | frame timing, trigger behaviour, buffer lifetime, and that `abort` on the real SDK is safe from the owning task |
+| the camera is used single-owner and single-acquisition: one blocking acquisition at a time, `set_state` refused in flight, a failed abort makes it unavailable until rebuilt | `SimCamera` (`sequence_length = -1` makes `getdata` throw; a fake whose `abort` throws) | frame timing, trigger behaviour, buffer lifetime; and nothing about stopping early, because the drivers' own tasks cannot be joined (`mc-system-design`, Decision 3) |
 | the saved record names what is missing | a child whose `export_state` throws, through `save_h5`, read back | that hardware attributes are readbacks rather than cached requests |
 | array shapes and the `(H, W, N)` convention survive to the file | `SimCamera` with a non-square `roi` (`CameraROI(1, 1, 64, 32)` gives `(32, 64)`) | that the vendor buffer was permuted correctly (`mc-acquire`) |
 | ordering and units of a z-stack | `SimStage3d` (`move` writes `targ_*`, `getposition` copies to `real_*`) | motion time, settling, range limits, direction sign |
@@ -246,7 +246,9 @@ because nothing above touches it:
 - units, direction signs and range limits on every axis; ROI origin convention
   and exposure unit on the camera (`mc-acquire`, per-driver table);
 - timing: settling after `move`, `sequence` completion, live-view stop order
-  (`mc-acquire`), the panel's `setpower(0.5)` on open being safe for the laser;
+  (`mc-acquire`), the panel's `setpower(0.5)` on open being safe for the laser,
+  and that a failed acquisition's `abort` leaves the SDK in a state the next
+  acquisition can use (the Sim cannot show this);
 - SDK failure paths: what `capture` returns on failure per driver (`nothing`,
   or `ThorCamCSCCamera`'s silent all-zero frame);
 - shared-connection ownership: two attenuators on one `Triggerscope4`, and that
