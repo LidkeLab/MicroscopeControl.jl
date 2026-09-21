@@ -79,6 +79,34 @@ Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.1.0"
 Advance the pinned tag deliberately when you want a newer release. `Pkg.develop` (tracking `main` directly, no tag) is for contributors working on the package itself, not for rig code that depends on it.
 
 This package follows a 0.x versioning policy: every merge to `main` is tagged (`.github/workflows/TagOnMerge.yml`), a minor bump (`0.x.0`) means an interface change, and a patch bump (`0.0.x`) is everything else. Hardware verification is not tracked here; it is recorded by the downstream rig repo that pins to a given tag.
+
+## Claude Code skills
+
+Downstream repos that build an instrument out of MicroscopeControl.jl devices,
+or write a driver against it, can install a set of Claude Code skills describing
+this package's design and API, from the downstream repo's own root:
+
+```julia
+using MicroscopeControl
+install_skills()
+```
+
+This copies skill sources into `.claude/skills/` in the current directory,
+one subdirectory per skill, each stamped with the installed package version
+and tracked in a manifest so a locally edited skill file is never silently
+overwritten (pass `install_skills(force=true)` to overwrite anyway). The
+five skills:
+
+- `mc-system-design` — start here: the driver/system responsibility split, the upstream/downstream boundary test, the design principles the source expresses, and a worked composition example with rollback and provenance.
+- `mc-extend` — in order of commitment: diagnose a misbehaving driver (usually the rig), report upstream and work around without type piracy, implement an existing interface for a new device, define a new device class.
+- `mc-acquire` — capture/sequence/live patterns, safe live-view stop order, z-stacks, the `(H, W, N)` convention.
+- `mc-testing` — validate the composed system with simulators and fakes, then what hardware acceptance must still establish; headless under xvfb.
+- `mc-api-map` — a per-version dispatch inventory of which methods each device type has, plus the fields the shared GUI panels read.
+
+Reinstalling (`install_skills()` again) after advancing the pinned tag
+refreshes all five, including the generated API map, to match the new
+version.
+
 ---
 
 
