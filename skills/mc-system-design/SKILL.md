@@ -242,7 +242,7 @@ timer that clears `is_running` after the nominal duration, and because that
 **discards** it with an explicit `return` (traced); `ThorCamCSCCamera` spawns
 none. The interface docstring promises `nothing`, so a system must treat the
 handle as unavailable: code that joins the Sim's returned task passes a test
-that hardware can never pass. A downstream system therefore **cannot guarantee
+that `DCAM4Camera` can never pass (DCx would, by the same accident). A downstream system therefore **cannot guarantee
 that a previous acquisition has fully stopped** before the next begins, and
 cannot join DCAM4's task before closing the handle. Measured consequence
 (executed): cancel a nominal 0.2 s acquisition at 0.05 s, start a nominal 2.0 s
@@ -272,7 +272,7 @@ ignored and the data is returned; cancellation cannot interrupt an SDK wait
 already in progress (`getdata` on DCAM4 blocks in `dcamwait_event`); a failed
 task aborts the camera before ownership is released, and if that abort fails
 the system marks the camera unavailable and refuses further acquisitions until
-`reset_camera!` verifies a recovery; only the joiner of a **finished**
+the system is rebuilt; only the joiner of a **finished**
 acquisition clears ownership; **admission is taken synchronously** (the
 ownership check and the assignment of `sys.acq` have no yield between them)
 and the quiescence wait runs *inside* the admitted task, so two callers cannot
@@ -401,9 +401,11 @@ function MC.export_state(sys::Bench)
 end
 
 # --- Acquisition: acquire!, cancel!, finish!, with a quiescence wait between acquisitions. ---
-# [limitation] the camera drivers spawn tasks they do not hand back (SimCamera's `sequence` spawns an
-# @async timer that clears `is_running`; DCAM4 polls the handle from a task of its own), so this system
-# CANNOT guarantee the previous acquisition has fully stopped. quiesce! is a mitigation, not a proof.
+# [limitation] the camera drivers spawn tasks the interface does not promise to hand back: SimCamera and
+# DCX return their poller only because it is the last expression, DCAM4 discards its poller with an
+# explicit `return`, CSC spawns none. Relying on the return value passes on Sim and fails on DCAM4, so this
+# system treats the handle as unavailable and CANNOT guarantee the previous acquisition has fully stopped.
+# quiesce! is a mitigation, not a proof.
 function quiesce!(sys::Bench; throw_if_running::Bool=true)
     remaining = sys.quiet_after - time()
     remaining > 0 && sleep(remaining)             # wait out the previous acquisition's nominal duration
@@ -415,7 +417,7 @@ end
 
 function acquire!(sys::Bench, n::Int)
     sys.acq === nothing || error("acquisition already running")
-    sys.cam_unavailable && error("camera unavailable: a failed acquisition could not be aborted; call reset_camera! or reconstruct")
+    sys.cam_unavailable && error("camera unavailable: a failed acquisition could not be aborted; shut the system down and reconstruct it")
     sys.cancel[] = false
     sys.cam.sequence_length = n
     # Admission is taken HERE, synchronously: the check above and the assignment below have no yield between
@@ -440,7 +442,7 @@ function acquire!(sys::Bench, n::Int)
             try                                   # failure: abort BEFORE ownership is released
                 abort(sys.cam)
             catch abort_error
-                sys.cam_unavailable = true        # could not even abort: refuse further acquisitions, say so
+                sys.cam_unavailable = true        # could not even abort: refuse further acquisitions until the system is rebuilt
                 @error "abort failed after a failed acquisition; camera marked unavailable" exception=abort_error
             end
             rethrow()
@@ -449,14 +451,6 @@ function acquire!(sys::Bench, n::Int)
     return sys
 end
 cancel!(sys::Bench) = (sys.cancel[] = true; nothing)   # a request; it cannot interrupt an SDK wait already in progress
-function reset_camera!(sys::Bench)                # verified recovery from cam_unavailable; neither initialize(sys) nor shutdown(sys) clears it
-    sys.acq === nothing || error("finish or cancel the acquisition first")
-    shutdown(sys.cam)                             # [limitation] on DCAM4 this closes the SDK and initialize is a no-op, so
-    initialize(sys.cam)                           # reset_camera! cannot reopen it: reconstruct the camera and the system instead
-    sys.cam.is_running == 1 && error("camera still reports running after reset; reconstruct")
-    sys.cam_unavailable = false
-    return nothing
-end
 function finish!(sys::Bench)                      # join the task; release ownership only of the acquisition WE joined
     t = sys.acq
     t === nothing && error("no acquisition running")
@@ -484,13 +478,29 @@ What the run showed (`SimCamera(roi=CameraROI(1,1,64,32), exposure_time=0.01)`,
 | **Cancel after the completion decision** (`acquire!(sys, 2)`, cancel at 0.5 s) | ignored: `finish!` returned `(32, 64, 2)`. |
 | **Failing task** (`acquire!(sys, -1)` makes `getdata` throw) | `finish!` rethrew `TaskFailedException`; `abort` had run (`is_running == false`); ownership released; `set_state` accepted. |
 | **Failing task whose `abort` also fails** (`ArmThenThrowCam`) | rethrew `SDK: arm failed after start`; the next `acquire!` refused with `camera unavailable ...`; `shutdown` still released every device. |
-| **Recovery from unavailable**: `shutdown(sys); initialize(sys)` then `acquire!` | still refused: neither lifecycle call clears the flag. `reset_camera!(sys)` (shut the camera down, reinitialize it, verify it is not running) cleared it: `unavailable == false`, `is_running == 0`. **[limitation]** on `DCAM4Camera` `shutdown` closes the SDK and `initialize` is a no-op, so `reset_camera!` cannot reopen it; reconstruct the camera and the system. |
+| **Recovery from unavailable is reconstruction**: `shutdown(sys); initialize(sys)` then `acquire!` | still refused: neither lifecycle call clears the flag, and no in-place reset is offered (below). `shutdown(sysr)`, then a **new** `Bench` with a **new** camera object (stage and laser reused), `initialize`, `acquire!`: `(32, 64, 3)`, `unavailable == false`. |
 | **Admission race**: two `@async` callers of `acquire!` during a staged 0.3 s quiescence window | caller 1 admitted, caller 2 refused `acquisition already running`, one task installed, and the admitted acquisition finished `(32, 64, 10)`. The **previous** version, which checked ownership before the wait and installed after it, admitted both callers with two distinct tasks while `sys.acq` tracked one. |
 | **Immutable requested state**: `get_state(sys).laser_power = 4.5` after requesting `3.5` | refused: `setfield!: immutable struct of type BenchState cannot be changed`; the export still says `3.5`. |
 | **Second joiner** waits on acquisition A while the first joiner finishes A and starts B | after the late joiner returned, `sys.acq` was still B. |
 | **Export with a failed child** | `complete == false`, `missing_children == "laser"`; through `save_h5` and back: groups `camera, data, laser, stage`, attr `missing_children == "laser"`. |
 | **Shutdown during an acquisition** | cancelled, joined, quiesced, released: `sys.acq === nothing`, `is_running == false`, `owned` empty. |
 | **Observable shutdown failure** (a device whose `shutdown` throws in `owned`) | threw `shutdown left devices open: BrokenLight` after finishing the loop; the stage was already disconnected. |
+
+**[policy]** Recovery from an unavailable camera is **reconstruction**: shut the
+system down (its `shutdown` waits out the previous acquisition's deadline
+before releasing), discard the camera object, build a new one and a new
+system. That is the only recovery on `DCAM4Camera` anyway, whose `shutdown`
+closes the SDK and whose `initialize` is a no-op. A system that wants
+**in-place** recovery must implement a **driver-specific readiness check**
+that establishes two things the lifecycle calls do not: that the previous
+driver poller is gone (wait out `quiet_after` before closing the handle), and
+that initialization actually **succeeded** rather than merely returned
+(`initialize(::ThorcamDCXCamera)` with the SDK reporting zero cameras logs a
+failure and returns normally, traced; `initialize(::PIStage)` likewise). This
+example does not attempt it: an earlier version shipped a `reset_camera!` that
+closed the camera before the deadline and cleared the flag after any normally
+returning `initialize`, both of which were reproduced as wrong. Fewer moving
+parts is fewer places to be wrong.
 
 Provenance rule this example enforces **[policy]**: a saved record must
 identify what is missing. Catching a failed `export_state` and dropping that
