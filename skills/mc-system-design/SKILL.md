@@ -43,7 +43,7 @@ gives the assembled instrument its meaning. Neither can do the other's job.
 |---|---|---|
 | **Physical connection** | which object holds the handle, and whether the constructor or `initialize` opens it. **[limitation]** this differs per driver: DCAM4 and ThorCam CSC open in the constructor; PI, MCL, N472, SmarAct, DCx, TCube and the Sims open in `initialize`; see `references/driver-caveats.md`. | one owner per physical port or SDK session; every other holder borrows. Construct the shared object once and pass it in. |
 | **Readiness** | `initialize` returns without throwing when its own steps ran. **[limitation]** a normal return is not readiness: `initialize(::CrystaLaser)` only sets `is_on = false` and succeeds with an empty channel list; `initialize(::DCAM4Camera)` is a no-op because the constructor did the work. | **[policy]** verify after `initialize`: read a position, check `connectionstatus`, inspect channel lists, or take one frame. Decide what "ready" means for each device and check it. |
-| **Background tasks** | **[limitation]** a driver may start a task it does not hand back: `sequence(::SimCamera)` spawns an `@async` timer that clears `is_running` after `sequence_length * exposure_time` (executed); `DCAM4Camera` polls the camera handle from a task of its own (traced). Nothing lets the system join either. | **[policy]** one system-level task owns the camera while an acquisition runs; manual controls and `set_state` ask it or are refused; the system joins it before `shutdown`. **Exclusive ownership cannot be established** against these drivers (worked example, Decision 3); mitigate with a quiescence wait and hardware acceptance of the cancellation path. |
+| **Background tasks** | **[limitation]** a driver may start a task it does not hand back: `sequence(::SimCamera)` spawns an `@async` timer that clears `is_running` after `sequence_length * exposure_time` (executed); `DCAM4Camera` polls the camera handle from a task of its own and **discards** the handle with an explicit `return` (traced). `SimCamera` and `ThorcamDCXCamera` happen to return their task (it is the last expression), so a caller *could* join it, but the interface promises `nothing` and DCAM4 keeps that promise; `ThorCamCSCCamera` spawns none. | **[policy]** one system-level task owns the camera while an acquisition runs; manual controls and `set_state` ask it or are refused; the system joins it before `shutdown`. **Exclusive ownership cannot be established** against these drivers (worked example, Decision 3); mitigate with a quiescence wait and hardware acceptance of the cancellation path. |
 | **State** | the device's own fields (`exposure_time`, `roi`, `targ_x`, `properties.power`) are the configuration the driver pushes to hardware; **[guarantee]** shared code reads those fields by name (see Principle 2). | the instrument-level configuration (`AbstractSystemState`), when it is captured, and which fields are requested values versus measured ones (see "Three kinds of state"). |
 | **Failure recovery** | **[guarantee]** since v0.1.0 the stubs of the five `AbstractInstrument` interfaces (`Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator`) and the `AbstractInstrument` lifecycle stubs throw `ErrorException("... not implemented for T")` instead of returning `nothing`. **[limitation]** `SLM`'s `displayimage(::SLM)` has an empty body and returns `nothing`, and `SLM`/`TRIG` devices get `MethodError`, not the stub, for lifecycle calls (`references/driver-caveats.md`). Drivers mostly `@warn`/`@error` and return on hardware errors. **[limitation]** the `AbstractSystem` fallbacks still `@error` and return `nothing`. | **[policy]** rollback on partial initialization, a shutdown that reports what it could not close, and a saved record that says what is missing. All three are in the worked example below; none is provided by MC. |
 | **Units, axes, conventions** | its own: PI in millimetres, MCL in micrometres, Sim stages unitless (0..100); cameras return `(H, W)` / `(H, W, N)` arrays **[guarantee]** for Sim and DCAM4 (executed / traced). | **[policy]** one normalisation layer in the system (a function per device, not a conversion at every call site). |
@@ -232,12 +232,19 @@ Everything in this block was executed against MC v0.2.0 under `xvfb-run -a`.
 `ClaimedAtConstruction` for `DCAM4Camera`; `DaqLikeLight` for the three
 DAQ-backed lights whose `setpower` does not cache the request.
 
-**[limitation]** The camera drivers spawn background tasks they do not hand
-back. `sequence(::SimCamera)` starts an `@async` timer that clears
-`is_running` after the nominal duration; `DCAM4Camera` polls its handle from a
-task of its own (traced). A downstream system therefore **cannot guarantee that
-a previous acquisition has fully stopped** before the next begins, and cannot
-join the driver's task before closing the handle. Measured consequence
+**[limitation]** The camera drivers spawn background tasks that the interface
+does not hand back. Per driver: `sequence(::SimCamera)` starts an `@async`
+timer that clears `is_running` after the nominal duration, and because that
+`@async` is the function's last expression the `Task` is returned (executed:
+`sequence(cam) isa Task`, and `wait` on it leaves `is_running == false`);
+`sequence(::ThorcamDCXCamera)` likewise returns its poller by accident
+(traced); `sequence(::DCAM4Camera)` spawns a poller on the camera handle and
+**discards** it with an explicit `return` (traced); `ThorCamCSCCamera` spawns
+none. The interface docstring promises `nothing`, so a system must treat the
+handle as unavailable: code that joins the Sim's returned task passes a test
+that hardware can never pass. A downstream system therefore **cannot guarantee
+that a previous acquisition has fully stopped** before the next begins, and
+cannot join DCAM4's task before closing the handle. Measured consequence
 (executed): cancel a nominal 0.2 s acquisition at 0.05 s, start a nominal 2.0 s
 one immediately, and the cancelled acquisition's driver task clears the new
 flag: the 2.0 s acquisition **returned in 0.167 s** with a full-size array of
@@ -264,8 +271,18 @@ requested before the task's completion decision wins, a cancel after it is
 ignored and the data is returned; cancellation cannot interrupt an SDK wait
 already in progress (`getdata` on DCAM4 blocks in `dcamwait_event`); a failed
 task aborts the camera before ownership is released, and if that abort fails
-the system marks the camera unavailable and refuses further acquisitions; only
-the joiner of a **finished** acquisition clears ownership.
+the system marks the camera unavailable and refuses further acquisitions until
+`reset_camera!` verifies a recovery; only the joiner of a **finished**
+acquisition clears ownership; **admission is taken synchronously** (the
+ownership check and the assignment of `sys.acq` have no yield between them)
+and the quiescence wait runs *inside* the admitted task, so two callers cannot
+both pass the check while one of them sleeps.
+
+`BenchState` is an **immutable** struct, chosen over copying at both
+boundaries: a requested configuration is a value, not a handle onto the
+system. `get_state` hands back the retained record and no caller can edit it
+in place; the only way the request changes is another `set_state`, which is
+exactly the requested-versus-measured discipline this skill teaches.
 
 ```julia
 using MicroscopeControl
@@ -288,7 +305,8 @@ MC.initialize(::DaqLikeLight) = nothing
 MC.shutdown(::DaqLikeLight) = nothing
 MC.setpower(::DaqLikeLight, v::Float64) = nothing              # writes the DAQ, leaves properties.power alone
 
-mutable struct BenchState <: AbstractSystemState  # REQUESTED configuration, nothing measured
+struct BenchState <: AbstractSystemState          # REQUESTED configuration, nothing measured. IMMUTABLE: a request is a
+                                                  # value; get_state hands it back and nobody can edit the record in place
     exposure_time::Float64
     z::Float64
     laser_power::Float64
@@ -397,12 +415,15 @@ end
 
 function acquire!(sys::Bench, n::Int)
     sys.acq === nothing || error("acquisition already running")
-    sys.cam_unavailable && error("camera unavailable: a failed acquisition could not be aborted; shut down and reinitialize")
-    quiesce!(sys)                                 # never reuse the camera without this
+    sys.cam_unavailable && error("camera unavailable: a failed acquisition could not be aborted; call reset_camera! or reconstruct")
     sys.cancel[] = false
     sys.cam.sequence_length = n
-    sys.quiet_after = time() + n * sys.cam.exposure_time + 0.1   # nominal duration plus margin (driver-specific)
+    # Admission is taken HERE, synchronously: the check above and the assignment below have no yield between
+    # them, so a second caller sees sys.acq set. The quiescence wait happens inside the task, after admission.
     sys.acq = @async begin
+        quiesce!(sys)                             # never reuse the camera without this; throws if still running
+        sys.cancel[] && return nothing            # cancelled while waiting: never armed, nothing to abort
+        sys.quiet_after = time() + n * sys.cam.exposure_time + 0.1   # nominal duration plus margin (driver-specific)
         try
             sequence(sys.cam)
             while sys.cam.is_running == 1
@@ -428,6 +449,14 @@ function acquire!(sys::Bench, n::Int)
     return sys
 end
 cancel!(sys::Bench) = (sys.cancel[] = true; nothing)   # a request; it cannot interrupt an SDK wait already in progress
+function reset_camera!(sys::Bench)                # verified recovery from cam_unavailable; neither initialize(sys) nor shutdown(sys) clears it
+    sys.acq === nothing || error("finish or cancel the acquisition first")
+    shutdown(sys.cam)                             # [limitation] on DCAM4 this closes the SDK and initialize is a no-op, so
+    initialize(sys.cam)                           # reset_camera! cannot reopen it: reconstruct the camera and the system instead
+    sys.cam.is_running == 1 && error("camera still reports running after reset; reconstruct")
+    sys.cam_unavailable = false
+    return nothing
+end
 function finish!(sys::Bench)                      # join the task; release ownership only of the acquisition WE joined
     t = sys.acq
     t === nothing && error("no acquisition running")
@@ -455,6 +484,9 @@ What the run showed (`SimCamera(roi=CameraROI(1,1,64,32), exposure_time=0.01)`,
 | **Cancel after the completion decision** (`acquire!(sys, 2)`, cancel at 0.5 s) | ignored: `finish!` returned `(32, 64, 2)`. |
 | **Failing task** (`acquire!(sys, -1)` makes `getdata` throw) | `finish!` rethrew `TaskFailedException`; `abort` had run (`is_running == false`); ownership released; `set_state` accepted. |
 | **Failing task whose `abort` also fails** (`ArmThenThrowCam`) | rethrew `SDK: arm failed after start`; the next `acquire!` refused with `camera unavailable ...`; `shutdown` still released every device. |
+| **Recovery from unavailable**: `shutdown(sys); initialize(sys)` then `acquire!` | still refused: neither lifecycle call clears the flag. `reset_camera!(sys)` (shut the camera down, reinitialize it, verify it is not running) cleared it: `unavailable == false`, `is_running == 0`. **[limitation]** on `DCAM4Camera` `shutdown` closes the SDK and `initialize` is a no-op, so `reset_camera!` cannot reopen it; reconstruct the camera and the system. |
+| **Admission race**: two `@async` callers of `acquire!` during a staged 0.3 s quiescence window | caller 1 admitted, caller 2 refused `acquisition already running`, one task installed, and the admitted acquisition finished `(32, 64, 10)`. The **previous** version, which checked ownership before the wait and installed after it, admitted both callers with two distinct tasks while `sys.acq` tracked one. |
+| **Immutable requested state**: `get_state(sys).laser_power = 4.5` after requesting `3.5` | refused: `setfield!: immutable struct of type BenchState cannot be changed`; the export still says `3.5`. |
 | **Second joiner** waits on acquisition A while the first joiner finishes A and starts B | after the late joiner returned, `sys.acq` was still B. |
 | **Export with a failed child** | `complete == false`, `missing_children == "laser"`; through `save_h5` and back: groups `camera, data, laser, stage`, attr `missing_children == "laser"`. |
 | **Shutdown during an acquisition** | cancelled, joined, quiesced, released: `sys.acq === nothing`, `is_running == false`, `owned` empty. |

@@ -288,9 +288,10 @@ An interface missing from either tuple loads fine and is invisible to both gates
 What upstream's `test/contract.jl` runs for **every** subtype: items 1 to 3
 (method specificity for the lifecycle and the interface operations, function
 identity for every generic a submodule defines, and `gui` dispatch off the
-`AbstractInstrument` stub), plus a `@test_broken` on the 2-arg `light_on`. Item 4
-is **not** run per subtype: the only stub-throws checks are on three test
-fixtures (`_ContractDummyStage`, `_ContractDummyInstrument`), so write your own
+`AbstractInstrument` stub), plus, per `LightSource` subtype, a `@test_broken` on
+the 2-arg `light_on`. Item 4 is **not** run per subtype: the only stub-throws
+checks are three assertions on two test fixture types (`_ContractDummyStage`,
+`_ContractDummyInstrument`), so write your own
 `@test_throws` for the operations you leave unimplemented. Items 5 and 6 are
 never automatic anywhere (full testset in `references/driver-scaffold.md`, 23
 assertions, executed):
