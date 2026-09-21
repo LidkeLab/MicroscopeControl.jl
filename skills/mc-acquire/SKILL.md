@@ -44,6 +44,11 @@ certainty, and do not rely on either.
 3. Only then call `abort(cam)`.
 4. Never let two tasks call into the same camera SDK concurrently. One task owns
    the camera; everything else asks it.
+   **[limitation]** the drivers themselves spawn tasks you cannot join
+   (`sequence(::SimCamera)`'s timer, DCAM4's handle poller), so "one task"
+   is a rule for *your* code, not a property you can establish of the process;
+   `mc-system-design`, Decision 3, measures the consequence and gives the
+   mitigations.
 
 ```julia
 cam.is_running = 1
