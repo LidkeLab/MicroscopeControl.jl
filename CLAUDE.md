@@ -55,7 +55,7 @@ Interfaces define method signatures with throwing `error("<name> not implemented
 
 ### Data Persistence
 
-`h5_file_saving.jl` provides `save_h5(filename, device)` and `save_attributes_and_data(group, device)` for saving device state to HDF5 files using the `export_state` tuple format.
+`h5_file_saving.jl` provides `save_h5(filename, state_tuple)`, where `state_tuple` is the `(attributes, data, children)` tuple returned by `export_state` (not the device itself). It runs on an `@async` task and returns that `Task`; `wait` it before reading the file. The synchronous form is `save_attributes_and_data(filename, group, attributes, data, children)`; `save_h5` calls it with `group = "Main"`. Children are further `(attributes, data, children)` tuples, written recursively as HDF5 groups.
 
 ### Adding New Hardware
 
@@ -116,15 +116,18 @@ heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-l
 copies into a downstream repo's `.claude/skills/` (see `src/skills.jl` and
 the README's "Claude Code skills" section). `list_skills()` reads the
 directory, so adding a skill is adding a directory with a `SKILL.md`; only
-`test/skills.jl`'s expected-name list needs a matching edit. The seven skills
-are `mc-system-design` (entry point; design and composition), `mc-add-driver`,
-`mc-add-interface`, `mc-api-map`, `mc-acquire`, `mc-sim-testing` and
-`mc-driver-issue`. Every architectural statement in a skill is labelled as an
+`test/skills.jl`'s expected-name list needs a matching edit. The five skills
+are `mc-system-design` (entry point; design and composition), `mc-extend`
+(diagnose, report/work around, implement an interface, define an interface),
+`mc-acquire`, `mc-testing` and `mc-api-map` (whose `references/gui-fields.md`
+is hand-written and tracked, unlike the generated map). Every architectural
+statement in a skill is labelled as an
 existing guarantee, a current limitation, or a recommended system policy;
 keep that discipline when editing them. `mc-api-map`'s
 `references/api-map.md` is generated at install time by introspecting the
-loaded module and must never be committed with generated content; the
-repo-tracked copy should only ever contain the `.gitkeep` placeholder.
+loaded module and must never be committed; the repo-tracked `references/`
+directory holds only the `.gitkeep` placeholder and the hand-written
+`gui-fields.md`.
 
 ### Work in Progress
 

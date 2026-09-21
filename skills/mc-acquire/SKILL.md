@@ -117,8 +117,13 @@ saves cleanly.
 
 ## Exposure and ROI are fields, with driver-specific types and units
 
-At the interface level there is no setter call. `cam.exposure_time` and
-`cam.roi::CameraROI` are mutable fields you assign. The interface does not fix the
+The interface declares three setters, `setexposuretime!(cam)`, `setroi!(cam)` and
+`settriggermode!(cam)`, each a **push-down** of a field the caller has already
+assigned (`camera_interface/interface_functions.jl`; they take no value argument),
+with throwing fallbacks; coverage varies by driver (table below), and `SimCamera`
+implements none. The configuration itself lives in the fields: `cam.exposure_time`
+and `cam.roi::CameraROI` are mutable fields you assign, and the shared panel reads
+and writes those fields, not the setters. The interface does not fix the
 type or unit of `exposure_time`, nor the ROI origin convention. Per driver (from
 `types.jl` and the setter code; only the Sim row executed):
 

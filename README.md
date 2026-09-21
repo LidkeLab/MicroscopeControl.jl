@@ -95,18 +95,16 @@ This copies skill sources into `.claude/skills/` in the current directory,
 one subdirectory per skill, each stamped with the installed package version
 and tracked in a manifest so a locally edited skill file is never silently
 overwritten (pass `install_skills(force=true)` to overwrite anyway). The
-seven skills:
+five skills:
 
 - `mc-system-design` — start here: the driver/system responsibility split, the upstream/downstream boundary test, the design principles the source expresses, and a worked composition example with rollback and provenance.
-- `mc-add-driver` — implement an existing interface (Camera, Stage, LightSource, ...) for a new device, downstream or as an upstream contribution.
-- `mc-add-interface` — define a new device class: interface scaffold, wiring, the hand-maintained interface lists, and the simulated implementation that ships with it.
-- `mc-api-map` — which methods you can call on each device type, generated per installed version.
-- `mc-acquire` — capture/sequence/live patterns, safe live-view stop order, z-stacks.
-- `mc-sim-testing` — SimCamera/SimStage/SimLight, headless testing under xvfb.
-- `mc-driver-issue` — report a driver defect upstream, or override a method locally.
+- `mc-extend` — in order of commitment: diagnose a misbehaving driver (usually the rig), report upstream and work around without type piracy, implement an existing interface for a new device, define a new device class.
+- `mc-acquire` — capture/sequence/live patterns, safe live-view stop order, z-stacks, the `(H, W, N)` convention.
+- `mc-testing` — validate the composed system with simulators and fakes, then what hardware acceptance must still establish; headless under xvfb.
+- `mc-api-map` — a per-version dispatch inventory of which methods each device type has, plus the fields the shared GUI panels read.
 
 Reinstalling (`install_skills()` again) after advancing the pinned tag
-refreshes all seven, including the generated API map, to match the new
+refreshes all five, including the generated API map, to match the new
 version.
 
 ---

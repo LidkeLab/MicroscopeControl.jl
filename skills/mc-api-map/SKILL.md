@@ -5,19 +5,36 @@ description: Points at the generated per-version list of which methods each Micr
 
 # mc-api-map
 
-The file `references/api-map.md`, in this skill's directory, is the authoritative
-answer to "what can I call on this device". It is not hand-written. `install_skills`
-generates it by introspecting the MicroscopeControl.jl version installed in the
-downstream environment at install time, so it matches the pinned tag, not `main`
-and not this skill's prose. When the two disagree, the map wins. Read it before
-calling anything on a device you have not used in this session.
+The file `references/api-map.md`, in this skill's directory, is a **dispatch
+inventory**: for every device type at the installed version it lists which
+exported generics have a method on that type, which land on a shared interface
+implementation, and which land on an interface fallback. It is not hand-written.
+`install_skills` generates it by introspecting the MicroscopeControl.jl version
+installed in the downstream environment, so it matches the pinned tag, not `main`
+and not this skill's prose; on method *existence* the map wins over any prose.
+Read it before calling anything on a device you have not used in this session.
+
+## What the map can and cannot tell you
+
+| The map tells you | The map cannot tell you |
+|---|---|
+| that a method for this exact type exists (device-specific), so the call will not hit a stub | that the method **does** anything: `stopmotion(::MCLStage)` is device-specific in the map, and its whole body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed: logs the error, returns `nothing`) |
+| that dispatch lands on a shared interface implementation (the panels) | that the shared implementation works for this device: `gui(::Stage)` reads `stage.stagelabel`, which the Sim stages lack, so `gui(SimStage3d())` throws `FieldError` although the map files it as inherited |
+| that a name resolves only to an interface fallback, so the call will throw or return silently | what the method returns, in what units, with what side effects: `capture` returns an enum on `SimCamera` and a frame on `DCAM4Camera`, both device-specific |
+| the signatures that exist for a name on this type | which **fields** the device has; the map has no field information at all. `references/gui-fields.md` beside this file catalogues the fields the shared panels read |
+
+Behaviour comes from the skill text (`mc-acquire`, `mc-system-design`'s
+`references/driver-caveats.md`, `mc-extend`) or from the source, never from the
+map. The map answers "will this dispatch to code written for this type?"; it
+does not answer "will this work?".
 
 ## What bites first
 
 Every generic in the package resolves for every device of its interface. A stage
 always has a `move` method, a camera always has a `getdata`, every instrument has
-`initialize`, `shutdown`, `export_state` and `gui`. Resolving is not implementing.
-The interface files define fallback stubs that `error("... not implemented for
+`initialize`, `shutdown`, `export_state` and `gui`. **Resolving is not
+implementing**, and implementing is not working (the `MCLStage` row above). The
+interface files define fallback stubs that `error("... not implemented for
 <Type>")`, so `hasmethod` says true and the call raises at runtime. The map exists
 so you find out before the call, not on the rig.
 

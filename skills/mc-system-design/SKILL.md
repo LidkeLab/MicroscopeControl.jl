@@ -30,10 +30,8 @@ read as another.
 |---|---|
 | know which methods a device type actually has at the pinned version | `mc-api-map` |
 | capture, sequence, live view, z-stacks, array conventions | `mc-acquire` |
-| test the composed system without hardware, headless | `mc-sim-testing` |
-| implement an existing interface (`Camera`, `Stage`, ...) for a new device | `mc-add-driver` |
-| define a device class MC has no interface for | `mc-add-interface` |
-| a driver misbehaves on hardware | `mc-driver-issue` |
+| validate the composed system without hardware, then list what hardware acceptance must establish | `mc-testing` |
+| a driver misbehaves on hardware; report it and work around it; implement an existing interface for a new device; define a new device class | `mc-extend` (in that order of commitment) |
 | per-driver constructor side effects, ownership, missing lifecycle methods, GUI and HDF5 facts | `references/driver-caveats.md` beside this file |
 
 ## The responsibility split
@@ -80,15 +78,15 @@ Two qualifications:
    as `LCC1620(; scope, dac_channel)` and `TCubeLaser(serialNo; daq)` do.
 
 Writing a driver downstream for a device you own, and extending MC's generics
-for **your own type**, is legitimate and is not type piracy. `mc-driver-issue`
-tells you what *is* piracy (redefining methods on MC-owned types).
+for **your own type**, is legitimate and is not type piracy. `mc-extend`
+draws the line: piracy is redefining a method for a type MC owns.
 
 ## The decision rule
 
 | The code | It is a | Example | Go to |
 |---|---|---|---|
-| translates an operation that an existing interface already names (`move`, `capture`, `setpower`, `settransmission`) into one controller's SDK or protocol, including its units, conversions and connection handling | **new driver** (implementation of an existing interface) | a new camera model: a `Camera` subtype with `capture`/`getdata`/... over its vendor SDK | `mc-add-driver` |
-| defines operations and semantics for a device class none of `Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator` can reasonably express, and at least one concrete device plus a simulated one will implement them | **new interface** | a mechanical shutter with `open_shutter!`/`close_shutter!`/`is_open` and a switching time | `mc-add-interface` |
+| translates an operation that an existing interface already names (`move`, `capture`, `setpower`, `settransmission`) into one controller's SDK or protocol, including its units, conversions and connection handling | **new driver** (implementation of an existing interface) | a new camera model: a `Camera` subtype with `capture`/`getdata`/... over its vendor SDK | `mc-extend`, section 3 |
+| defines operations and semantics for a device class none of `Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator` can reasonably express, and at least one concrete device plus a simulated one will implement them | **new interface** | a mechanical shutter with `open_shutter!`/`close_shutter!`/`is_open` and a switching time | `mc-extend`, section 4 |
 | chooses this rig's devices, ports, channels, calibration values, optical relationships, acquisition order, coordination or user workflow | **system code** in your repo | "laser off, then stage, then camera; refuse `set_state` during an acquisition; attenuator on DAC 3" | this skill |
 
 The bar for a new interface is high: forcing a device into a nearby interface
@@ -121,7 +119,7 @@ Each is stated as what the code does today; the label says how far to trust it.
    satisfies the method contract but lacks a field cannot use the inherited
    panel. **[limitation]** the Sim stages have `label` where the GUI wants
    `stagelabel`, so `gui(SimStage3d())` throws a `FieldError` (executed at
-   v0.2.0). Full field lists are in `mc-add-driver`.
+   v0.2.0). Full field lists are in `mc-api-map`'s `references/gui-fields.md`.
 
 3. **`AbstractSystem`/`AbstractSystemState` are separate from
    `AbstractInstrument`, with no automatic traversal. [guarantee]**
@@ -360,9 +358,24 @@ stop; each is false at v0.2.0.
   Extend the generics with the `MC.` prefix or `import MicroscopeControl: initialize`;
   an unqualified `function initialize(sys::Bench)` after a bare `using` creates a
   new local function, and `MC.initialize(sys)` from other code hits the fallback
-  (executed for `gui` and `setpower` in `mc-add-driver`).
+  (executed for `gui` and `setpower` in `mc-extend`).
 - `move` takes `Float64`s. `move(stage, 1, 2, 3)` is a `MethodError`.
 - `gui(dev)` is one generic that dispatches to the interface panel or a driver
   override (`N472`); a system menu is a list of `gui(sys.<field>)` calls. Each
-  opens a GLMakie window (see `mc-sim-testing` for `xvfb-run`). See the caveats
+  opens a GLMakie window (see `mc-testing` for `xvfb-run`). See the caveats
   file for which devices' panels open today.
+
+## Two more limitations that bear on design
+
+- **[limitation]** `gui(::LightSource)` calls `setpower(light, 0.5)` the moment
+  the panel opens: the slider's `lift` fires on creation with its start value
+  (traced from `lightsource_interface/gui.jl`; executed against a fake-transport
+  light, which threw from inside `gui`). On a laser that is a real hazard, and a
+  reason a system may want its own panel, or to open the shared one only with
+  the shutter closed or the laser off.
+- **[limitation]** `getposition(::SimStage3d)` returns a scalar (`3.0` after
+  `move(s, 1.0, 2.0, 3.0)`), the value of its last assignment, while the
+  interface docstring promises an `(x, y, z)` tuple (executed). A system must
+  not trust a return shape it has not checked on the device it holds; read the
+  `real_*` fields, or wrap `getposition` in a per-device adapter that returns
+  what you documented.
