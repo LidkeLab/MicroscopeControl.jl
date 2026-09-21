@@ -7,7 +7,10 @@ description: Acquisition patterns for MicroscopeControl.jl cameras and stages --
 
 Shapes and return values below were executed against `SimCamera` and `SimStage3d`
 on MicroscopeControl.jl v0.2.0. Hamamatsu (`DCAM4Camera`) behaviour is traced from
-the driver source, not executed here; it is marked as such.
+the driver source, not executed here; it is marked as such. Labels as in
+`mc-system-design`: **[guarantee]** verified at v0.2.0, **[limitation]** current
+shortfall, **[policy]** recommended. This skill owns the camera return-value
+rules; the other skills point here rather than restating them.
 
 ## Stopping live view: stop and join every reader before `abort`
 
@@ -22,7 +25,7 @@ while cam.is_running == 1
 end
 ```
 
-`abort(cam)` on the Hamamatsu driver calls `dcamcap_stop`, then `dcambuf_release`,
+**[limitation]** `abort(cam)` on the Hamamatsu driver calls `dcamcap_stop`, then `dcambuf_release`,
 and only **then** clears `is_running` (traced from `dcam4_camera/interface_methods.jl`,
 not executed). A reader that is inside `getlastframe` when you call `abort` is
 therefore waiting on, or copying from, an acquisition that is being torn down.
@@ -34,7 +37,7 @@ survives a copy against released buffers in every case is **not** established by
 the source. Treat a hard crash of the Julia process as a possible outcome, not a
 certainty, and do not rely on either.
 
-The requirement, on every driver:
+**[policy]** The requirement, on every driver:
 
 1. Clear `cam.is_running` so every reader loop exits at its next check.
 2. **Join** every reader task you own (`wait(task)`), so no SDK call is in flight.
@@ -83,7 +86,7 @@ Two consequences of the same mechanism on `DCAM4Camera` (traced):
 
 ### The capture contract differs per driver
 
-Where the frame comes from after `capture` is **not** part of the interface. Traced
+**[limitation]** Where the frame comes from after `capture` is **not** part of the interface. Traced
 from each driver's `interface_methods.jl`; only the Sim row was executed.
 
 | Driver | `capture(cam)` returns | `getdata(cam)` after `capture` |
@@ -94,7 +97,7 @@ from each driver's `interface_methods.jl`; only the Sim row was executed.
 | `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch references an undefined variable `sequence_frames` and hard-codes 1080 x 1440; it will error. |
 
 So on every hardware driver in the package, the frame is the **return value of
-`capture`**, and `getdata` is for sequences. Put the difference in one place in your
+`capture`**, and `getdata` is for sequences. **[policy]** Put the difference in one place in your
 system rather than at every call site:
 
 ```julia
@@ -144,8 +147,8 @@ cam.exposure_time = 0.02                  # Sim / DCAM4 / DCX
 cam.roi = CameraROI(1, 1, 512, 256)       # x_start, y_start, width, height
 ```
 
-`CameraROI(x_start, y_start, width, height)`. The returned frame is `(H, W)`
-column-major on every driver, but **whether `H, W` equal `roi.height, roi.width`
+`CameraROI(x_start, y_start, width, height)`. **[guarantee]** The returned frame is `(H, W)`
+column-major on every driver (Sim executed; DCAM4, DCX, CSC traced), but **[limitation]** **whether `H, W` equal `roi.height, roi.width`
 is per driver**:
 
 | Driver | Frame size returned |
@@ -212,7 +215,7 @@ stage.real_z         # 8.0
 
 ### Stage units and signatures are per driver
 
-`move` passes the numbers you give it straight to the SDK. The `units` field on the
+**[limitation]** `move` passes the numbers you give it straight to the SDK. The `units` field on the
 hardware stages is a **label**, not a conversion, and the drivers disagree. A z-stack
 written in micrometres against a `PIStage` moves in millimetres, a factor of 1000.
 From each driver's `types.jl` and `move` method; only `SimStage3d` was executed:
@@ -246,7 +249,7 @@ tolerance before exposing.
 
 ## Array conventions
 
-Restated from the upstream `CLAUDE.md`, which is authoritative. These are storage
+Restated from the upstream `CLAUDE.md`. **[guarantee]** for `SimCamera` (executed) and `DCAM4Camera` (`permutedims` in `dcambuf.jl`, traced); **[policy]** for any driver you write. These are storage
 conventions enforced by the drivers at the DLL boundary; they say nothing about SDK
 coordinate origins or exposure units (see above).
 

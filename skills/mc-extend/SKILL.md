@@ -105,7 +105,7 @@ After moving the pin, delete the workaround and rerun `install_skills()`.
 | Location | a module in your repo | `src/hardware_implementations/<device>/` with `<Device>.jl`, `types.jl`, `interface_methods.jl`, SDK helpers |
 | Imports | `using MicroscopeControl`; `import MicroscopeControl: initialize, shutdown, export_state, gui`; `import MicroscopeControl.LightSourceInterface` (or `CameraInterface`, `StageInterface`, ...) | `using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface`; `import ...MicroscopeControl: export_state, initialize, shutdown` (three dots: two module levels below `MicroscopeControl`) |
 | Registration | none; `using .MyDrivers` in your system code | `include` + `@reexport` in `HardwareImplementations.jl` (section 5) |
-| Tests | your suite, with the checks in section 6 | `test/contract.jl` covers every subtype automatically, plus a behavioural testset you add |
+| Tests | your suite, with the checks in section 6 | `test/contract.jl` runs the dispatch and identity checks (section 6, items 1 to 4) on every subtype automatically; behaviour and serialisation (items 5 and 6) are a testset you add |
 
 The complete scaffold, a serial LED as a `LightSource` over a fake transport,
 with its executed results and the 23-assertion contract testset, is in
@@ -220,7 +220,9 @@ Otherwise write a driver and, if the fit is poor, a small adapter in your system
 **[guarantee]** An interface is `abstract type X <: AbstractInstrument end`, an
 optional property struct, one generic per operation whose only method is a
 stub that **throws** `error("<op> not implemented for $(typeof(x))")`, and an
-optional shared `gui(::X)`. The lifecycle generics come from
+optional shared `gui(::X)`. That is true of the five `AbstractInstrument`
+interfaces; **[limitation]** `SLMInterface`'s `displayimage(::SLM)` has an empty
+body and returns `nothing`, the one interface stub that does not throw. The lifecycle generics come from
 `AbstractInstrument` and need no redeclaration. **[limitation]** `SLM` and `TRIG`
 are **not** the template: they sit outside `AbstractInstrument`, so `MLSLM` has
 no `initialize`/`shutdown`/`export_state`/`gui` at all (`MethodError`, not the
@@ -233,7 +235,7 @@ stub's docstring (signature and units, return, state update, failure behaviour,
 completion, required versus optional) are in `references/interface-scaffold.md`.
 
 **[policy]** the simulated implementation is mandatory and ships with the
-interface: the stubs all throw, so nothing exercises the contract without it;
+interface: the stubs all throw (write them so), so nothing exercises the contract without it;
 upstream's contract test iterates `subtypes`; downstream tests put it in the
 interface-typed field; a shared panel is developed against it. Make it honest
 about what it does not model. **[limitation]** upstream CLAUDE.md calls interface
@@ -283,9 +285,11 @@ An interface missing from either tuple loads fine and is invisible to both gates
 
 ## 6. Tests a new device must satisfy
 
-Upstream's `test/contract.jl` applies these to every subtype automatically;
-downstream, write them (full testset in `references/driver-scaffold.md`, 23
-assertions, executed):
+Upstream's `test/contract.jl` applies items 1 to 4 (dispatch, identity, `gui`
+dispatch, and the `@test_broken` 2-arg `light_on`) to every subtype
+automatically; items 5 and 6 are never automatic and you write them, upstream
+or downstream (full testset in `references/driver-scaffold.md`, 23 assertions,
+executed):
 
 1. exact signatures: `which(f, Tuple{T,...}).sig.parameters[2] === T` for the
    lifecycle and every required operation;

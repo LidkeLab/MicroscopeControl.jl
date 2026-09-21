@@ -18,9 +18,9 @@ shortfall, **[policy]** recommended. Everything marked executed ran under
 
 | Claim about the system | Establish it with | Still unproven afterwards |
 |---|---|---|
-| every device the system holds implements the lifecycle, so `shutdown` will not throw halfway | the dispatch check below, on the *hardware* types too (it needs no hardware) | nothing: this is a compile-time fact |
-| `initialize` rolls back what it opened when a later device fails | Sim devices plus a bare `struct Broken <: LightSource end` whose stubs throw (`mc-system-design`, worked example) | that a real SDK's failure surfaces as an exception rather than an error code |
-| one task owns the camera; `set_state` is refused during acquisition | `SimCamera` (`sequence` runs an `@async` task that clears `is_running`) | frame timing, trigger behaviour, buffer lifetime |
+| every device the system holds has its **own** `initialize`/`shutdown`/`export_state` method, so no lifecycle call lands on the throwing `AbstractInstrument` stub | the dispatch check below, on the *hardware* types too (it needs no hardware) | that the method works: dispatch establishes method selection only. A concrete method can throw (`ThorCamCSCCamera` has none), log and return (`initialize(::PIStage)` `@error`s and leaves `connectionstatus == false`), or do nothing (`stopmotion(::MCLStage)`) |
+| `initialize` rolls back what it opened when a later device fails, including devices claimed at construction | Sim devices plus a bare `struct Broken <: LightSource end` whose stubs throw, and a fake that is "open" from its constructor (`mc-system-design`, worked example) | that a real SDK's failure surfaces as an exception rather than an `@error` and a normal return, which most drivers do (`mc-extend`, section 1) |
+| one task owns the camera; completion, cancellation and task failure all release it; `set_state` is refused while it runs | `SimCamera` (`sequence` runs an `@async` task that clears `is_running`; `sequence_length = -1` makes `getdata` throw inside the task) | frame timing, trigger behaviour, buffer lifetime, and that `abort` on the real SDK is safe from the owning task |
 | the saved record names what is missing | a child whose `export_state` throws, through `save_h5`, read back | that hardware attributes are readbacks rather than cached requests |
 | array shapes and the `(H, W, N)` convention survive to the file | `SimCamera` with a non-square `roi` (`CameraROI(1, 1, 64, 32)` gives `(32, 64)`) | that the vendor buffer was permuted correctly (`mc-acquire`) |
 | ordering and units of a z-stack | `SimStage3d` (`move` writes `targ_*`, `getposition` copies to `real_*`) | motion time, settling, range limits, direction sign |
@@ -87,8 +87,8 @@ not behaviour (`mc-system-design`, Principle 6). Two rules make it honest:
 
 1. **Match dimensionality.** `PIStage` is two-axis (`dimensions = 2`,
    `move(stage, x, y)`), so its simulator is `SimStage2d`, not `SimStage3d`. A
-   3-axis Sim would let `move(stage, x, y, z)` pass in tests and `MethodError`
-   on the rig.
+   3-axis Sim would let `move(stage, x, y, z)` pass in tests and hit the throwing
+   `Stage` fallback on the rig.
 2. **Adapt where semantics differ, in one tested place.** `capture` returns an
    enum on `SimCamera` and the frame on `DCAM4Camera`/`ThorcamDCXCamera`
    (traced, `mc-acquire`). Code that does `frame = capture(cam)` works on one
@@ -169,8 +169,9 @@ end
     rig = Rig(simulate=true)
     move(rig.stage, 1.0, 2.0)
     @test (rig.stage.targ_x, rig.stage.targ_y) == (1.0, 2.0)
-    # the 3-axis call lands on the interface's throwing stub (ErrorException "move not implemented
-    # for SimStage2d"), not a MethodError: the field is typed `Stage`, so the fallback matches
+    # Julia dispatches on the RUNTIME type, SimStage2d. No 3-arg `move` exists for it, but the
+    # interface fallback `move(::Stage, ::Float64, ::Float64, ::Float64)` does match, so the call
+    # lands there and throws ErrorException("move not implemented for SimStage2d"), not a MethodError.
     @test_throws ErrorException move(rig.stage, 1.0, 2.0, 3.0)
 end
 

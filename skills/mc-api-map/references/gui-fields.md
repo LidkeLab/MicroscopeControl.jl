@@ -42,8 +42,8 @@ follow `StageFormat` in `stage_interface/interface_types.jl`: positions
 
 | Field | Read by | Notes |
 |---|---|---|
-| `unique_id::String` | label and window title | |
-| `exposure_time::Float64` | textbox, `parse(Float64, text)` assigned back | |
+| `unique_id` | `"Unique ID: " * camera.unique_id` and the window title | must be a `String`: `ThorCamCSCCamera` has `unique_id::Vector{UInt8}`, so the concatenation throws |
+| `exposure_time` | textbox, `parse(Float64, text)` assigned back | `Float64` on Sim, DCAM4, DCX; `Clonglong` on `ThorCamCSCCamera`, where assigning a non-integer parsed value is an `InexactError` |
 | `roi::CameraROI` | textbox reads and assigns `roi.x_start, roi.y_start, roi.width, roi.height`; display sized from `roi.height`, `roi.width` | MC's `CameraROI`, or a type with those four `Int` fields |
 | `capture_mode` | dropdown built from `instances(typeof(camera.capture_mode))` | must be an `Enum` |
 | `trigger_mode` | same | must be an `Enum` |
@@ -53,7 +53,9 @@ follow `StageFormat` in `stage_interface/interface_types.jl`: positions
 Methods called: `capture` (**its return value is used as the frame**),
 `getlastframe` (live loop), `abort`, `live`/`sequence` via
 `start_live`/`start_sequence`. `DCAM4Camera`, `SimCamera`, `ThorCamCSCCamera`,
-`ThorcamDCXCamera` all carry every field (executed). `[limitation]` the
+`ThorcamDCXCamera` all carry every field (executed), but **presence is
+necessary, not sufficient**: the CSC types above break the panel even though
+`hasfield` passes for all seven. Check types, not just names. `[limitation]` the
 mode-dropdown callback assigns to a `camera` name outside its scope
 (`create_menu`), so the dropdowns are not a reliable way to change mode; and
 because `capture(::SimCamera)` returns an enum, "Start Capture" only works for

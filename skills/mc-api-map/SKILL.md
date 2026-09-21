@@ -6,13 +6,17 @@ description: Points at the generated per-version list of which methods each Micr
 # mc-api-map
 
 The file `references/api-map.md`, in this skill's directory, is a **dispatch
-inventory**: for every device type at the installed version it lists which
+inventory**: for every device type under the seven inventoried interfaces
+(`Stage`, `Camera`, `LightSource`, `DAQ`, `Attenuator`, `SLM`, `TRIG`; `XEM`
+and `XEM_dac` sit outside them and are absent) at the installed version it lists which
 exported generics have a method on that type, which land on a shared interface
 implementation, and which land on an interface fallback. It is not hand-written.
 `install_skills` generates it by introspecting the MicroscopeControl.jl version
 installed in the downstream environment, so it matches the pinned tag, not `main`
 and not this skill's prose; on method *existence* the map wins over any prose.
 Read it before calling anything on a device you have not used in this session.
+Labels as in `mc-system-design`: **[guarantee]** verified at v0.2.0,
+**[limitation]** current shortfall, **[policy]** recommended.
 
 ## What the map can and cannot tell you
 
@@ -30,7 +34,7 @@ does not answer "will this work?".
 
 ## What bites first
 
-Every generic in the package resolves for every device of its interface. A stage
+**[guarantee]** Every generic in the package resolves for every device of its interface. A stage
 always has a `move` method, a camera always has a `getdata`, every instrument has
 `initialize`, `shutdown`, `export_state` and `gui`. **Resolving is not
 implementing**, and implementing is not working (the `MCLStage` row above). The
@@ -48,7 +52,7 @@ heading (`## Camera`, `## Stage`, `## LightSource`, `## DAQ`, `## Attenuator`,
 |---|---|---|
 | **Device-specific** | A method whose first argument is this concrete type. Real driver code. Each signature is listed, so `sequence(DCAM4Camera, Real)` and `sequence(DCAM4Camera)` both appear. | `getdata(SimCamera)`, `initialize(SimCamera)` |
 | **Inherited (shared implementation)** | Dispatch lands on a method written against the interface type that does real work for every device. Today that is the interface `gui` and the camera GUI helpers. | `gui(Camera)`, `start_live(Camera)` |
-| **Interface fallback (not a device implementation)** | Dispatch lands on the package's own interface-level fallback, not on code written for this device. The map's own note says it: most such fallbacks raise an error naming the type, a few return silently. The label promises "not this device's code", not "throws". | `setexposuretime!(Camera)`, `setroi!(Camera)` |
+| **Interface fallback (not a device implementation)** | **[guarantee]** Dispatch lands on the package's own interface-level fallback, not on code written for this device. The map's own note says it: most such fallbacks raise an error naming the type, a few return silently. The label promises "not this device's code", not "throws". | `setexposuretime!(Camera)`, `setroi!(Camera)` |
 
 The third group is the reason the map exists: `setroi!(cam)` on a `SimCamera`
 compiles, dispatches and reaches the fallback (which in this case throws). On a
@@ -84,7 +88,7 @@ type in parentheses tells you which stub you will hit (for these two, both throw
 `setroi!(Camera)`, `settriggermode!(Camera)`; its lifecycle methods are all
 device-specific.
 
-The remaining blind spot is **arity**. A device is filed as device-specific for a
+**[limitation]** The remaining blind spot is **arity**. A device is filed as device-specific for a
 name as soon as *any* method of that name takes the concrete type, and the other
 arities are then not examined. `TCubeLaser`'s section lists `export_state(TCubeLaser,
 Any)` and nothing else for `export_state`; the 1-arg `export_state(laser)` that every
@@ -93,7 +97,7 @@ resolves to the `AbstractInstrument` stub and throws (verified with `which`, bel
 When the listed signature is not the one you are calling, check the exact tuple with
 `hasmethod`/`which`.
 
-`MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy (`SLM`
+**[limitation]** `MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy (`SLM`
 and `TRIG` are `abstract type ... end` with no supertype). A lifecycle name missing
 from their sections is a plain `MethodError`, not a fallback: `MLSLM` has no
 `initialize`, `shutdown`, `export_state` or `gui`; `Triggerscope4` has `initialize`
@@ -159,7 +163,7 @@ per device.
 
 ## Arity traps the map makes visible
 
-- `light_on` is declared `light_on(::LightSource, ipower::Float64)` at the interface
+- **[limitation]** `light_on` is declared `light_on(::LightSource, ipower::Float64)` at the interface
   and implemented as `light_on(::T)` by all five drivers. The 2-arg call throws for
   every light source. The map lists `light_on(TCubeLaser)` etc. as device-specific;
   a 2-arg form never appears.
@@ -172,7 +176,7 @@ per device.
 
 ## Refreshing
 
-The map is regenerated on every `install_skills()` call. After moving the pinned
+**[guarantee]** The map is regenerated on every `install_skills()` call. After moving the pinned
 tag in your `Project.toml`/`Manifest.toml`, run `install_skills()` again from the
 downstream repo root. The manifest hash check will refuse to overwrite a locally
 edited map; pass `install_skills(force=true)` if you edited it and want the

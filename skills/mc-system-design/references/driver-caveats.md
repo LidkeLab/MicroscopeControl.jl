@@ -86,37 +86,26 @@ Resolving to a device-specific method is not the same as the operation working:
 - `getposition(::N472)` returns the SDK success code and stores positions in
   `stage.pos`; `move(::N472, pos::Vector{Float64})` takes a vector, not
   `x, y, z` (traced).
-- `capture(::SimCamera)` returns the `SINGLE_FRAME` enum value (the result of
-  the assignment); `capture(::DCAM4Camera)` returns the frame it read via
-  `getlastframe` (executed / traced). Code that does `frame = capture(cam)`
-  works on one and not the other; use `capture` then `getlastframe`/`getdata`.
+- `capture` returns the `SINGLE_FRAME` enum on `SimCamera` and the frame on the
+  hardware cameras, and `getdata` after `capture` is valid **only** on
+  `SimCamera` (DCAM4 and DCX release their buffers before `capture` returns).
+  `mc-acquire` owns this rule and the per-driver table; use its `snap` adapter
+  (`snap(::SimCamera)` versus `snap(::Camera)`) rather than a blanket call
+  order.
 - `light_on(light, power::Float64)` exists only as a throwing interface stub;
   every driver implements the 1-arg `light_on(light)`. Upstream tracks this as
   `@test_broken` (executed: the `light_on` method table has only 1-arg driver
   methods).
 
-## Shared GUI facts that bite a system author
+## Shared GUI facts
 
-- `gui(::Stage)` dispatches on `stage.dimensions` to `gui1d`/`gui2d`/`gui3d`
-  and reads the `targ_*`, `real_*`, `range_*` fields for those dimensions, and
-  **`stagelabel`** for the window title (unguarded). The Sim stages carry
-  `label`, not `stagelabel`, so **`gui(SimStage1d/2d/3d())` throws a
-  `FieldError` at v0.2.0** (executed). `gui(PIStage())`, `gui(MCLStage())`
-  and `gui(MCS2Stage())` open without hardware (executed; they are pure
-  constructors). `servostatus`/`driftcorrectionstatus` are read behind
-  `hasfield` checks, so their absence is fine.
-- `gui(::LightSource)` calls `setpower(light, 0.5)` as soon as the window
-  opens (the slider `lift` fires on creation with the start value 0.5), then
-  `setpower`/`light_on`/`light_off` on every widget change. Opening a panel
-  is a hardware write, not a read (traced from `lightsource_interface/gui.jl`;
-  executed against a downstream light whose transport was closed, which threw
-  from inside `gui`).
-- `gui(::Camera)`'s capture-mode/trigger-mode menus are built from
-  `instances(typeof(camera.capture_mode))`, so those fields must be `Enum`s.
-  The menu callback assigns to a `camera` name that is not in its scope
-  (traced from `camera_interface/gui.jl`, `create_menu`); selecting a menu
-  entry is not a reliable way to change mode.
-- `gui` for `MLSLM` does not exist; `gui(::TRIG)` exists for `Triggerscope4`.
+Owned by `mc-api-map`'s `references/gui-fields.md` (fields each panel reads,
+their types, per-device status). The three that bite a system author:
+`gui(SimStage*())` throws `FieldError` on `stagelabel` (executed);
+`gui(::LightSource)` calls `setpower(light, 0.5)` on open (executed against a
+fake-transport light); `gui(::Camera)` uses `capture`'s return value as the
+frame, so "Start Capture" misbehaves on `SimCamera`. `MLSLM` has no `gui`;
+`gui(::TRIG)` exists for `Triggerscope4`.
 
 ## `save_h5` facts
 

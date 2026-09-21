@@ -93,10 +93,14 @@ What the run showed:
 | `gui(led)` after `shutdown(led)` | **threw from inside `gui`**: the shared light panel calls `setpower(light, 0.5)` when it opens (see GUI section) |
 
 The interface stub signature is the contract you are satisfying **[guarantee]**:
-`setpower(::LightSource, ::Float64)`, `light_on(::LightSource)`,
-`light_off(::LightSource)`. **[limitation]** the interface also declares
+`setpower(::LightSource, ::Float64)` and `light_off(::LightSource)`.
+**[limitation]** for `light_on` the interface declares **only** the 2-arg
 `light_on(::LightSource, ipower::Float64)`, which no driver implements and
-upstream tracks as `@test_broken`; implement the 1-arg form.
+upstream tracks as `@test_broken`; every driver and both shared panels use the
+1-arg `light_on(light)`, for which there is no stub at all, so a bare
+`LightSource` subtype gets a `MethodError` for it, not the "not implemented"
+error. Implement the 1-arg form; the contract testset's `has_specific(MC.light_on, T)`
+checks it.
 
 ## Tests a new driver must satisfy
 
