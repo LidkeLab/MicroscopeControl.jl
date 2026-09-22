@@ -24,11 +24,21 @@ change was exercised on simulated devices only.
   only fires on a later change to the widget. The slider and toggle are
   also now initialised from the device's current `properties.power` and
   `properties.is_on` instead of a hardcoded default, so opening a panel is
-  observably read-only. The other GUI panels (`stage_interface`,
+  observably read-only. Caveat: only `SimLight` updates `properties.power`
+  inside `setpower`; `CrystaLaser`, `VortranLaser` and `DaqTrLight` do not,
+  so the slider can display a stale cached value on those drivers, and
+  `TCubeLaser` stores a calculated power while its `setpower` takes current
+  in milliamps, so the displayed and wire units differ. This is not a new
+  opening-time write, only what the widget displays. The other enabled GUI panels (`stage_interface`,
   `camera_interface`, `attenuator_interface`, `daq_interface`,
-  `triggerscope_interface`, `pi_n472`) were audited for the same pattern;
-  none had it, since they already gated hardware calls behind `on(...)`
-  button/textbox callbacks rather than `lift`.
+  `triggerscope_interface`, `pi_n472`) were audited for the same
+  construction-time `lift` pattern; none had it. This does not mean every
+  hardware call is behind a callback: `gui(::DAQ)` queries `showdevices`
+  and `showchannels` directly at construction, outside any `on`/`lift`, to
+  populate its dropdown menus, so it is not observably read-only. The
+  disabled `objective_positioner_interface/gui.jl` (not included in the
+  build) calls `initialize(positioner)` immediately and was excluded from
+  this audit for that reason.
 - `DCAM4Camera()` now throws instead of returning a non-camera value on
   either SDK failure path, matching the "returns a camera or throws"
   contract downstream callers (`check_hardware`, `initialize_all`) rely
@@ -37,10 +47,11 @@ change was exercised on simulated devices only.
   `@error` and returned `nothing` while leaving the DCAM SDK initialised,
   which is the state a second constructor call was landing in when it
   crashed downstream. Both failure paths now call `dcamapi_uninit()`
-  (the open-failure path does this before throwing, so the SDK is never
-  left initialised) and throw an `ErrorException` naming the device id
-  and the `DCAMERR` code, noting that the camera or controller may already
-  be held by another process.
+  before throwing an `ErrorException` naming the device id and the
+  `DCAMERR` code, noting that the camera or controller may already be
+  held by another process. This covers only the two checked SDK return
+  paths: an exception raised after a successful open has no cleanup
+  guard, and `dcamapi_uninit()`'s own return is not checked.
 
 ## [0.2.0] - 2026-09-20
 

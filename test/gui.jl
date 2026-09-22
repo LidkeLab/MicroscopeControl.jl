@@ -17,6 +17,27 @@ function state_snapshot(device)
     return (attrs, data)
 end
 
+# A state snapshot cannot, by itself, tell a real fix from a broken one:
+# `SimLight()` starts at power `0.0` and off, which is exactly what the
+# widgets now initialise from, so reverting both callbacks in
+# `lightsource_interface/gui.jl` back to `lift` would re-issue
+# `setpower(light, 0.0)` and `light_off(light)` while every state
+# assertion below still passes. `RecordingLight` instead logs every
+# `setpower`/`light_on`/`light_off` call it receives, so the test can
+# assert directly that construction issues zero commands, regardless of
+# what the starting state is.
+mutable struct RecordingLight <: LightSource
+    unique_id::String
+    properties::LightSourceProperties
+    log::Vector{Symbol}
+end
+RecordingLight(properties::LightSourceProperties) =
+    RecordingLight("RecordingLight", properties, Symbol[])
+
+MicroscopeControl.setpower(light::RecordingLight, ::Float64) = (push!(light.log, :setpower); nothing)
+MicroscopeControl.light_on(light::RecordingLight) = (push!(light.log, :light_on); nothing)
+MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_off); nothing)
+
 @testset "GUI panels" begin
     @testset "Simulated Camera" begin
         cam = SimCamera()
@@ -35,6 +56,23 @@ end
         # Belt-and-suspenders check naming the exact fields item 1 was about.
         @test light.properties.power == before[1]["power"]
         @test light.properties.is_on == before[1]["is_on"]
+
+        # Command-based check, using starting states a snapshot can't
+        # probe: on at construction; stored power off the slider's
+        # `min_power:0.1:max_power` grid; stored power outside
+        # `min_power..max_power` entirely. Each must still issue zero
+        # commands when the panel is merely constructed.
+        cases = (
+            on_at_start = LightSourceProperties("mW", 0.0, true, 0.0, 100.0),
+            off_grid_power = LightSourceProperties("mW", 33.33, false, 0.0, 100.0),
+            out_of_range_power = LightSourceProperties("mW", 150.0, false, 0.0, 100.0),
+        )
+        for (name, properties) in pairs(cases)
+            rec = RecordingLight(properties)
+            gui(rec)
+            GLMakie.closeall()
+            @test isempty(rec.log)
+        end
     end
 
     @testset "Simulated Stage" begin
@@ -50,9 +88,14 @@ end
             threw = false
             try
                 gui(stage)
-                GLMakie.closeall()
-            catch
+            catch e
+                # Restrict to the known `stagelabel`/`label` mismatch so an
+                # unrelated failure isn't silently accepted as this
+                # expected `@test_broken`.
+                e isa FieldError && e.field === :stagelabel || rethrow()
                 threw = true
+            finally
+                GLMakie.closeall()
             end
             @test_broken !threw
             # Whether or not it throws, no hardware call happens before the

@@ -225,10 +225,16 @@ everything else. **Fixed in 0.3.0:** `DCAM4Camera()` used to return a
 `DCAMERR` code or `nothing` on failure (a `nothing` return additionally left
 the DCAM SDK initialized, so you had to call
 `MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself before the next
-open); it now throws on both failure paths and always leaves the SDK
-uninitialized when construction doesn't succeed. If you're on an
-installed copy older than 0.3.0, the `cam isa DCAM4Camera` check and manual
-`dcamapi_uninit()` above still apply.
+open); it now throws on both failure paths, and each of those two paths
+calls `dcamapi_uninit()` before it throws. That is not a general guarantee:
+an exception raised after `dcamdev_open` succeeds (e.g. reading sensor size
+or exposure) has no cleanup guard, and `dcamapi_uninit()` itself is not
+checked, so it can fail silently. If you're on an installed copy older
+than 0.3.0, guard the return value yourself --
+`cam isa DCAM4Camera || error("DCAM4 open failed: $(repr(cam))")` -- and on
+a `nothing` return call
+`MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself before the
+next open (caveats file).
 
 ### Decisions 3 and 4, executed: manual control versus acquisition, and a failed export
 
@@ -483,7 +489,13 @@ stop; each is false at v0.2.0.
   fake-transport light, which threw from inside `gui`). The slider and toggle
   are now wired with `on` (fires only on a later change) and initialised from
   the device's current `properties.power`/`properties.is_on`, so constructing
-  the panel is observably read-only. If you're on an installed copy older
+  the panel is observably read-only. **Caveat:** only `SimLight` updates
+  `properties.power` inside its `setpower` (traced); `CrystaLaser`,
+  `VortranLaser` and `DaqTrLight` do not, so the slider can display a stale
+  cached value on those drivers, and `TCubeLaser` stores a calculated power
+  while its `setpower` takes current in milliamps, so the units on display
+  and on the wire differ. This is not a new opening-time write -- it is
+  about what the widget shows. If you're on an installed copy older
   than 0.3.0, this was a real hazard on a laser, and a reason a system may
   want its own panel, or to open the shared one only with the shutter closed
   or the laser off.

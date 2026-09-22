@@ -197,7 +197,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 
 | Obligation | Do this | Because |
 |---|---|---|
-| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.3.0:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths and always uninitializes the SDK first |
+| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.3.0:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths uninitializes the SDK first; an exception after a successful open has no such guard |
 | Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | `CrystaLaser()` builds its own `NIdaq()`, first device, first channel; cannot be shared or configured |
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
 | Failure visibility | throw, or set `last_error` and return `nothing`, and document which | the DAQ-backed lights `@warn` and return on an empty channel list: "initialized" and inert |
