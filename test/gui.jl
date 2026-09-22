@@ -96,14 +96,17 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
                 # the same access raises a plain `ErrorException` carrying the
                 # same text. Both the receiver type and the field name must
                 # appear, in that order, so a different error that merely
-                # mentions `stagelabel` is rethrown rather than absorbed. The
-                # backticks around the field name are present from 1.12 only,
-                # so the trailing boundary is a negative lookahead rather than
-                # a required backtick: without it, a *different* missing field
-                # whose name merely starts with `stagelabel` (`stagelabel_extra`)
-                # is absorbed too.
+                # mentions `stagelabel` is rethrown rather than absorbed.
+                # The field name must be delimited by what actually follows
+                # it in each message, not by an identifier character class:
+                # `stagelabel!` and `stagelabelα` are both legal Julia field
+                # names, so any class-based boundary lets a *different*
+                # missing field through. On 1.11 the name ends the message; on
+                # 1.12+ it is backtick-quoted and followed by the available
+                # field list.
                 expected = Regex(string(raw"type\s+", nameof(typeof(stage)),
-                                        raw"\b.*has no field\s+`?stagelabel(?![A-Za-z0-9_])"))
+                                        raw"\b.*has no field\s+",
+                                        raw"(?:`stagelabel`,\s*available fields:|stagelabel\s*$)"))
                 occursin(expected, sprint(showerror, e)) || rethrow()
                 threw = true
             finally
