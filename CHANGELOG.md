@@ -24,11 +24,12 @@ change was exercised on simulated devices only.
   only fires on a later change to the widget. The slider and toggle are
   also now initialised from the device's current `properties.power` and
   `properties.is_on` instead of a hardcoded default, so opening a panel is
-  observably read-only. Caveat: only `SimLight` updates `properties.power`
-  inside `setpower`; `CrystaLaser`, `VortranLaser` and `DaqTrLight` do not,
-  so the slider can display a stale cached value on those drivers, and
+  observably read-only. Caveat: what `properties.power` holds after a
+  `setpower` differs by driver. `SimLight` stores the argument it was given;
   `TCubeLaser` stores a calculated power while its `setpower` takes current
-  in milliamps, so the displayed and wire units differ. This is not a new
+  in milliamps, so the displayed and wire units differ; `CrystaLaser`,
+  `VortranLaser` and `DaqTrLight` never write the field, so the slider can
+  display a stale cached value on those three. This is not a new
   opening-time write, only what the widget displays. The other enabled GUI panels (`stage_interface`,
   `camera_interface`, `attenuator_interface`, `daq_interface`,
   `triggerscope_interface`, `pi_n472`) were audited for the same

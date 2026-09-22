@@ -106,7 +106,9 @@ their types, per-device status). The two that still bite a system author:
 misbehaves on `SimCamera`. `MLSLM` has no `gui`; `gui(::TRIG)` exists for
 `Triggerscope4`. **Fixed in 0.3.0:** `gui(::LightSource)` used to call
 `setpower(light, 0.5)` on open (executed against a fake-transport light);
-opening any panel is now observably read-only.
+opening **the shared light panel** is now observably read-only. That is the
+whole scope of the fix -- `gui(::DAQ)` still queries `showdevices` and
+`showchannels` at construction.
 
 ## `save_h5` facts
 

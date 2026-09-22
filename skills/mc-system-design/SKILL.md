@@ -228,8 +228,11 @@ the DCAM SDK initialized, so you had to call
 open); it now throws on both failure paths, and each of those two paths
 calls `dcamapi_uninit()` before it throws. That is not a general guarantee:
 an exception raised after `dcamdev_open` succeeds (e.g. reading sensor size
-or exposure) has no cleanup guard, and `dcamapi_uninit()` itself is not
-checked, so it can fail silently. If you're on an installed copy older
+or exposure) has no cleanup guard, and on the two paths that do clean up the
+cleanup is only *attempted* -- `dcamapi_uninit()` checks its own SDK result
+and logs an `@error` when it fails, but the constructor ignores that return
+and throws either way, so a failed uninitialize shows up in the log and
+nowhere else. If you're on an installed copy older
 than 0.3.0, guard the return value yourself --
 `cam isa DCAM4Camera || error("DCAM4 open failed: $(repr(cam))")` -- and on
 a `nothing` return call
@@ -489,12 +492,13 @@ stop; each is false at v0.2.0.
   fake-transport light, which threw from inside `gui`). The slider and toggle
   are now wired with `on` (fires only on a later change) and initialised from
   the device's current `properties.power`/`properties.is_on`, so constructing
-  the panel is observably read-only. **Caveat:** only `SimLight` updates
-  `properties.power` inside its `setpower` (traced); `CrystaLaser`,
-  `VortranLaser` and `DaqTrLight` do not, so the slider can display a stale
-  cached value on those drivers, and `TCubeLaser` stores a calculated power
-  while its `setpower` takes current in milliamps, so the units on display
-  and on the wire differ. This is not a new opening-time write -- it is
+  the panel is observably read-only. **Caveat:** what `properties.power`
+  holds after a `setpower` differs by driver (traced). `SimLight` stores the
+  argument it was given. `TCubeLaser` stores a *calculated* power
+  (`current * max_power / max_current`) while its `setpower` takes current in
+  milliamps, so the units on display and on the wire differ. `CrystaLaser`,
+  `VortranLaser` and `DaqTrLight` never write the field at all, so the slider
+  can display a stale cached value on those three. This is not a new opening-time write -- it is
   about what the widget shows. If you're on an installed copy older
   than 0.3.0, this was a real hazard on a laser, and a reason a system may
   want its own panel, or to open the shared one only with the shutter closed

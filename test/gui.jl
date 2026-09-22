@@ -93,8 +93,14 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
                 # unrelated failure isn't silently accepted as this
                 # expected `@test_broken`. Matched on the message rather than
                 # on `FieldError`, which only exists from Julia 1.12; on 1.11
-                # the same access raises a plain `ErrorException`.
-                occursin("stagelabel", sprint(showerror, e)) || rethrow()
+                # the same access raises a plain `ErrorException` carrying the
+                # same text. Both the receiver type and the field name must
+                # appear, in that order, so a different error that merely
+                # mentions `stagelabel` is rethrown rather than absorbed. The
+                # backticks around the field name are present from 1.12 only.
+                expected = Regex(string(raw"type\s+", nameof(typeof(stage)),
+                                        raw"\b.*has no field\s+`?stagelabel`?"))
+                occursin(expected, sprint(showerror, e)) || rethrow()
                 threw = true
             finally
                 GLMakie.closeall()

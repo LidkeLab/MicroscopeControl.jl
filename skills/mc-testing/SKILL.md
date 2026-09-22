@@ -205,10 +205,15 @@ written against the simulated stages as of 0.3.0; `gui(SimCamera())` and
 `gui(MCS2Stage())` with no hardware attached, because those constructors are
 pure. **Fixed in 0.3.0:** `gui(::LightSource)` used to call
 `setpower(light, 0.5)` on open (executed against a fake-transport light,
-before the fix); opening any panel is now observably read-only
-(`test/gui.jl` is the upstream regression test: it snapshots
-`export_state(dev)` before and after `gui(dev)` for every Sim device and
-asserts nothing changed). One remaining fact for a GUI test: the camera panel
+before the fix); opening **the shared light panel** is now observably
+read-only. That is the scope of the fix: it says nothing about the other
+panels, and `gui(::DAQ)` in particular still queries `showdevices` and
+`showchannels` at construction. (`test/gui.jl` is the upstream regression
+test: it snapshots `export_state(dev)` before and after `gui(dev)` for every
+Sim device, and additionally opens the light panel on a recording light whose
+`setpower`/`light_on`/`light_off` log every call, asserting the log is empty.
+The state snapshot alone cannot catch the defect, because the widgets now
+initialise from the device's own values.) One remaining fact for a GUI test: the camera panel
 uses `capture`'s return value as the frame, so "Start Capture" misbehaves on
 `SimCamera`. Test the panels you can; list the rest under hardware
 acceptance.

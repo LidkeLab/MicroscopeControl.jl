@@ -70,7 +70,9 @@ and toggle used to be wired with `lift`, which fires on creation, so opening
 the panel called `setpower(light, 0.5)` immediately, then `light_on`/
 `light_off` on the toggle's initial value: opening a GUI was a hardware
 write. Both are now wired with `on` (fires only on a later change) and
-initialised from `properties.power`/`properties.is_on`, so opening any panel
-is observably read-only.
+initialised from `properties.power`/`properties.is_on`, so opening **this**
+panel is observably read-only. The fix is scoped to the shared light panel;
+it is not a guarantee about the others, and `gui(::DAQ)` still calls
+`showdevices`/`showchannels` at construction.
 
 `gui(::TRIG)` exists for `Triggerscope4`; `MLSLM` has no `gui` at all.
