@@ -90,24 +90,24 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
                 gui(stage)
             catch e
                 # Restrict to the known `stagelabel`/`label` mismatch so an
-                # unrelated failure isn't silently accepted as this
-                # expected `@test_broken`. Matched on the message rather than
-                # on `FieldError`, which only exists from Julia 1.12; on 1.11
-                # the same access raises a plain `ErrorException` carrying the
-                # same text. Both the receiver type and the field name must
-                # appear, in that order, so a different error that merely
-                # mentions `stagelabel` is rethrown rather than absorbed.
-                # The field name must be delimited by what actually follows
-                # it in each message, not by an identifier character class:
-                # `stagelabel!` and `stagelabelα` are both legal Julia field
-                # names, so any class-based boundary lets a *different*
-                # missing field through. On 1.11 the name ends the message; on
-                # 1.12+ it is backtick-quoted and followed by the available
-                # field list.
-                expected = Regex(string(raw"type\s+", nameof(typeof(stage)),
-                                        raw"\b.*has no field\s+",
-                                        raw"(?:`stagelabel`,\s*available fields:|stagelabel\s*$)"))
-                occursin(expected, sprint(showerror, e)) || rethrow()
+                # unrelated failure isn't silently accepted as this expected
+                # `@test_broken`. No pattern match on the message can do this
+                # safely: `var"stagelabel "` and
+                # `var"stagelabel`, available fields:extra"` are both legal
+                # Julia field names, and each defeats a boundary built from a
+                # character class or from the surrounding message text. So
+                # compare the exception's own fields where they exist. Julia
+                # 1.12+ raises a structured `FieldError`; 1.11 has no such type
+                # and raises a plain `ErrorException`, where exact message
+                # equality is the tightest check available.
+                is_expected = @static if isdefined(Core, :FieldError)
+                    e isa Core.FieldError &&
+                        e.type === typeof(stage) && e.field === :stagelabel
+                else
+                    e isa ErrorException &&
+                        e.msg == "type $(nameof(typeof(stage))) has no field stagelabel"
+                end
+                is_expected || rethrow()
                 threw = true
             finally
                 GLMakie.closeall()
