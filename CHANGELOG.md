@@ -9,6 +9,39 @@ are interface changes, patch bumps are everything else).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-21
+
+Hardware verification: NOT DONE for the DCAM4 change (touches a driver
+runtime path and no Hamamatsu camera is available here). The `gui.jl`
+change was exercised on simulated devices only.
+
+### Fixed
+- `gui(::LightSource)` no longer commands hardware when the panel is
+  constructed. The power slider and on/off toggle used `lift`, which
+  evaluates immediately on creation, so opening a light source panel used
+  to call `setpower(light, 0.5)` and then `light_off(light)`/`light_on(light)`
+  the instant the window appeared. Both are now wired with `on`, which
+  only fires on a later change to the widget. The slider and toggle are
+  also now initialised from the device's current `properties.power` and
+  `properties.is_on` instead of a hardcoded default, so opening a panel is
+  observably read-only. The other GUI panels (`stage_interface`,
+  `camera_interface`, `attenuator_interface`, `daq_interface`,
+  `triggerscope_interface`, `pi_n472`) were audited for the same pattern;
+  none had it, since they already gated hardware calls behind `on(...)`
+  button/textbox callbacks rather than `lift`.
+- `DCAM4Camera()` now throws instead of returning a non-camera value on
+  either SDK failure path, matching the "returns a camera or throws"
+  contract downstream callers (`check_hardware`, `initialize_all`) rely
+  on. Previously, a `dcamapi_init` failure returned a `DCAMERR` value
+  where a camera was expected, and a `dcamdev_open` failure logged an
+  `@error` and returned `nothing` while leaving the DCAM SDK initialised,
+  which is the state a second constructor call was landing in when it
+  crashed downstream. Both failure paths now call `dcamapi_uninit()`
+  (the open-failure path does this before throwing, so the SDK is never
+  left initialised) and throw an `ErrorException` naming the device id
+  and the `DCAMERR` code, noting that the camera or controller may already
+  be held by another process.
+
 ## [0.2.0] - 2026-09-20
 
 Hardware verification: not required (no driver runtime paths changed).

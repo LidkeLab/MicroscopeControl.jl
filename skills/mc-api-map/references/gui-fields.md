@@ -65,8 +65,12 @@ cameras whose `capture` returns the frame.
 
 Read `unique_id` and `properties` (`LightSourceProperties.min_power`,
 `max_power`, `power`; `AttenuatorProperties`). Every current light and the
-`LCC1620` carry both (executed). `[limitation]` the light panel's slider `lift`
-fires on creation, so opening it calls `setpower(light, 0.5)` immediately, then
-on every change: opening a GUI is a hardware write.
+`LCC1620` carry both (executed). **Fixed in 0.3.0:** the light panel's slider
+and toggle used to be wired with `lift`, which fires on creation, so opening
+the panel called `setpower(light, 0.5)` immediately, then `light_on`/
+`light_off` on the toggle's initial value: opening a GUI was a hardware
+write. Both are now wired with `on` (fires only on a later change) and
+initialised from `properties.power`/`properties.is_on`, so opening any panel
+is observably read-only.
 
 `gui(::TRIG)` exists for `Triggerscope4`; `MLSLM` has no `gui` at all.

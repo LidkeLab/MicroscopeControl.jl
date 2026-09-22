@@ -178,11 +178,14 @@ carry:
   value of `capture` as the frame. All four upstream cameras carry every field
   (executed).
 - **LightSource / Attenuator**: `unique_id` and `properties`
-  (`LightSourceProperties` / `AttenuatorProperties`). **[limitation]** the light
-  panel calls `setpower(light, 0.5)` the moment it opens (the slider `lift`
-  fires at creation), so opening a panel is a hardware write; a driver whose
-  `setpower` correctly throws on a closed link will throw from inside `gui`
-  (executed).
+  (`LightSourceProperties` / `AttenuatorProperties`). **Fixed in 0.3.0:** the
+  light panel used to call `setpower(light, 0.5)` the moment it opened (the
+  slider `lift` fired at creation), so opening a panel was a hardware write;
+  a driver whose `setpower` correctly throws on a closed link would throw
+  from inside `gui` (executed against a fake-transport light before the fix).
+  The slider and toggle are now wired with `on`, which fires only on a later
+  change, and initialised from the device's current `properties.power`/
+  `properties.is_on`.
 
 **[policy]** carry the fields rather than writing your own panel: the fields are
 what make the Sim-for-hardware swap in `mc-testing` work.
@@ -194,7 +197,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 
 | Obligation | Do this | Because |
 |---|---|---|
-| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; DCAM4 returns an error code or `nothing` on failure, leaving the SDK initialized |
+| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.3.0:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths and always uninitializes the SDK first |
 | Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | `CrystaLaser()` builds its own `NIdaq()`, first device, first channel; cannot be shared or configured |
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
 | Failure visibility | throw, or set `last_error` and return `nothing`, and document which | the DAQ-backed lights `@warn` and return on an empty channel list: "initialized" and inert |

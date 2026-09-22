@@ -210,8 +210,7 @@ a safe instrument.
 ### Decision 2: a camera whose constructor opens hardware (traced)
 
 ```julia
-cam = DCAM4Camera(0)
-cam isa DCAM4Camera || error("DCAM4 open failed: $(repr(cam))")   # returns a DCAMERR code, or `nothing`
+cam = DCAM4Camera(0)   # throws (since 0.3.0) on either SDK failure path; catch and handle if you need to fall back
 # From here the camera is CLAIMED even though initialize(cam) has not run (it is a no-op for this driver).
 # If anything below fails before the system is built, shutdown(cam) is owed NOW.
 ```
@@ -222,8 +221,14 @@ The executed `Bench` below keeps one `owned` list of every device currently
 holding hardware; a constructor-claimed device is passed in as
 `claimed_at_construction=(cam,)` so it is owned before `initialize` runs, is
 skipped by `initialize`, and is closed by the same `release!` that closes
-everything else. On a `nothing` return from `DCAM4Camera()`, call
-`MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself (caveats file).
+everything else. **Fixed in 0.3.0:** `DCAM4Camera()` used to return a
+`DCAMERR` code or `nothing` on failure (a `nothing` return additionally left
+the DCAM SDK initialized, so you had to call
+`MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself before the next
+open); it now throws on both failure paths and always leaves the SDK
+uninitialized when construction doesn't succeed. If you're on an
+installed copy older than 0.3.0, the `cam isa DCAM4Camera` check and manual
+`dcamapi_uninit()` above still apply.
 
 ### Decisions 3 and 4, executed: manual control versus acquisition, and a failed export
 
@@ -472,12 +477,16 @@ stop; each is false at v0.2.0.
 
 ## Two more limitations that bear on design
 
-- **[limitation]** `gui(::LightSource)` calls `setpower(light, 0.5)` the moment
-  the panel opens: the slider's `lift` fires on creation with its start value
-  (traced from `lightsource_interface/gui.jl`; executed against a fake-transport
-  light, which threw from inside `gui`). On a laser that is a real hazard, and a
-  reason a system may want its own panel, or to open the shared one only with
-  the shutter closed or the laser off.
+- **Fixed in 0.3.0.** `gui(::LightSource)` used to call `setpower(light, 0.5)`
+  the moment the panel opened: the slider's `lift` fired on creation with its
+  start value (traced from `lightsource_interface/gui.jl`; executed against a
+  fake-transport light, which threw from inside `gui`). The slider and toggle
+  are now wired with `on` (fires only on a later change) and initialised from
+  the device's current `properties.power`/`properties.is_on`, so constructing
+  the panel is observably read-only. If you're on an installed copy older
+  than 0.3.0, this was a real hazard on a laser, and a reason a system may
+  want its own panel, or to open the shared one only with the shutter closed
+  or the laser off.
 - **[limitation]** `getposition(::SimStage3d)` returns a scalar (`3.0` after
   `move(s, 1.0, 2.0, 3.0)`), the value of its last assignment, while the
   interface docstring promises an `(x, y, z)` tuple (executed). A system must

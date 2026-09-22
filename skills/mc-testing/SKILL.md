@@ -200,14 +200,18 @@ if it bothers CI; it is not an error.
 `gui(SimStage3d())` all throw `FieldError: type SimStage3d has no field stagelabel`.
 The shared stage panel reads `stage.stagelabel` unguarded for its window title
 and the Sim stages carry `label`. So a "every panel opens" smoke test cannot be
-written against the simulated stages at v0.2.0; `gui(SimCamera())` and
+written against the simulated stages as of 0.3.0; `gui(SimCamera())` and
 `gui(SimLight())` open (executed), as do `gui(PIStage())`, `gui(MCLStage())` and
 `gui(MCS2Stage())` with no hardware attached, because those constructors are
-pure. Two more facts for a GUI test: `gui(::LightSource)` calls
-`setpower(light, 0.5)` on open (executed against a fake-transport light), and
-the camera panel uses `capture`'s return value as the frame, so "Start Capture"
-misbehaves on `SimCamera`. Test the panels you can; list the rest under
-hardware acceptance.
+pure. **Fixed in 0.3.0:** `gui(::LightSource)` used to call
+`setpower(light, 0.5)` on open (executed against a fake-transport light,
+before the fix); opening any panel is now observably read-only
+(`test/gui.jl` is the upstream regression test: it snapshots
+`export_state(dev)` before and after `gui(dev)` for every Sim device and
+asserts nothing changed). One remaining fact for a GUI test: the camera panel
+uses `capture`'s return value as the frame, so "Start Capture" misbehaves on
+`SimCamera`. Test the panels you can; list the rest under hardware
+acceptance.
 
 ## CI recipe
 
@@ -246,9 +250,10 @@ because nothing above touches it:
 - units, direction signs and range limits on every axis; ROI origin convention
   and exposure unit on the camera (`mc-acquire`, per-driver table);
 - timing: settling after `move`, `sequence` completion, live-view stop order
-  (`mc-acquire`), the panel's `setpower(0.5)` on open being safe for the laser,
-  and that a failed acquisition's `abort` leaves the SDK in a state the next
-  acquisition can use (the Sim cannot show this);
+  (`mc-acquire`), and that a failed acquisition's `abort` leaves the SDK in a
+  state the next acquisition can use (the Sim cannot show this). (Opening a
+  light panel no longer commands power as of 0.3.0, so that is no longer a
+  hardware-acceptance item — see the GUI smoke test section above.)
 - SDK failure paths: what `capture` returns on failure per driver (`nothing`,
   or `ThorCamCSCCamera`'s silent all-zero frame);
 - shared-connection ownership: two attenuators on one `Triggerscope4`, and that
