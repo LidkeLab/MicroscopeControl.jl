@@ -91,8 +91,10 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
             catch e
                 # Restrict to the known `stagelabel`/`label` mismatch so an
                 # unrelated failure isn't silently accepted as this
-                # expected `@test_broken`.
-                e isa FieldError && e.field === :stagelabel || rethrow()
+                # expected `@test_broken`. Matched on the message rather than
+                # on `FieldError`, which only exists from Julia 1.12; on 1.11
+                # the same access raises a plain `ErrorException`.
+                occursin("stagelabel", sprint(showerror, e)) || rethrow()
                 threw = true
             finally
                 GLMakie.closeall()
