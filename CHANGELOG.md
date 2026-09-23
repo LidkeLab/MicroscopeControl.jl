@@ -21,7 +21,7 @@ are ordered as they are: a change that can only *reduce* what reaches a laser
 diode is worth taking unverified, while a change to what a working rig sees is
 not, and the ones in the latter class are called out individually.
 
-**Interface change (breaking, hence the minor bump).** Three things a working
+**Interface change (breaking, hence the minor bump).** Four things a working
 caller can see changed:
 
 - `TCubeLaser`'s `properties.power_unit` is now `"mA"` and `properties.power`
@@ -39,13 +39,45 @@ caller can see changed:
   `controller_max_current`, `daq_device`, `ao_channel`). The keyword
   constructor `TCubeLaser(serialNo; ...)` is unaffected; a direct positional
   construction is not.
+- **`tcube_refresh` is gone, and it was an exported name.** `using
+  MicroscopeControl; tcube_refresh(...)` used to resolve; it is now an
+  `UndefVarError`. See Removed below for what it did and why it went.
+
+The constructor also now **rejects** `properties` whose `power_unit` is not
+`"mA"`, with an `ArgumentError`. Defaulting the label to `"mA"` was not enough:
+a caller passing `LightSourceProperties("mW", ...)` got the accepted drive
+current stored under a milliwatt name and carried into `export_state` and the
+HDF5 attributes written from it. That is the silent break this bump exists to
+announce, so it is refused rather than documented.
 
 ### Fixed
 - **`setpower(::TCubeLaser, current)` sent out-of-range currents to the diode.**
   The range check logged `@error` and then execution continued: the setpoint was
-  computed and `LD_SetLaserSetPoint` called anyway, so asking for 500 mA on a
-  160 mA diode produced a log line and 500 mA. It now throws an `ArgumentError`
-  naming the request and both bounds, before any setpoint is computed.
+  computed and `LD_SetLaserSetPoint` called anyway. What that cost depended on
+  the request. 500 mA on a 160 mA diode never reached the controller — it
+  logged, carried on, and died in the conversion with an `InexactError` — but
+  200 mA, over the same ceiling and still inside the setpoint DAC's range,
+  converted cleanly and was sent. A log line was the only thing separating the
+  two. `setpower` now throws an `ArgumentError` naming the request and both
+  bounds, before any setpoint is computed.
+- **The enforced ceiling now holds at the wire.** The setpoint conversion
+  rounded, so the 160 mA ceiling encoded to code 23831 = 160.00305 mA on the
+  driver's own scale: the one request sitting exactly on the enforced limit was
+  the one to exceed it. The conversion truncates now, everywhere, so the
+  current commanded never exceeds the current requested; the cost is an
+  undershoot of under one code (0.0067 mA at the default scale).
+- **The conversion parameters are validated before converting.** Four
+  configurations passed the range check and then died in `UInt16(...)` with an
+  `InexactError`: `max_setcurrent=0.0` (0 mA), `max_setcurrent=NaN` (80 mA),
+  `max_setpoint=100000.0` (160 mA), and `min_current=-10.0` admitting −5 mA.
+  Each now throws an `ArgumentError` naming the field at fault, still before
+  anything is sent.
+- **A failed `initialize` no longer leaks the connection.** After a successful
+  `LD_Open`, a failure at the mode change or later threw without closing, and a
+  controller left open refuses the next `LD_Open` — so the leak blocked the
+  retry. The handle is closed on the way out; a failure of that close is logged,
+  never raised, so the error the caller sees is the one that stopped
+  initialization.
 - **`initialize(::TCubeLaser)` destroyed the caller's current ceiling.** It
   overwrote `light.max_current` with the controller's own limit from
   `LD_GetLaserDiodeMaxCurrentLimit` (typically 160-220 mA), so a rig that
@@ -56,9 +88,11 @@ caller can see changed:
   `max_current` stays the caller's, and `setpower` enforces the smallest of
   `max_current`, `controller_max_current` and `max_setcurrent`, ignoring
   whichever is `NaN`. `max_setcurrent` joins the list because a current above
-  the setpoint DAC's full scale cannot be represented as a `UInt16` at all and
-  used to die in the conversion with an `InexactError` after the range check
-  had passed it.
+  the setpoint DAC's full scale has no legal setpoint, and the bound that makes
+  that true is the controller's **0–32767 protocol range**, not `UInt16`
+  storage: 300 mA encodes to 44682 and 400 mA to 59576, both of which fit a
+  `UInt16` and neither of which the controller will accept. Without the bound
+  such a request passed the range check and then died in the conversion.
 - **Every Kinesis return code is now checked.** `initialize`, `light_on`,
   `setpower`, `light_off`, `shutdown` and `tcube_get_current` each assigned the
   status of every call to an `err` local and never read it, so a failed open, a
@@ -90,9 +124,13 @@ caller can see changed:
   undefined `out`, overwrote its `serialNo` local with the hardcoded literal
   `"64849775"` immediately before use, discarded the reading it had just
   fetched, and called `LD_GetPowerReading`, which is not among the bindings in
-  `functions_Tlaser.jl` at all. No correct scaling is derivable from the
-  source, and the controller reports no optical power in the open-loop mode
-  this driver uses, so it was deleted rather than guessed at.
+  `functions_Tlaser.jl` at all. A scaling *is* derivable from the deleted
+  `helpers.jl` — `power_mW = raw / 32767 * TIA_range_mA * calibration_W_per_A`,
+  preserved with its assumptions as a comment in `TCubeLaserControl.jl` — but
+  both factors there were assumptions from one bench setup that the driver
+  cannot read back, and the controller reports no optical power in the
+  open-loop mode this driver uses. So the getter was deleted rather than
+  repaired around a guess.
 - **`tcube_refresh`** — it opened the device, enabled the output, drove a
   hardcoded **90 mA**, slept a second, then disabled and closed. A bench
   procedure whose name warned no one. Deleted rather than renamed; speak up if
@@ -112,8 +150,17 @@ caller can see changed:
   `check_current`'s bounds and message, that a caller's `max_current` survives
   the controller's limit being recorded, that `setpower` refuses an
   out-of-range request with its own `ArgumentError` rather than reaching the
-  Kinesis `ccall`, and `export_state`'s arity and contents. The SDK path itself
-  is untested and untestable here.
+  Kinesis `ccall`, and `export_state`'s arity and contents.
+- `test/tcube_fake_sdk.jl`, a recorder that replaces the Kinesis wrappers — they
+  are plain untyped functions in `TCubeLaserControl`, so a same-signature method
+  defined into that module takes their place and no production code changes for
+  the test's sake. It puts `initialize`, `setpower` and `shutdown` themselves
+  under test: that the caller's `max_current` survives the *real* `initialize`
+  (testing `record_controller_limit!` alone did not catch the assignment being
+  restored), that the setpoint actually sent stays at or under the ceiling, that
+  a refused request reaches no `LD_SetLaserSetPoint`, and that a failure after
+  `LD_Open` is followed by `LD_Close`. What no test here can tell you is how a
+  real controller answers.
 - `test/contract.jl` no longer excludes `TCubeLaser` from `no_export_state`,
   and asserts directly that the 1-argument form dispatches to this type while
   no extra-argument method survives.

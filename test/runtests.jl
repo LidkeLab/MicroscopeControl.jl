@@ -3,6 +3,11 @@ using Test
 
 const HDF5 = MicroscopeControl.HDF5
 
+# Replaces the TCube laser's Kinesis wrappers with a recorder, so the driver's
+# own `initialize`/`setpower`/`shutdown` can be run without a controller. Must
+# be included at top level, before the testsets. See the file for the seam.
+include("tcube_fake_sdk.jl")
+
 @testset "MicroscopeControl.jl" begin
     @testset "Simulated Camera" begin
         cam = SimCamera(exposure_time=0.01)
@@ -102,11 +107,15 @@ const HDF5 = MicroscopeControl.HDF5
     end
 
     # No Thorlabs TCube on any build machine, so nothing here touches the
-    # Kinesis DLL. What *is* testable without one is the part of the driver
-    # that decides whether a current ever reaches the diode, which is
-    # deliberately factored out of the SDK path (`check_current`,
-    # `effective_max_current`, `record_controller_limit!`) for exactly that
-    # reason. See CHANGELOG 0.3.0: hardware verification NOT DONE.
+    # Kinesis DLL. Two things are still testable. The part of the driver that
+    # decides whether a current ever reaches the diode is factored out of the
+    # SDK path (`check_current`, `effective_max_current`, `setpoint_code`,
+    # `record_controller_limit!`) and exercised directly. The lifecycle
+    # functions themselves -- `initialize`, `setpower`, `shutdown` -- are run
+    # unmodified against the recorder installed by `tcube_fake_sdk.jl`, which
+    # is what makes their *own* control flow (not a helper's) a thing the suite
+    # can fail on. What no test here can tell you is how a real controller
+    # answers: see CHANGELOG 0.3.0, hardware verification NOT DONE.
     @testset "TCube Laser (no hardware)" begin
         TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
 
@@ -197,6 +206,7 @@ const HDF5 = MicroscopeControl.HDF5
             # on a Windows rig that call would have driven 200 mA into the
             # diode). 500.0 and -5.0 happen to die earlier, in `UInt16(...)`
             # with an `InexactError`, which is a crash rather than a refusal.
+            FakeKinesis.reset!()
             laser = TCubeLaser("00000000")
             @test_throws ArgumentError setpower(laser, 200.0)
             @test_throws ArgumentError setpower(laser, 500.0)
@@ -205,6 +215,129 @@ const HDF5 = MicroscopeControl.HDF5
             # The old code wrote it before the call: `setpower(laser, 200.0)`
             # left `properties.power == 125.0` (executed).
             @test laser.properties.power == 0.0
+            # And "before touching the SDK" is now an observation rather than
+            # an inference: the fake records every setpoint it is handed.
+            @test isempty(FakeKinesis.setpoints)
+            @test isempty(FakeKinesis.calls)
+        end
+
+        @testset "initialize keeps the caller's ceiling (fake SDK)" begin
+            # The regression this driver was fixed for lives inside
+            # `initialize`, so this runs the real `initialize` against the fake
+            # Kinesis SDK. Restoring the old `light.max_current = ...`
+            # assignment must fail this testset; testing
+            # `record_controller_limit!` alone did not, which is why this
+            # exists.
+            FakeKinesis.reset!() # controller reports a 160 mA limit
+            laser = TCubeLaser("00000000"; max_current=80.0)
+            initialize(laser)
+
+            @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
+                "LD_Open", "LD_SetOpenLoopMode", "LD_RequestReadings",
+                "LD_GetLaserDiodeMaxCurrentLimit"]
+            @test laser.max_current == 80.0 # survived initialize
+            @test laser.controller_max_current ≈ 160.0 rtol = 1e-3
+            @test TCube.effective_max_current(laser) == 80.0
+
+            # The consequence, which is the point: a post-initialize request
+            # between the caller's ceiling and the controller's is refused, and
+            # nothing reaches the SDK.
+            empty!(FakeKinesis.setpoints)
+            @test_throws ArgumentError setpower(laser, 100.0)
+            @test isempty(FakeKinesis.setpoints)
+            # ... while one under the caller's ceiling is sent.
+            setpower(laser, 40.0)
+            @test length(FakeKinesis.setpoints) == 1
+            @test laser.properties.power == 40.0
+        end
+
+        @testset "a failed initialize closes the connection (fake SDK)" begin
+            # A controller left open refuses the next LD_Open, so a failure
+            # after the open must not leak the handle -- and the error the
+            # caller sees must be the one that stopped initialization.
+            FakeKinesis.reset!()
+            FakeKinesis.fail!("LD_SetOpenLoopMode", 3)
+            laser = TCubeLaser("00000000")
+            err = try
+                initialize(laser)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("LD_SetOpenLoopMode", err.msg)
+            @test occursin("3", err.msg) # the Thorlabs code, not a cleanup error
+            @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
+                "LD_Open", "LD_SetOpenLoopMode", "LD_Close"]
+            @test isnan(laser.controller_max_current) # nothing recorded
+
+            # A failure at the open itself has no handle to close.
+            FakeKinesis.reset!()
+            FakeKinesis.fail!("LD_Open", 2)
+            @test_throws ErrorException initialize(TCubeLaser("00000000"))
+            @test "LD_Close" ∉ FakeKinesis.calls
+        end
+
+        @testset "Setpoint encoding" begin
+            # The ceiling has to hold at the wire, not just in the check.
+            # Rounding put the 160 mA ceiling at code 23831 = 160.00305 mA on
+            # the driver's own scale, so the one request sitting exactly on the
+            # enforced limit was the one to exceed it.
+            FakeKinesis.reset!()
+            laser = TCubeLaser("00000000")
+            setpower(laser, 160.0)
+            @test FakeKinesis.setpoints == [UInt16(23830)]
+            encoded(l, code) = Float64(code) / l.max_setpoint * l.max_setcurrent
+            @test encoded(laser, FakeKinesis.setpoints[end]) <= 160.0
+
+            # Truncation is the rule everywhere, so the commanded current never
+            # exceeds the requested one, at any setpoint.
+            for request in (0.0, 0.5, 1.0, 37.3, 99.9, 159.999, 160.0)
+                @test encoded(laser, TCube.setpoint_code(laser, request)) <= request
+            end
+            @test TCube.setpoint_code(laser, 0.0) == 0x0000
+
+            # Conversion parameters are validated before converting. Each of
+            # these passes check_current and used to die in `UInt16(...)` with
+            # an InexactError.
+            empty!(FakeKinesis.setpoints)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; max_setcurrent=0.0), 0.0)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; max_setcurrent=NaN), 80.0)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; max_setpoint=100000.0), 160.0)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; min_current=-10.0), -5.0)
+            @test isempty(FakeKinesis.setpoints) # none of them reached the SDK
+
+            # The message has to name the field at fault.
+            offender(l, c) = try
+                setpower(l, c)
+                ""
+            catch e
+                e.msg
+            end
+            @test occursin("max_setcurrent", offender(TCubeLaser("00000000"; max_setcurrent=NaN), 80.0))
+            @test occursin("max_setpoint", offender(TCubeLaser("00000000"; max_setpoint=100000.0), 160.0))
+            @test occursin("non-negative", offender(TCubeLaser("00000000"; min_current=-10.0), -5.0))
+        end
+
+        @testset "Properties must be labelled mA" begin
+            # The default is "mA", but the label is the caller's to pass, and a
+            # caller passing "mW" got the accepted *current* stored under a
+            # milliwatt name -- into export_state and the HDF5 attributes with
+            # it. That is exactly the silent break the 0.3.0 bump announces, so
+            # the constructor refuses it.
+            mW = LightSourceProperties("mW", 0.0, false, 0.0, 100.0)
+            @test_throws ArgumentError TCubeLaser("00000000"; properties=mW)
+            err = try
+                TCubeLaser("00000000"; properties=mW)
+            catch e
+                e
+            end
+            @test occursin("mW", err.msg)
+            @test occursin("current", err.msg)
+
+            # Properties that are labelled correctly are kept as given.
+            ok = TCubeLaser("00000000"; properties=LightSourceProperties("mA", 0.0, false, 0.0, 220.0))
+            @test ok.properties.max_power == 220.0
         end
 
         @testset "export_state" begin

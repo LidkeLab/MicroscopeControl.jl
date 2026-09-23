@@ -67,6 +67,12 @@ worth stating here:
   `controller_max_current`, and `setpower` enforces the smaller of the two.
 - `min_current` defaults to `0.0`. A non-zero default would reject safe small
   currents without protecting against large ones.
+
+`properties.power_unit` must be `"mA"`; passing properties labelled anything
+else throws an `ArgumentError`. The label is not decoration: `setpower` accepts
+a drive current and `properties.power` stores that current, so a `"mW"` label
+would put milliamps under a milliwatt name and carry it into `export_state` and
+the saved HDF5 attributes.
 """
 function TCubeLaser(serialNo::String;
     unique_id::String="TCubeLaser",
@@ -82,6 +88,12 @@ function TCubeLaser(serialNo::String;
     daq_device::Union{Nothing,String}=nothing,
     ao_channel::Union{Nothing,String}=nothing
 )
+    properties.power_unit == "mA" || throw(ArgumentError(
+        "TCubeLaser $serialNo: properties.power_unit must be \"mA\", got \"$(properties.power_unit)\". " *
+        "This controller drives the diode in open-loop current mode: `setpower` takes a drive current in " *
+        "milliamps and `properties.power` records the current it accepted, not an optical power, so any " *
+        "other label would be false -- including in `export_state` and the HDF5 attributes written from it. " *
+        "Convert to your own units at your own boundary."))
 
     TCubeLaser(unique_id, properties, laser_color, min_current, max_current,
         controller_max_current, max_setcurrent, max_setpoint, serialNo, task_mod,

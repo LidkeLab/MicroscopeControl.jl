@@ -23,15 +23,66 @@ The ceiling `setpower` enforces, in mA: the smallest of the caller's
 `NaN`, i.e. before `initialize`) and `max_setcurrent`, the full-scale current
 of the setpoint DAC.
 
-`max_setcurrent` is in the list because a current above full scale cannot be
-represented as a `UInt16` setpoint at all: without the bound, `setpower` would
-die in `UInt16(...)` with an `InexactError` after the range check had already
-passed it.
+`max_setcurrent` is in the list because a current above full scale has no legal
+setpoint: see [`SETPOINT_PROTOCOL_MAX`](@ref) for why the bound is the
+controller's 0-32767 protocol range and not `UInt16` storage. Without it,
+`setpower` would carry a request the range check had already passed into a
+conversion that cannot express it.
 """
 function effective_max_current(light::TCubeLaser)
     limits = filter(!isnan, (light.max_current, light.controller_max_current, light.max_setcurrent))
     isempty(limits) && error("TCubeLaser $(light.serialNo): no usable current ceiling; max_current, controller_max_current and max_setcurrent are all NaN")
     return minimum(limits)
+end
+
+"""
+    SETPOINT_PROTOCOL_MAX
+
+Largest setpoint the controller accepts. `LD_SetLaserSetPoint` takes a 0-32767
+value: it is transported as a `UInt16`, but only that range is a legal
+setpoint, so the protocol admits half of what the storage type can hold.
+
+That distinction is the reason `max_setcurrent` has to be one of the ceilings
+[`effective_max_current`](@ref) enforces. `UInt16` storage would not have
+forced it: at the default 220 mA full scale, 300 mA encodes to 44682 and 400 mA
+to 59576, both of which fit a `UInt16` and neither of which is a setpoint this
+controller can be given.
+"""
+const SETPOINT_PROTOCOL_MAX = 32767
+
+"""
+    setpoint_code(light::TCubeLaser, current::Float64)
+
+Encode a drive current in mA as the controller's integer setpoint.
+
+Validates the conversion itself, which the range check cannot:
+[`check_current`](@ref) compares a request against ceilings and says nothing
+about whether the scale factors that encode it are usable. Requests that passed
+the check used to die here in `UInt16(...)` with an `InexactError` --
+`max_setcurrent` of `0.0` or `NaN`, a `max_setpoint` outside the protocol
+range, a negative `min_current` admitting a negative current. Each now throws
+an `ArgumentError` naming the field at fault, still before anything is sent.
+
+Truncates rather than rounds, and does so everywhere. Rounding at the ceiling
+encodes *above* it: at the default scale the 160 mA ceiling rounds to code
+23831, which is 160.00305 mA by the driver's own conversion, so the one request
+sitting exactly on the enforced limit would be the one to breach it at the
+wire. Truncating everywhere keeps a single rule -- the current commanded never
+exceeds the current requested -- instead of one rule below the ceiling and
+another at it. The cost is an undershoot of less than one code, 0.0067 mA at
+the default scale.
+"""
+function setpoint_code(light::TCubeLaser, current::Float64)
+    (isfinite(light.max_setcurrent) && light.max_setcurrent > 0) || throw(ArgumentError(
+        "TCubeLaser $(light.serialNo): max_setcurrent is the setpoint DAC's full-scale current in mA and must be finite and positive, got $(light.max_setcurrent)"))
+    (isfinite(light.max_setpoint) && 0 < light.max_setpoint <= SETPOINT_PROTOCOL_MAX) || throw(ArgumentError(
+        "TCubeLaser $(light.serialNo): max_setpoint must be finite and within (0, $(SETPOINT_PROTOCOL_MAX)], the controller's setpoint range, got $(light.max_setpoint)"))
+    (isfinite(current) && current >= 0) || throw(ArgumentError(
+        "TCubeLaser $(light.serialNo): requested current must be finite and non-negative, got $(current) mA (min_current=$(light.min_current))"))
+    code = floor(current / light.max_setcurrent * light.max_setpoint)
+    code <= light.max_setpoint || throw(ArgumentError(
+        "TCubeLaser $(light.serialNo): $(current) mA encodes to setpoint $(code), above the full scale $(light.max_setpoint); it exceeds max_setcurrent=$(light.max_setcurrent) mA and should have been refused by check_current"))
+    return UInt16(code)
 end
 
 """
@@ -43,8 +94,12 @@ the request and both bounds if it is out of range. Returns `current`.
 This is the whole of `setpower`'s safety check, kept as its own function so it
 can be exercised without a controller attached. It runs *before* any setpoint
 is computed or sent: the previous code logged `@error` and then carried on to
-call `LD_SetLaserSetPoint` anyway, so asking for 500 mA on a 160 mA diode
-produced a log line and 500 mA.
+call `LD_SetLaserSetPoint` anyway. What that cost depended on the request. 500
+mA on a 160 mA diode never reached the controller -- it logged, continued, and
+then died in the conversion, `UInt16(round(...))` with an `InexactError`. 200
+mA did: over the same 160 mA ceiling, but inside the setpoint DAC's range, so
+it converted cleanly and was sent. A log line was the only thing separating the
+two.
 """
 function check_current(light::TCubeLaser, current::Float64)
     lo = light.min_current
@@ -79,6 +134,10 @@ end
 Open the controller, put it in open-loop mode and record the controller's own
 diode current limit in `light.controller_max_current`.
 
+If any step after `LD_Open` fails, the handle is closed before the error
+propagates -- a half-open controller refuses the next `LD_Open` and so blocks
+the retry -- and the original error is the one raised.
+
 It deliberately does **not** touch `light.max_current`: that field is the
 caller's ceiling for this diode, and overwriting it with the controller's
 (typically 160-220 mA) limit silently widened the range `setpower` validates
@@ -90,11 +149,24 @@ function initialize(light::TCubeLaser)
     numdev = TLI_GetDeviceListSize()
 
     check_err(LD_Open(serialNo), "LD_Open", serialNo)
-    check_err(LD_SetOpenLoopMode(serialNo), "LD_SetOpenLoopMode", serialNo)
-    check_err(LD_RequestReadings(serialNo), "LD_RequestReadings", serialNo)
-    sleep(0.1)
-    out = LD_GetLaserDiodeMaxCurrentLimit(serialNo)
-    record_controller_limit!(light, out)
+    try
+        check_err(LD_SetOpenLoopMode(serialNo), "LD_SetOpenLoopMode", serialNo)
+        check_err(LD_RequestReadings(serialNo), "LD_RequestReadings", serialNo)
+        sleep(0.1)
+        out = LD_GetLaserDiodeMaxCurrentLimit(serialNo)
+        record_controller_limit!(light, out)
+    catch
+        # The open succeeded, so this handle is ours to close; a controller
+        # left open refuses the next `LD_Open` and so blocks the retry. The
+        # close is reported but never rethrown: the failure that stopped
+        # initialization is the one the caller needs.
+        try
+            LD_Close(serialNo)
+        catch closeerr
+            @error "TCubeLaser $serialNo: LD_Close failed while cleaning up a failed initialize" exception = closeerr
+        end
+        rethrow()
+    end
 
     @info "Laser initialized" serialNo devices = numdev controller_max_current = "$(light.controller_max_current) mA" enforced_max_current = "$(effective_max_current(light)) mA"
     return nothing
@@ -122,7 +194,9 @@ Set the diode drive current, in **mA** -- despite the interface name, this
 function has always taken a current, and `properties.power_unit` now says so.
 
 Validates through [`check_current`](@ref) first, so an out-of-range request
-throws before any setpoint reaches the controller. On success
+throws before any setpoint reaches the controller, then encodes the setpoint
+through [`setpoint_code`](@ref), which truncates so that the commanded current
+never exceeds the requested one. On success
 `properties.power` records the current that was accepted; the driver no longer
 derives a milliwatt figure from it, because the linear
 `current * max_power / max_current` guess it used to store was contradicted by
@@ -132,7 +206,7 @@ mode.
 """
 function LightSourceInterface.setpower(light::TCubeLaser, current::Float64)
     check_current(light, current)
-    current_setpoint::UInt16 = UInt16(round(current / light.max_setcurrent * light.max_setpoint))
+    current_setpoint = setpoint_code(light, current)
     check_err(LD_SetLaserSetPoint(light.serialNo, current_setpoint), "LD_SetLaserSetPoint", light.serialNo)
     light.properties.power = current
     println("Laser current set to $current mA")
