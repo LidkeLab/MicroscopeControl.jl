@@ -3,11 +3,56 @@
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project follows the 0.x versioning policy described in the
-README's Installation section (every merge to `main` is tagged; minor bumps
-are interface changes, patch bumps are everything else).
+and this project follows Julia's pre-1.0 versioning convention, described in
+the README's Installation section: in `0.x.y`, `x` is the breaking component
+and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
+
+## [0.2.1] - 2026-09-22
+
+Hardware verification: NOT DONE for the DCAM4 change (touches a driver
+runtime path and no Hamamatsu camera is available here). The `gui.jl`
+change was exercised on simulated devices only.
+
+### Fixed
+- `gui(::LightSource)` no longer commands hardware when the panel is
+  constructed. The power slider and on/off toggle used `lift`, which
+  evaluates immediately on creation, so opening a light source panel used
+  to call `setpower(light, 0.5)` and then `light_off(light)`/`light_on(light)`
+  the instant the window appeared. Both are now wired with `on`, which
+  only fires on a later change to the widget. The slider and toggle are
+  also now initialised from the device's current `properties.power` and
+  `properties.is_on` instead of a hardcoded default, so opening a panel is
+  observably read-only. Caveat: what `properties.power` holds after a
+  `setpower` differs by driver. `SimLight` stores the argument it was given;
+  `TCubeLaser` stores a calculated power while its `setpower` takes current
+  in milliamps, so the displayed and wire units differ; `CrystaLaser`,
+  `VortranLaser` and `DaqTrLight` never write the field, so the slider can
+  display a stale cached value on those three. This is not a new
+  opening-time write, only what the widget displays. The other enabled GUI panels (`stage_interface`,
+  `camera_interface`, `attenuator_interface`, `daq_interface`,
+  `triggerscope_interface`, `pi_n472`) were audited for the same
+  construction-time `lift` pattern; none had it. This does not mean every
+  hardware call is behind a callback: `gui(::DAQ)` queries `showdevices`
+  and `showchannels` directly at construction, outside any `on`/`lift`, to
+  populate its dropdown menus, so it is not observably read-only. The
+  disabled `objective_positioner_interface/gui.jl` (not included in the
+  build) calls `initialize(positioner)` immediately and was excluded from
+  this audit for that reason.
+- `DCAM4Camera()` now throws instead of returning a non-camera value on
+  either SDK failure path, matching the "returns a camera or throws"
+  contract downstream callers (`check_hardware`, `initialize_all`) rely
+  on. Previously, a `dcamapi_init` failure returned a `DCAMERR` value
+  where a camera was expected, and a `dcamdev_open` failure logged an
+  `@error` and returned `nothing` while leaving the DCAM SDK initialised,
+  which is the state a second constructor call was landing in when it
+  crashed downstream. Both failure paths now call `dcamapi_uninit()`
+  before throwing an `ErrorException` naming the device id and the
+  `DCAMERR` code, noting that the camera or controller may already be
+  held by another process. This covers only the two checked SDK return
+  paths: an exception raised after a successful open has no cleanup
+  guard, and `dcamapi_uninit()`'s own return is not checked.
 
 ## [0.2.0] - 2026-09-20
 

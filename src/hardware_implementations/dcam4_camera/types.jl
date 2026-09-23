@@ -46,13 +46,17 @@ function DCAM4Camera(dev_id::Int = 0;
     err, dci = dcamapi_init()
     if is_failed(err)
         dcamapi_uninit()
-        return err
+        error("DCAM4Camera(dev_id=$dev_id): dcamapi_init failed with $err. " *
+              "The DCAM API may already be held by another process (only one process " *
+              "can hold the DCAM SDK at a time).")
     end
 
     err, dco = dcamdev_open(dev_id::Int)
     if err != DCAMERR_SUCCESS
-        @error "Could not open camera"
-        return
+        dcamapi_uninit()
+        error("DCAM4Camera(dev_id=$dev_id): dcamdev_open failed with $err. " *
+              "The camera may already be held open by another process (only one process " *
+              "can hold a given DCAM device at a time).")
     end
 
     im_width, im_height = dcamprop_getsize(dco.hdcam)
