@@ -155,7 +155,12 @@ number the driver invents; `drive_current` is exact and has no lifecycle.
   (`do_port_word`): a single line channel shifts the level to that line's bit;
   a port-wide channel passes the word through unchanged, which is what the old
   code was right about; and a task holding several channels is refused,
-  because one scalar across several lines is ambiguous. A single-line task
+  because one scalar across several lines is ambiguous. A channel name that is
+  neither form — a custom virtual name, or a line range like `.../line0:3` —
+  is refused too, rather than assumed to be a port: `channel_names` returns
+  VIRTUAL names, which DAQmx lets you assign independently of the physical
+  line, so guessing "port" would silently reproduce this very defect on a
+  renamed single-line task. A single-line task
   also refuses any value other than `0` or `1`, since such a value is almost
   certainly a caller pre-shifting around this very defect — and shifting it
   again would drive a *different* line.
