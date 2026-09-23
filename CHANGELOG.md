@@ -9,6 +9,121 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-22
+
+TCube laser driver: safety, then correctness, then unit honesty. Reported
+independently by two downstream rig repositories.
+
+**Hardware verification: NOT DONE.** There is no Thorlabs TCube laser diode
+controller on any build machine, so no change below has been exercised against
+one. Every claim here is traced from the source. That is also why the changes
+are ordered as they are: a change that can only *reduce* what reaches a laser
+diode is worth taking unverified, while a change to what a working rig sees is
+not, and the ones in the latter class are called out individually.
+
+**Interface change (breaking, hence the minor bump).** Three things a working
+caller can see changed:
+
+- `TCubeLaser`'s `properties.power_unit` is now `"mA"` and `properties.power`
+  holds the drive current in milliamps that `setpower` accepted. It used to be
+  labelled `"mW"` and hold `current * max_power / max_current`, a linear
+  current-to-power guess the driver has no way to measure and that the bench
+  data in the (now deleted) `helpers.jl` contradicts. A caller reading
+  `laser.properties.power` as milliwatts now silently reads milliamps, so read
+  `power_unit` or convert at your own boundary.
+- `export_state(::TCubeLaser, sth)` is now `export_state(::TCubeLaser)`. The
+  second positional argument was unused and meant the 1-argument call every
+  other device answers fell through to the throwing stub. A caller passing a
+  second argument now gets a `MethodError`.
+- `TCubeLaser`'s field list and positional order changed (new
+  `controller_max_current`, `daq_device`, `ao_channel`). The keyword
+  constructor `TCubeLaser(serialNo; ...)` is unaffected; a direct positional
+  construction is not.
+
+### Fixed
+- **`setpower(::TCubeLaser, current)` sent out-of-range currents to the diode.**
+  The range check logged `@error` and then execution continued: the setpoint was
+  computed and `LD_SetLaserSetPoint` called anyway, so asking for 500 mA on a
+  160 mA diode produced a log line and 500 mA. It now throws an `ArgumentError`
+  naming the request and both bounds, before any setpoint is computed.
+- **`initialize(::TCubeLaser)` destroyed the caller's current ceiling.** It
+  overwrote `light.max_current` with the controller's own limit from
+  `LD_GetLaserDiodeMaxCurrentLimit` (typically 160-220 mA), so a rig that
+  passed `max_current=80.0` for a weak diode had it replaced, and `setpower`'s
+  range check — which reads that same field — then validated against the
+  controller instead of the diode. The controller's limit now goes to a new
+  `controller_max_current` field (`NaN` until `initialize` runs);
+  `max_current` stays the caller's, and `setpower` enforces the smallest of
+  `max_current`, `controller_max_current` and `max_setcurrent`, ignoring
+  whichever is `NaN`. `max_setcurrent` joins the list because a current above
+  the setpoint DAC's full scale cannot be represented as a `UInt16` at all and
+  used to die in the conversion with an `InexactError` after the range check
+  had passed it.
+- **Every Kinesis return code is now checked.** `initialize`, `light_on`,
+  `setpower`, `light_off`, `shutdown` and `tcube_get_current` each assigned the
+  status of every call to an `err` local and never read it, so a failed open, a
+  failed mode change and a failed setpoint were indistinguishable from success.
+  Each now throws naming the operation and the code. `LD_Close` returns `void`
+  and has nothing to check; `shutdown` closes the connection even when the
+  preceding disable throws, because leaving the handle open would also block
+  the reconnection needed to retry.
+- **`light_on`/`light_off` recorded the request, not the outcome.** Both set
+  `properties.is_on` *before* the call that was supposed to make it true, so a
+  failed enable left the field claiming the laser was on. The field is written
+  after the call succeeds. (`LightSourceProperties.is_on` is a requested-state
+  field across this whole package, not just here; that is a separate interface
+  question, not addressed in this release.)
+- **`setupIO(::TCubeLaser)` hardcoded the DAQ device and channel.** It indexed
+  `devs[2]` and `channelsAO[2]`, raising a bare `BoundsError` on a
+  single-device rig. `TCubeLaser` gains `daq_device=` and `ao_channel=`
+  keywords; when they are given they are validated against what discovery
+  found and used. When they are `nothing` the **default selection is
+  deliberately unchanged** — still the second device and the second AO channel
+  — so a rig that works today keeps driving the same analogue output; what
+  changed is that a failed lookup now names what was found and what to pass.
+- `min_current` defaults to `0.0` instead of `60.0` mA. It is a *lower* bound,
+  so the old default protected nothing and merely rejected safe small currents.
+  A diode-specific floor is the caller's to set.
+
+### Removed
+- **`tcube_get_power`** — it was uncallable four ways over: it referenced an
+  undefined `out`, overwrote its `serialNo` local with the hardcoded literal
+  `"64849775"` immediately before use, discarded the reading it had just
+  fetched, and called `LD_GetPowerReading`, which is not among the bindings in
+  `functions_Tlaser.jl` at all. No correct scaling is derivable from the
+  source, and the controller reports no optical power in the open-loop mode
+  this driver uses, so it was deleted rather than guessed at.
+- **`tcube_refresh`** — it opened the device, enabled the output, drove a
+  hardcoded **90 mA**, slept a second, then disabled and closed. A bench
+  procedure whose name warned no one. Deleted rather than renamed; speak up if
+  a rig depends on it.
+- **`src/hardware_implementations/tcube_laser/helpers.jl`** — a top-level
+  script that built a device list, opened the hardcoded serial `64849775`, set
+  open-loop mode, enabled the output and drove 80 mA, all at `include` time.
+  `TCubeLaserControl.jl` never included it, so it did not run; it was the only
+  worked example of the closed-loop bindings, which is exactly why someone
+  would have included it to crib from. Its measured expected-versus-actual
+  power table and a pointer to the closed-loop call sequence are preserved as
+  a comment in `TCubeLaserControl.jl`.
+
+### Added
+- Tests that do not need a controller, covering the parts of the driver that
+  decide whether a current reaches the diode: constructor defaults,
+  `check_current`'s bounds and message, that a caller's `max_current` survives
+  the controller's limit being recorded, that `setpower` refuses an
+  out-of-range request with its own `ArgumentError` rather than reaching the
+  Kinesis `ccall`, and `export_state`'s arity and contents. The SDK path itself
+  is untested and untestable here.
+- `test/contract.jl` no longer excludes `TCubeLaser` from `no_export_state`,
+  and asserts directly that the 1-argument form dispatches to this type while
+  no extra-argument method survives.
+- The five Claude Code skills' TCube rows are updated, each naming the version
+  that fixed the item, since a downstream may hold an older installed copy.
+  `mc-system-design` also gains an unrelated `[limitation]` note: `using
+  MicroscopeControl` plus a blanket `using GLMakie` makes `Camera` ambiguous
+  (it is the only name both packages export), so a field typed `::Camera`
+  fails with `UndefVarError`.
+
 ## [0.2.2] - 2026-09-22
 
 No functional change; CI configuration and contributor guidance only.

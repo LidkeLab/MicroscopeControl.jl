@@ -20,7 +20,7 @@ the connection; the table shows which drivers currently follow it.
 | `SimCamera()`, `SimStage*()`, `SimLight()` | pure | none | executed |
 | `PIStage()`, `N472()`, `MCLStage()`, `MCS2Stage()` | pure (`connectionstatus=false`, handle 0) | none until `initialize` | executed (constructors), traced (initialize) |
 | `ThorcamDCXCamera()` | pure | none until `initialize` | traced |
-| `TCubeLaser(serialNo; daq=NIdaq())` | pure; stores the Kinesis serial number and a DAQ handle | none until `initialize` | traced |
+| `TCubeLaser(serialNo; daq=NIdaq(), daq_device=nothing, ao_channel=nothing)` | pure; stores the Kinesis serial number, a DAQ handle and (from v0.3.0) the DAQ device/AO channel names `setupIO` should use | none until `initialize` | traced |
 | `Triggerscope4(; portname="COM3")` | creates a `LibSerialPort.SerialPort` object for the port; does not open it | `shutdown`, if `initialize` opened it | traced |
 | `LCC1620(; scope=Triggerscope4(), dac_channel=1)` | constructs its own `Triggerscope4` unless you pass `scope`; validates `dac_channel` against `scope.dacoutputs` with `@error` (does not throw) | as for the scope it holds | traced |
 | **`DCAM4Camera(dev_id=0)`** | **calls `dcamapi_init` and `dcamdev_open`, reads sensor size and exposure.** The camera is claimed before `initialize`; `initialize(::DCAM4Camera)` is then a no-op. **Fixed in 0.2.1:** both failure paths now throw an `ErrorException` naming the device id and the `DCAMERR` code, instead of returning a non-camera value; on each of those two checked paths the constructor calls `dcamapi_uninit()` before it throws. That is not a general guarantee: an exception raised after `dcamdev_open` succeeds has no cleanup guard, and on the two paths that do clean up the cleanup is only *attempted*: `dcamapi_uninit()` checks its own SDK result and logs an `@error` when it fails, but the constructor ignores that return and throws either way, so a failed uninitialize is visible in the log and nowhere else. (Before 0.2.1, neither failure path returned a camera: if `dcamapi_init` failed the constructor called `dcamapi_uninit` itself and returned the `DCAMERR` code; if init succeeded but `dcamdev_open` failed it `@error`d "Could not open camera" and returned `nothing`, **leaving the DCAM API initialized**.) | On success: `shutdown(cam)` (`dcamdev_close` + `dcamapi_uninit`) even if you never called `initialize`. On an installed copy older than 0.2.1, a `nothing` return needs a manual `MicroscopeControl.HardwareImplementations.DCAM4.dcamapi_uninit()` call, or the next `DCAM4Camera()` in the session starts from a half-initialized SDK; check `cam isa DCAM4Camera` before storing it. | traced (hardware verification: NOT DONE for the 0.2.1 fix — no Hamamatsu camera available) |
@@ -44,7 +44,7 @@ The runtime constraints come from object ownership:
 |---|---|---|---|
 | `LCC1620` | `scope::Triggerscope4` | keyword `scope=`; defaults to a fresh `Triggerscope4()` on `COM3` | construct the scope first if you want to share it. `initialize(att)` calls `initialize(att.scope)` itself when the scope's port is not open, then sets the DAC range and drives to `min_voltage`. `shutdown(att)` drives the channel to `min_voltage` (0 V, which is **full transmission** on the LCC1620) and leaves the port open. |
 | `XEM` (module `OK_XEM`) | `daq::NIdaq` | keyword `daq=`; defaults to `NIdaq()` | none: `NIdaq` holds no connection (tasks are created and deleted per operation, `initialize`/`shutdown` are no-ops) |
-| `TCubeLaser` | `daq::NIdaq` for the modulation channel | keyword `daq=` | none, as above |
+| `TCubeLaser` | `daq::NIdaq` for the modulation channel | keyword `daq=` | none, as above. `TCubeLaserControl.setupIO(laser)` creates the AO task and picks the **second** discovered device and its **second** AO channel unless you pass `daq_device=`/`ao_channel=` (those keywords, and a validating error message in place of a bare `BoundsError`, are v0.3.0) |
 | `CrystaLaser`, `VortranLaser`, `DaqTrLight` | `daq::NIdaq` | **built internally**; no keyword, cannot be shared | none; each constructor does its own discovery (see side effects) |
 
 Because `NIdaq` is a stateless handle, several devices each holding their own
@@ -61,9 +61,13 @@ Each is confirmed by the exception sets in upstream `test/contract.jl`
 | Device | Missing | What the call does |
 |---|---|---|
 | `ThorCamCSCCamera` | `initialize`, `export_state` | throws (`AbstractInstrument`/`Camera` stub, `ErrorException("... not implemented ...")`) |
-| `TCubeLaser` | 1-arg `export_state` | defined as `export_state(::TCubeLaser, sth)`; `export_state(laser)` falls through and throws |
 | `Triggerscope4` | `export_state` | `TRIG` is outside `AbstractInstrument`, so there is no fallback at all: plain `MethodError` (executed: `hasmethod(export_state, Tuple{Triggerscope4})` is `false`) |
 | `MLSLM` | `initialize`, `shutdown`, `export_state`, `gui` | `MethodError` for all four (executed) |
+
+`TCubeLaser` was in this table up to v0.2.2: its only `export_state` was
+`export_state(::TCubeLaser, sth)`, with an unused second positional argument, so
+`export_state(laser)` fell through to the throwing stub. **v0.3.0** drops the
+argument and removes the type from upstream's `no_export_state` exception set.
 
 `XEM` (Opal Kelly FPGA, module `OK_XEM`) is not an `AbstractInstrument` and so
 is absent from the API map, but it **does** extend the shared `initialize`

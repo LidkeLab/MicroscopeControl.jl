@@ -101,6 +101,129 @@ const HDF5 = MicroscopeControl.HDF5
         @test light.properties.is_on == false
     end
 
+    # No Thorlabs TCube on any build machine, so nothing here touches the
+    # Kinesis DLL. What *is* testable without one is the part of the driver
+    # that decides whether a current ever reaches the diode, which is
+    # deliberately factored out of the SDK path (`check_current`,
+    # `effective_max_current`, `record_controller_limit!`) for exactly that
+    # reason. See CHANGELOG 0.3.0: hardware verification NOT DONE.
+    @testset "TCube Laser (no hardware)" begin
+        TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
+
+        @testset "Constructor defaults" begin
+            laser = TCubeLaser("00000000")
+            # 60.0 mA used to be the default floor: not a floor at all, since
+            # it is a *lower* bound, so it only rejected safe small currents.
+            @test laser.min_current == 0.0
+            @test laser.max_current == 160.0
+            # `initialize` records the controller's limit here, not over the
+            # caller's `max_current`; NaN means "not read yet".
+            @test isnan(laser.controller_max_current)
+            # setpower takes mA and now says so.
+            @test laser.properties.power_unit == "mA"
+            @test laser.daq_device === nothing
+            @test laser.ao_channel === nothing
+        end
+
+        @testset "Current validation" begin
+            laser = TCubeLaser("00000000")
+
+            @test TCube.check_current(laser, 100.0) == 100.0
+            @test TCube.check_current(laser, 0.0) == 0.0
+            @test_throws ArgumentError TCube.check_current(laser, 500.0)
+            @test_throws ArgumentError TCube.check_current(laser, -1.0)
+            # The message must name the request and both bounds: the old code
+            # logged exactly this information and then proceeded anyway, so an
+            # informative message is not evidence of an enforced limit --
+            # hence the throw assertions above and the ordering test below.
+            err = try
+                TCube.check_current(laser, 500.0)
+            catch e
+                e
+            end
+            @test occursin("500.0", err.msg)
+            @test occursin("160.0", err.msg)
+            @test occursin("0.0", err.msg)
+
+            # A caller floor is honoured.
+            floored = TCubeLaser("00000000"; min_current=20.0)
+            @test_throws ArgumentError TCube.check_current(floored, 10.0)
+
+            # Above the setpoint DAC's full scale is rejected as out of range
+            # rather than dying in `UInt16(...)` with an InexactError.
+            wide = TCubeLaser("00000000"; max_current=400.0)
+            @test TCube.effective_max_current(wide) == wide.max_setcurrent
+            @test_throws ArgumentError TCube.check_current(wide, 300.0)
+        end
+
+        @testset "Caller ceiling survives the controller's limit" begin
+            # The 1b-bis regression: `initialize` used to assign the
+            # controller's limit straight over `max_current`, so a rig that
+            # asked for 80 mA on a weak diode silently got the controller's
+            # 160-220 mA, and `setpower` then validated against the
+            # controller. `record_controller_limit!` is the field-writing half
+            # of `initialize` with the SDK read removed.
+            laser = TCubeLaser("00000000"; max_current=80.0)
+            raw = UInt16(round(160.0 / laser.max_setcurrent * laser.max_setpoint))
+            TCube.record_controller_limit!(laser, raw)
+
+            @test laser.max_current == 80.0 # untouched
+            # rtol, not the default: the raw reading is a UInt16 setpoint, so
+            # 160.0 mA round-trips as 160.003 mA.
+            @test laser.controller_max_current ≈ 160.0 rtol = 1e-3 # recorded separately
+            @test TCube.effective_max_current(laser) == 80.0
+            @test_throws ArgumentError TCube.check_current(laser, 100.0)
+
+            # ... and the controller wins when it is the stricter of the two.
+            strict = TCubeLaser("00000000"; max_current=200.0)
+            TCube.record_controller_limit!(strict, UInt16(round(120.0 / strict.max_setcurrent * strict.max_setpoint)))
+            @test TCube.effective_max_current(strict) ≈ 120.0 rtol = 1e-3
+            @test_throws ArgumentError TCube.check_current(strict, 150.0)
+        end
+
+        @testset "setpower rejects before touching the SDK" begin
+            # Ordering, not just rejection. `setpower`'s first statement is
+            # the range check, so an out-of-range request must fail with the
+            # check's own `ArgumentError`. Under the old code the check was an
+            # `@error` log and execution continued, so the exception *type* is
+            # what distinguishes "refused" from "attempted".
+            #
+            # 200.0 mA is the case that matters and the reason it is here
+            # rather than 500.0 alone: it is over the 160 mA ceiling but under
+            # `max_setcurrent`, so it converts to a valid `UInt16` setpoint and
+            # the old code carried it all the way into the
+            # `LD_SetLaserSetPoint` ccall (executed against the pre-fix driver:
+            # `ErrorException`, "could not load library ...LaserDiode.dll" --
+            # on a Windows rig that call would have driven 200 mA into the
+            # diode). 500.0 and -5.0 happen to die earlier, in `UInt16(...)`
+            # with an `InexactError`, which is a crash rather than a refusal.
+            laser = TCubeLaser("00000000")
+            @test_throws ArgumentError setpower(laser, 200.0)
+            @test_throws ArgumentError setpower(laser, 500.0)
+            @test_throws ArgumentError setpower(laser, -5.0)
+            # A refused request must not be recorded as the laser's state.
+            # The old code wrote it before the call: `setpower(laser, 200.0)`
+            # left `properties.power == 125.0` (executed).
+            @test laser.properties.power == 0.0
+        end
+
+        @testset "export_state" begin
+            laser = TCubeLaser("00000000"; daq_device="Dev2", ao_channel="Dev2/ao1")
+            attrs, data, children = export_state(laser) # 1-arg: used to throw
+            @test attrs isa Dict{String,Any}
+            @test attrs["power_unit"] == "mA"
+            @test attrs["min_current"] == 0.0
+            @test attrs["max_current"] == 160.0
+            @test isnan(attrs["controller_max_current"])
+            @test attrs["daq_device"] == "Dev2"
+            @test attrs["ao_channel"] == "Dev2/ao1"
+            @test data === nothing
+            @test haskey(children, "daq")
+            # `nothing` is not writable as an HDF5 attribute; unset must be "".
+            @test export_state(TCubeLaser("00000000"))[1]["daq_device"] == ""
+        end
+    end
+
     @testset "Export State" begin
         devices = [SimCamera(), SimStage3d(), SimStage2d(), SimStage1d(), SimLight()]
 

@@ -149,8 +149,11 @@ end
 
 All 24 assertions pass for these six types (executed). Substitute your rig's
 types; today the same loop fails for `ThorCamCSCCamera` (`initialize`,
-`export_state`) and `TCubeLaser` (`export_state`), naming the device that would
-throw during `shutdown` before it does.
+`export_state`), naming the device that would throw during `shutdown` before it
+does. `TCubeLaser` failed the `export_state` assertion too until **v0.3.0**,
+which dropped the unused second positional argument from
+`export_state(::TCubeLaser, sth)`; an installed copy of this skill older than
+that still lists it.
 
 Behavioural tests on top, executed:
 

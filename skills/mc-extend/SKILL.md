@@ -207,7 +207,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 | Calibration | table in the device (`AttenuatorProperties.cal_*`); values from the rig | `LCC1620.settransmission` `@error`s and returns when uncalibrated |
 | Cached versus measured | name it (`power_requested`); update `real_*` only from a readback | Sim stages copy `targ_*` into `real_*`; `getposition(::SimStage3d)` returns a scalar, not the documented tuple (executed) |
 | Image axis convention | `(H, W)` per frame, `(H, W, N)` per stack; at a row-major SDK boundary `permutedims(reshape(buf, (W, H)), (2, 1))` | DCAM4 does this in `dcambuf.jl`; `SimCamera` returns `(roi.height, roi.width[, N])` (executed); `save_h5` stamps `dimension_order` assuming it |
-| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `TCubeLaser` has only a 2-arg method, so the contract call throws; `Triggerscope4` has none (`MethodError`) |
+| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `Triggerscope4` has none (`MethodError`). `TCubeLaser` had only a 2-arg method until **v0.3.0**, so the contract call threw; fixed there |
 | Unsupported operations | do not define the method; let the throwing stub answer | `stopmotion(::MCLStage)` is a concrete method whose body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed), so `hasmethod` and the API map count it as implemented |
 
 ## 4. Define a new interface (rare, consequential)

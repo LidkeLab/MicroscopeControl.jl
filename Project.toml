@@ -1,6 +1,6 @@
 name = "MicroscopeControl"
 uuid = "aa70d9ae-4a1e-49fd-870a-8ccfd99f4c3e"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["klidke@unm.edu"]
 
 [deps]

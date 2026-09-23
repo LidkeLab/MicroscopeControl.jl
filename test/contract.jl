@@ -82,16 +82,19 @@ end
     # Triggerscope4 defines initialize/shutdown itself, gets gui from the shared
     # `gui(::TRIG)`, but has no export_state.
     # ThorCamCSCCamera lacks a lifecycle method (pre-existing, not touched by
-    # this naming/dispatch-only PR); TCubeLaser's export_state takes an extra
-    # unused positional argument, so the 1-arg contract call never reaches it
-    # and falls through to the (now-throwing) instrument-level stub. All are
-    # pre-existing gaps, listed here rather than papered over. NIdaq now has
-    # concrete no-op initialize/shutdown (nidaq/interface_methods.jl), so it
-    # is no longer excluded.
+    # this naming/dispatch-only PR). All are pre-existing gaps, listed here
+    # rather than papered over. NIdaq now has concrete no-op
+    # initialize/shutdown (nidaq/interface_methods.jl), so it is no longer
+    # excluded. TCubeLaser used to be excluded from `no_export_state` too --
+    # its `export_state` took an extra unused positional argument, so the
+    # 1-arg contract call never reached it and fell through to the
+    # (throwing) instrument-level stub; the argument is gone as of 0.3.0 and
+    # the exclusion with it, which is what makes the generic assertion below
+    # cover this type.
     no_core_methods = Set([:MLSLM])
     no_initialize = Set([:ThorCamCSCCamera])
     no_shutdown = Set{Symbol}()
-    no_export_state = Set([:MLSLM, :Triggerscope4, :ThorCamCSCCamera, :TCubeLaser])
+    no_export_state = Set([:MLSLM, :Triggerscope4, :ThorCamCSCCamera])
 
     interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG)
 
@@ -216,6 +219,19 @@ end
             @test has_specific_method(MC.light_on, T) # the arity drivers actually implement
             @test has_specific_method(MC.light_off, T)
         end
+
+        # `export_state` arity, named for the type it was actually wrong on.
+        # The generic loop above now covers `TCubeLaser` (it is no longer in
+        # `no_export_state`), but "a 1-arg method exists" does not by itself
+        # rule out the shape of the bug: the old
+        # `export_state(::TCubeLaser, sth)` had an unused second positional
+        # argument, so `export_state(laser)` matched nothing on this type and
+        # fell through to the throwing stub. Assert both halves -- the 1-arg
+        # form dispatches here, and no extra-argument method survives to be
+        # called by mistake. No other `export_state` method in the package
+        # takes more than one argument, so the negative is meaningful.
+        @test has_specific_method(MC.export_state, MC.TCubeLaser)
+        @test !hasmethod(MC.export_state, Tuple{MC.TCubeLaser,Any})
     end
 
     @testset "Stub throws" begin
