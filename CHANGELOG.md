@@ -3,13 +3,13 @@
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project follows the 0.x versioning policy described in the
-README's Installation section (every merge to `main` is tagged; minor bumps
-are interface changes, patch bumps are everything else).
+and this project follows Julia's pre-1.0 versioning convention, described in
+the README's Installation section: in `0.x.y`, `x` is the breaking component
+and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-09-21
+## [0.2.1] - 2026-09-22
 
 Hardware verification: NOT DONE for the DCAM4 change (touches a driver
 runtime path and no Hamamatsu camera is available here). The `gui.jl`

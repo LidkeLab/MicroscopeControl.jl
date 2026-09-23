@@ -1,6 +1,6 @@
 using GLMakie
 
-# Regression tests for the lightsource_interface/gui.jl fix (CHANGELOG 0.3.0):
+# Regression tests for the lightsource_interface/gui.jl fix (CHANGELOG 0.2.1):
 # constructing a device's control panel must not command the hardware. A
 # `lift` evaluates immediately when it is created, so wiring a side effect
 # (setpower, light_on/light_off, move, ...) to a widget's observable with

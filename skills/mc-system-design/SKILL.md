@@ -210,7 +210,7 @@ a safe instrument.
 ### Decision 2: a camera whose constructor opens hardware (traced)
 
 ```julia
-cam = DCAM4Camera(0)   # throws (since 0.3.0) on either SDK failure path; catch and handle if you need to fall back
+cam = DCAM4Camera(0)   # throws (since 0.2.1) on either SDK failure path; catch and handle if you need to fall back
 # From here the camera is CLAIMED even though initialize(cam) has not run (it is a no-op for this driver).
 # If anything below fails before the system is built, shutdown(cam) is owed NOW.
 ```
@@ -221,7 +221,7 @@ The executed `Bench` below keeps one `owned` list of every device currently
 holding hardware; a constructor-claimed device is passed in as
 `claimed_at_construction=(cam,)` so it is owned before `initialize` runs, is
 skipped by `initialize`, and is closed by the same `release!` that closes
-everything else. **Fixed in 0.3.0:** `DCAM4Camera()` used to return a
+everything else. **Fixed in 0.2.1:** `DCAM4Camera()` used to return a
 `DCAMERR` code or `nothing` on failure (a `nothing` return additionally left
 the DCAM SDK initialized, so you had to call
 `MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself before the next
@@ -233,7 +233,7 @@ cleanup is only *attempted* -- `dcamapi_uninit()` checks its own SDK result
 and logs an `@error` when it fails, but the constructor ignores that return
 and throws either way, so a failed uninitialize shows up in the log and
 nowhere else. If you're on an installed copy older
-than 0.3.0, guard the return value yourself --
+than 0.2.1, guard the return value yourself --
 `cam isa DCAM4Camera || error("DCAM4 open failed: $(repr(cam))")` -- and on
 a `nothing` return call
 `MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself before the
@@ -486,7 +486,7 @@ stop; each is false at v0.2.0.
 
 ## Two more limitations that bear on design
 
-- **Fixed in 0.3.0.** `gui(::LightSource)` used to call `setpower(light, 0.5)`
+- **Fixed in 0.2.1.** `gui(::LightSource)` used to call `setpower(light, 0.5)`
   the moment the panel opened: the slider's `lift` fired on creation with its
   start value (traced from `lightsource_interface/gui.jl`; executed against a
   fake-transport light, which threw from inside `gui`). The slider and toggle
@@ -500,7 +500,7 @@ stop; each is false at v0.2.0.
   `VortranLaser` and `DaqTrLight` never write the field at all, so the slider
   can display a stale cached value on those three. This is not a new opening-time write -- it is
   about what the widget shows. If you're on an installed copy older
-  than 0.3.0, this was a real hazard on a laser, and a reason a system may
+  than 0.2.1, this was a real hazard on a laser, and a reason a system may
   want its own panel, or to open the shared one only with the shutter closed
   or the laser off.
 - **[limitation]** `getposition(::SimStage3d)` returns a scalar (`3.0` after

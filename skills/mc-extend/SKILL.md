@@ -178,7 +178,7 @@ carry:
   value of `capture` as the frame. All four upstream cameras carry every field
   (executed).
 - **LightSource / Attenuator**: `unique_id` and `properties`
-  (`LightSourceProperties` / `AttenuatorProperties`). **Fixed in 0.3.0:** the
+  (`LightSourceProperties` / `AttenuatorProperties`). **Fixed in 0.2.1:** the
   light panel used to call `setpower(light, 0.5)` the moment it opened (the
   slider `lift` fired at creation), so opening a panel was a hardware write;
   a driver whose `setpower` correctly throws on a closed link would throw
@@ -197,7 +197,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 
 | Obligation | Do this | Because |
 |---|---|---|
-| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.3.0:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths *attempts* to uninitialize the SDK first (`dcamapi_uninit()` logs an `@error` if that fails, but the constructor ignores its return and throws anyway); an exception after a successful open has no such guard |
+| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.2.1:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths *attempts* to uninitialize the SDK first (`dcamapi_uninit()` logs an `@error` if that fails, but the constructor ignores its return and throws anyway); an exception after a successful open has no such guard |
 | Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | `CrystaLaser()` builds its own `NIdaq()`, first device, first channel; cannot be shared or configured |
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
 | Failure visibility | throw, or set `last_error` and return `nothing`, and document which | the DAQ-backed lights `@warn` and return on an empty channel list: "initialized" and inert |

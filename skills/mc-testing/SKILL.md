@@ -200,10 +200,10 @@ if it bothers CI; it is not an error.
 `gui(SimStage3d())` all throw `FieldError: type SimStage3d has no field stagelabel`.
 The shared stage panel reads `stage.stagelabel` unguarded for its window title
 and the Sim stages carry `label`. So a "every panel opens" smoke test cannot be
-written against the simulated stages as of 0.3.0; `gui(SimCamera())` and
+written against the simulated stages as of 0.2.1; `gui(SimCamera())` and
 `gui(SimLight())` open (executed), as do `gui(PIStage())`, `gui(MCLStage())` and
 `gui(MCS2Stage())` with no hardware attached, because those constructors are
-pure. **Fixed in 0.3.0:** `gui(::LightSource)` used to call
+pure. **Fixed in 0.2.1:** `gui(::LightSource)` used to call
 `setpower(light, 0.5)` on open (executed against a fake-transport light,
 before the fix); opening **the shared light panel** is now observably
 read-only. That is the scope of the fix: it says nothing about the other
@@ -257,7 +257,7 @@ because nothing above touches it:
 - timing: settling after `move`, `sequence` completion, live-view stop order
   (`mc-acquire`), and that a failed acquisition's `abort` leaves the SDK in a
   state the next acquisition can use (the Sim cannot show this). (Opening a
-  light panel no longer commands power as of 0.3.0, so that is no longer a
+  light panel no longer commands power as of 0.2.1, so that is no longer a
   hardware-acceptance item — see the GUI smoke test section above.)
 - SDK failure paths: what `capture` returns on failure per driver (`nothing`,
   or `ThorCamCSCCamera`'s silent all-zero frame);

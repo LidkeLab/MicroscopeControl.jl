@@ -65,7 +65,7 @@ cameras whose `capture` returns the frame.
 
 Read `unique_id` and `properties` (`LightSourceProperties.min_power`,
 `max_power`, `power`; `AttenuatorProperties`). Every current light and the
-`LCC1620` carry both (executed). **Fixed in 0.3.0:** the light panel's slider
+`LCC1620` carry both (executed). **Fixed in 0.2.1:** the light panel's slider
 and toggle used to be wired with `lift`, which fires on creation, so opening
 the panel called `setpower(light, 0.5)` immediately, then `light_on`/
 `light_off` on the toggle's initial value: opening a GUI was a hardware

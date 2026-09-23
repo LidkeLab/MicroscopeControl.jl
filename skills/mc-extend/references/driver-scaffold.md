@@ -90,7 +90,7 @@ What the run showed:
 | `shutdown(led)` then `setpower(led, 1.0)` | port closed; `setpower` throws `FakePort: write on closed port` instead of pretending |
 | `initialize(SerialLED(port=FakePort(fail_open=true)))` | throws `FakePort: device not present`; nothing to clean up because nothing opened |
 | `export_state` -> `save_attributes_and_data` -> read back | `is_on` reads back `0.0` (Bool becomes Float64), `power_requested == 12.5` |
-| `gui(led)` after `shutdown(led)` (recorded against MC 0.2.0, before the panel's `lift`->`on` fix) | **threw from inside `gui`**: the shared light panel called `setpower(light, 0.5)` when it opened (see the "Fixed in 0.3.0" note in the GUI section of the parent `SKILL.md`). On 0.3.0+, constructing the panel no longer calls `setpower`/`light_on`/`light_off` at all, so `gui(led)` here no longer throws for this reason. |
+| `gui(led)` after `shutdown(led)` (recorded against MC 0.2.0, before the panel's `lift`->`on` fix) | **threw from inside `gui`**: the shared light panel called `setpower(light, 0.5)` when it opened (see the "Fixed in 0.2.1" note in the GUI section of the parent `SKILL.md`). On 0.2.1+, constructing the panel no longer calls `setpower`/`light_on`/`light_off` at all, so `gui(led)` here no longer throws for this reason. |
 
 The interface stub signature is the contract you are satisfying **[guarantee]**:
 `setpower(::LightSource, ::Float64)` and `light_off(::LightSource)`.
