@@ -177,11 +177,30 @@ function do_port_word(channels::Vector{String}, value::Float64)
         "($(join(channels, ", "))). A single scalar across several digital lines is ambiguous; " *
         "use one task per line, or write the port word to a port-wide task.")
     channel = channels[1]
-    m = match(r"/line(\d+)$", channel)
-    if m === nothing
+    line = match(r"/line(\d+)$", channel)
+    port = match(r"/port\d+$", channel)
+    if line === nothing && port === nothing
+        # NOT a fallback to port semantics. `DAQmx.channel_names` returns
+        # VIRTUAL names, which DAQmx lets you assign independently of the
+        # physical line, and the wrapper exposes no physical-name lookup. So a
+        # task on line 1 named "shutter" is indistinguishable here from a
+        # port-wide task -- and guessing "port" would silently reproduce the
+        # very defect this function exists to fix. A line range
+        # (`.../line0:3`) lands here too, and one scalar across a range needs a
+        # grouping policy this driver does not have. Refuse instead.
+        error("setvoltage(::NIdaq, ::DOTask, value): cannot tell what \"$(channel)\" addresses. " *
+              "Digital scalar writes are port format (bit n = line n), so the value to send " *
+              "depends on whether the task holds one line or a whole port, and this name is " *
+              "neither `.../portN/lineK` nor `.../portN`. It is probably a custom virtual " *
+              "channel name or a line range; DAQmx does not expose the physical mapping " *
+              "through this wrapper. Create the task with the physical channel string, one " *
+              "line per task. `createtask(daq, \"DO\", channel)` does that.")
+    end
+    if port !== nothing
         # A port-wide task: the caller's value IS the port word.
         return UInt32(value)
     end
+    m = line
     (value == 0 || value == 1) || error(
         "setvoltage(::NIdaq, ::DOTask, value): $(channel) is a single line, so value must be " *
         "0 or 1, got $(value). If you are pre-shifting a port word to work around digital " *

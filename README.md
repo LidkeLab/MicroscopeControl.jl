@@ -76,21 +76,37 @@ using Pkg
 Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
 ```
 
-**You must also repeat this package's unregistered dependency in your own
-`Project.toml`.** `Pkg` honours `[sources]` only in the *root* project, never
-in a dependency's, so the entry MicroscopeControl declares for `DAQmx` does
-nothing for you. Without it a clean `Pkg.instantiate` fails with
-`DAQmx has no known versions`:
+**You must also declare this package's unregistered dependency in your own
+`Project.toml`.** A `[sources]` entry in a *dependency* is not reliably used
+when resolving your project, so the one MicroscopeControl declares for `DAQmx`
+may do nothing for you, and a clean `Pkg.instantiate` then fails with
+`DAQmx has no known versions`.
+
+The simplest fix is to add `DAQmx` by URL **before** MicroscopeControl, which
+writes both entries for you:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+```
+
+If you write the TOML by hand, `[sources]` alone is **not** enough — Julia
+rejects a project whose `[sources]` names something absent from `[deps]` with
+`Sources for DAQmx not listed in deps or extras section`. You need both:
 
 ```toml
+[deps]
+DAQmx = "bc903ccc-f951-4f60-9748-ff64248ad6aa"
+
 [sources]
 DAQmx = {url = "https://github.com/LidkeLab/DAQmx.jl.git"}
 ```
 
-This only bites on a machine that has never resolved `DAQmx` before, which is
-why it tends to appear first on a fresh instrument PC rather than on a
+This surfaces on an environment that has not already resolved `DAQmx`, which
+is why it tends to appear first on a fresh instrument PC rather than on a
 development box. Registering `DAQmx.jl`, or publishing a lab registry, would
-remove the requirement.
+remove the requirement entirely.
 
 Advance the pinned tag deliberately when you want a newer release. `Pkg.develop` (tracking `main` directly, no tag) is for contributors working on the package itself, not for rig code that depends on it.
 

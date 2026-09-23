@@ -145,10 +145,12 @@ number the driver invents; `drive_current` is exact and has no lifecycle.
   task, and nothing happened — no error, no warning. Only line 0 ever worked.
   Confirmed on hardware by a rig repository (NI-DAQmx 23.5, USB-6008): a TTL
   shutter on `port0/line1` ignored `1` and responded to `2`.
-  `VortranLaser.light_on` was worse than a no-op: it wrote `8.0`, as though
-  this were a voltage, setting bit 3 — not the line its task holds — so the
-  intended line was driven LOW and the laser did not come on. It now writes
-  `1.0`.
+  `VortranLaser.light_on` wrote `8.0`, as though this were a voltage, setting
+  bit 3 of the port word. `channelsDO[12]` is an enumeration index rather than
+  a line number, so that addressed the intended line only on a rig where the
+  twelfth discovered channel happens to be line 3; anywhere else `light_on`
+  drove the intended line LOW and the laser did not come on. It now writes
+  `1.0`. Not hardware-verified — no Vortran here.
   `setvoltage` now computes the port word from what the task actually holds
   (`do_port_word`): a single line channel shifts the level to that line's bit;
   a port-wide channel passes the word through unchanged, which is what the old

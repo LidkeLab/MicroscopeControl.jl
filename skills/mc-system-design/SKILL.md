@@ -26,20 +26,32 @@ read as another.
 
 ## Before anything: depending on MicroscopeControl
 
-**[limitation]** Pinning the tag is not enough. MicroscopeControl depends on the
-unregistered `DAQmx.jl` and declares it in its own `[sources]`, but `Pkg`
-honours `[sources]` only in the **root** project, never in a dependency's. So
-your `Project.toml` must repeat the entry or a clean `Pkg.instantiate` fails
-with `DAQmx has no known versions`:
+**[limitation]** Pinning the tag is not enough. MicroscopeControl depends on
+the unregistered `DAQmx.jl`, and a `[sources]` entry in a *dependency* is not
+reliably used when resolving your project, so a clean `Pkg.instantiate` can
+fail with `DAQmx has no known versions`. Add `DAQmx` by URL **before**
+MicroscopeControl and Pkg writes both entries for you:
+
+```julia
+Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+```
+
+Writing the TOML by hand needs **both** a `[deps]` and a `[sources]` entry —
+`[sources]` alone is rejected with `Sources for DAQmx not listed in deps or
+extras section`:
 
 ```toml
+[deps]
+DAQmx = "bc903ccc-f951-4f60-9748-ff64248ad6aa"
+
 [sources]
 DAQmx = {url = "https://github.com/LidkeLab/DAQmx.jl.git"}
 ```
 
-This bites only on a machine that has never resolved `DAQmx`, which is why it
-surfaces on a fresh instrument PC rather than on the box where the system was
-written. Reported from a rig PC, 2026-09-23.
+It surfaces on an environment that has not already resolved `DAQmx`, which is
+why it appears on a fresh instrument PC rather than on the box where the system
+was written. Reported from a rig PC, 2026-09-23.
 
 ## Where to go
 

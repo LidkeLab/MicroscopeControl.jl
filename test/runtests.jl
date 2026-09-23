@@ -660,6 +660,18 @@ include("tcube_fake_sdk.jl")
         # Several channels in one task is ambiguous and is refused.
         @test_throws ErrorException DAQ.do_port_word(
             ["Dev1/port0/line0", "Dev1/port0/line1"], 1.0)
+
+        # A name that is neither a line nor a port is REFUSED, not assumed to
+        # be a port. `channel_names` returns VIRTUAL names, which DAQmx lets
+        # you assign independently of the physical line, so a renamed line task
+        # would otherwise fall through to port semantics and reproduce the
+        # original defect exactly.
+        @test_throws ErrorException DAQ.do_port_word(["shutter"], 1.0)
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/myLine"], 1.0)
+        # A line RANGE needs a grouping policy this driver does not have.
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/port0/line0:3"], 1.0)
+        # A line with no port still reads as a line.
+        @test DAQ.do_port_word(["Dev1/line5"], 1.0) === UInt32(32)
     end
 
     @testset "Export State" begin
