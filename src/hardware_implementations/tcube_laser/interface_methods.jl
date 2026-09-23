@@ -229,6 +229,15 @@ function initialize(light::TCubeLaser)
     try
         check_err(LD_SetOpenLoopMode(serialNo), "LD_SetOpenLoopMode", serialNo)
         check_err(LD_RequestReadings(serialNo), "LD_RequestReadings", serialNo)
+        # The diode current limit has its OWN request in the Kinesis API, and
+        # `LD_RequestReadings` does not stand in for it. Reading the limit
+        # after only the generic request can hand back a stale or never-
+        # populated cache -- and this value feeds `effective_max_current`, so a
+        # stale one widens or narrows the ceiling `setpower` enforces. Not
+        # hardware-verified: reported by the 642 nm rig from the Kinesis header
+        # while building its probe, which will measure whether the two differ.
+        check_err(LD_RequestLaserDiodeMaxCurrentLimit(serialNo),
+                  "LD_RequestLaserDiodeMaxCurrentLimit", serialNo)
         sleep(0.1)
         out = LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         record_controller_limit!(light, out)

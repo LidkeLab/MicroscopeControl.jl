@@ -273,6 +273,7 @@ include("tcube_fake_sdk.jl")
 
             @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
                 "LD_Open", "LD_SetOpenLoopMode", "LD_RequestReadings",
+                "LD_RequestLaserDiodeMaxCurrentLimit",
                 "LD_GetLaserDiodeMaxCurrentLimit"]
             @test laser.max_current == 80.0 # survived initialize
             @test laser.controller_max_current ≈ 160.0 rtol = 1e-3
@@ -580,6 +581,18 @@ include("tcube_fake_sdk.jl")
             @test haskey(children, "daq")
             # `nothing` is not writable as an HDF5 attribute; unset must be "".
             @test export_state(TCubeLaser("00000000"))[1]["daq_device"] == ""
+
+            # The diode current limit has a dedicated Kinesis request;
+            # `LD_RequestReadings` does not refresh it. Since the limit feeds
+            # the enforced ceiling, reading it after only the generic request
+            # can enforce a stale bound. Assert the dedicated request is made,
+            # and made BEFORE the read.
+            FakeKinesis.reset!(limit_raw = 23830)
+            initialize(TCubeLaser("00000000"))
+            @test "LD_RequestLaserDiodeMaxCurrentLimit" in FakeKinesis.calls
+            @test findfirst(==("LD_RequestLaserDiodeMaxCurrentLimit"), FakeKinesis.calls) <
+                  findfirst(==("LD_GetLaserDiodeMaxCurrentLimit"), FakeKinesis.calls)
+            FakeKinesis.reset!()
 
             # The one place `legacy_power` deliberately diverges from 0.2.2:
             # a caller assigning `max_current` AFTER `initialize`. 0.2.2 divided

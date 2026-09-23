@@ -117,6 +117,8 @@ end
     LD_Close(serialNo) = (Main.FakeKinesis.record!("LD_Close"); nothing)
     LD_SetOpenLoopMode(serialNo) = Main.FakeKinesis.record!("LD_SetOpenLoopMode")
     LD_RequestReadings(serialNo) = Main.FakeKinesis.record!("LD_RequestReadings")
+    LD_RequestLaserDiodeMaxCurrentLimit(serialNo) =
+        Main.FakeKinesis.record!("LD_RequestLaserDiodeMaxCurrentLimit")
     LD_EnableOutput(serialNo) = Main.FakeKinesis.record!("LD_EnableOutput")
     LD_DisableOutput(serialNo) = Main.FakeKinesis.record!("LD_DisableOutput")
     function LD_SetLaserSetPoint(serialNo, laserDiodeCurrent)
