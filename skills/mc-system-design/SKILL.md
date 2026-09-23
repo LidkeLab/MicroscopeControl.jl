@@ -24,6 +24,23 @@ read as another.
 - **[policy]** a recommendation for the system you are building. MC does not
   enforce it and nothing breaks if you ignore it, except your instrument.
 
+## Before anything: depending on MicroscopeControl
+
+**[limitation]** Pinning the tag is not enough. MicroscopeControl depends on the
+unregistered `DAQmx.jl` and declares it in its own `[sources]`, but `Pkg`
+honours `[sources]` only in the **root** project, never in a dependency's. So
+your `Project.toml` must repeat the entry or a clean `Pkg.instantiate` fails
+with `DAQmx has no known versions`:
+
+```toml
+[sources]
+DAQmx = {url = "https://github.com/LidkeLab/DAQmx.jl.git"}
+```
+
+This bites only on a machine that has never resolved `DAQmx`, which is why it
+surfaces on a fresh instrument PC rather than on the box where the system was
+written. Reported from a rig PC, 2026-09-23.
+
 ## Where to go
 
 | You want to | Skill |

@@ -72,11 +72,17 @@ declares the `is*` fields as C++ `bool` (one byte), and they are typed here as
 `BOOL` = `Cuint` (four). If that is right, every field from `isKnownType`
 onward is misaligned and `TLI_GetDeviceInfo` returns nonsense. Nothing in this
 package calls `TLI_GetDeviceInfo`, so the defect is latent rather than active,
-and it is left alone rather than corrected because changing a struct's layout
-without a controller to test against trades a known-suspect layout for an
-unknown one. Fix it with hardware present, or do not call it. The function
-signatures in `functions_Tlaser.jl` had the same discrepancy and WERE
-corrected -- see `CPPBOOL` -- because there the fix does not move any field.
+and it is left alone as deferred ABI repair rather than corrected in passing.
+
+Correcting it is more than retyping the five fields, and does NOT need a
+controller -- it needs the vendor header, which this repo does not carry. The
+header declares the structure `#pragma pack(1)` at 100 bytes; this declaration
+is 120, and the divergence starts at `PID`, *before* the first `bool`. So
+retyping the booleans alone would leave it wrong. Repair it against the header,
+with the size asserted, or do not call it. The function signatures in
+`functions_Tlaser.jl` had a related discrepancy and WERE corrected -- see
+`CPPBOOL` -- because there the fix moves no field and the ABI rule is
+unambiguous.
 """
 struct TLI_DeviceInfo
     typeID::DWORD

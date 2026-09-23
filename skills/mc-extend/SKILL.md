@@ -53,8 +53,10 @@ shim exactly when it is needed. Install only while `which` still resolves to
 the known abstract stub:
 
 ```julia
+# Runs at load. Installs the shim only while dispatch still lands on the
+# abstract stub, so it stands aside once upstream defines the method.
 if which(MC.export_state, Tuple{MC.TCubeLaser}).sig.parameters[2] === MC.AbstractInstrument
-    MC.export_state(l::MC.TCubeLaser) = ...   # stands aside once upstream defines it
+    @eval MC.export_state(l::MC.TCubeLaser) = (Dict{String,Any}("unique_id" => l.unique_id), nothing, Dict{String,Any}())
 end
 ```
 

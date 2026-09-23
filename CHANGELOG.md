@@ -9,6 +9,18 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
+### Fixed (documentation)
+- **Depending on this package needs more than pinning the tag, and the docs did
+  not say so.** MicroscopeControl depends on the unregistered `DAQmx.jl` and
+  declares it in its own `[sources]`, but `Pkg` honours `[sources]` only in the
+  **root** project, never in a dependency's — so a downstream must repeat the
+  entry or a clean `Pkg.instantiate` fails with `DAQmx has no known versions`.
+  It bites only on a machine that has never resolved `DAQmx`, which is why it
+  surfaced first on an instrument PC rather than on a development box.
+  Documented in the README's Installation Notes and in `mc-system-design`.
+  Registering `DAQmx.jl`, or publishing a lab registry, would remove the
+  requirement. The README's install example also still named `v0.1.0`.
+
 ## [0.2.3] - 2026-09-23
 
 TCube laser driver: safety, then correctness, then saying what was actually
@@ -65,10 +77,15 @@ had built on top of what it happened to do:
    `[min_current, max_current]` gets a different current for the same
    percentage: on the 642 nm rig that reported it, 40 % fell from about 94 mA
    to about 53 mA, below the lasing threshold, so the laser went dark at every
-   setting under about 41 % **with no error**. Note that figure combines this
-   change with item 2 — the lower endpoint moving 60 → 0 accounts for about
-   36 mA of it, and the upper endpoint no longer being replaced by the
-   controller's 160.9 mA accounts for the rest. Nothing throws, because every
+   setting under about 41 % **with no error**. Their mapping is
+   `current = min_current + (p - 10)/90 * (max_current - min_current)` for
+   `p` in 10..100, so the arithmetic is checkable: at 40 %, `[60, 160.9]` gives
+   93.6 mA and `[0, 160]` gives 53.3 mA. Almost all of that is this change —
+   moving the lower endpoint to 0 accounts for 40.0 mA of the 40.3 mA drop —
+   and item 2 contributes the remaining 0.3 mA, because their controller's
+   limit (160.9 mA) and the `max_current` default (160.0) happen to be nearly
+   equal on this rig. On a rig where those two differ, item 2 dominates
+   instead, in whichever direction. Nothing throws, because every
    value in the new range is legal. If you map across this range, pass
    `min_current` explicitly. The default is still `0.0`: a 60 mA floor is
    actively dangerous on a low-power diode — the 405 nm consumer caps its diode

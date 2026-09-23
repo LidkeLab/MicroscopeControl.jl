@@ -73,8 +73,24 @@ Since this package is under active development and not yet registered, install i
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.1.0")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
 ```
+
+**You must also repeat this package's unregistered dependency in your own
+`Project.toml`.** `Pkg` honours `[sources]` only in the *root* project, never
+in a dependency's, so the entry MicroscopeControl declares for `DAQmx` does
+nothing for you. Without it a clean `Pkg.instantiate` fails with
+`DAQmx has no known versions`:
+
+```toml
+[sources]
+DAQmx = {url = "https://github.com/LidkeLab/DAQmx.jl.git"}
+```
+
+This only bites on a machine that has never resolved `DAQmx` before, which is
+why it tends to appear first on a fresh instrument PC rather than on a
+development box. Registering `DAQmx.jl`, or publishing a lab registry, would
+remove the requirement.
 
 Advance the pinned tag deliberately when you want a newer release. `Pkg.develop` (tracking `main` directly, no tag) is for contributors working on the package itself, not for rig code that depends on it.
 
