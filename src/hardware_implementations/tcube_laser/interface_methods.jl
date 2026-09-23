@@ -16,6 +16,38 @@ function check_err(err, operation::AbstractString, serialNo::AbstractString)
 end
 
 """
+    check_power_unit(unit::AbstractString, serialNo::AbstractString)
+    check_power_unit(light::TCubeLaser)
+
+Throw an `ArgumentError` unless `properties.power_unit` is `"mA"`.
+
+The label is not decoration. `setpower` takes a drive current in milliamps and
+`properties.power` stores the current it accepted, so any other label puts
+milliamps under a foreign name and carries it into `export_state` and the HDF5
+attributes written from it.
+
+Checked at three points, not one. The constructor is the earliest, but it is
+not a barrier: `properties` is a mutable struct the caller keeps a reference
+to, `power_unit` is a plain mutable field, and the struct's auto-generated
+positional constructor does not run the keyword constructor's check at all. So
+the invariant is enforced where it actually matters -- at [`setpower`](@ref),
+the use boundary, and [`export_state`](@ref), the boundary the metadata leaves
+by. Both are refusals: a wrongly labelled device cannot command a current and
+cannot be serialized, rather than doing either under a false name.
+"""
+function check_power_unit(unit::AbstractString, serialNo::AbstractString)
+    unit == "mA" || throw(ArgumentError(
+        "TCubeLaser $serialNo: properties.power_unit must be \"mA\", got \"$unit\". " *
+        "This controller drives the diode in open-loop current mode: `setpower` takes a drive current in " *
+        "milliamps and `properties.power` records the current it accepted, not an optical power, so any " *
+        "other label would be false -- including in `export_state` and the HDF5 attributes written from it. " *
+        "Convert to your own units at your own boundary."))
+    return nothing
+end
+
+check_power_unit(light::TCubeLaser) = check_power_unit(light.properties.power_unit, light.serialNo)
+
+"""
     effective_max_current(light::TCubeLaser)
 
 The ceiling `setpower` enforces, in mA: the smallest of the caller's
@@ -51,6 +83,21 @@ controller can be given.
 const SETPOINT_PROTOCOL_MAX = 32767
 
 """
+    setpoint_current(light::TCubeLaser, code)
+
+Decode a controller setpoint back to a current in mA, the inverse of
+[`setpoint_code`](@ref)'s scaling.
+
+One definition, used by every place in this driver that turns a raw controller
+word into mA -- the setpoint check in `setpoint_code`, the limit read in
+[`record_controller_limit!`](@ref) and the reading in
+[`tcube_get_current`](@ref). `setpoint_code`'s guarantee is stated *in terms of
+this function*, so it has to be the same arithmetic in every one of them and
+not three copies of the same expression.
+"""
+setpoint_current(light::TCubeLaser, code) = Float64(code) / light.max_setpoint * light.max_setcurrent
+
+"""
     setpoint_code(light::TCubeLaser, current::Float64)
 
 Encode a drive current in mA as the controller's integer setpoint.
@@ -63,14 +110,36 @@ the check used to die here in `UInt16(...)` with an `InexactError` --
 range, a negative `min_current` admitting a negative current. Each now throws
 an `ArgumentError` naming the field at fault, still before anything is sent.
 
-Truncates rather than rounds, and does so everywhere. Rounding at the ceiling
-encodes *above* it: at the default scale the 160 mA ceiling rounds to code
-23831, which is 160.00305 mA by the driver's own conversion, so the one request
-sitting exactly on the enforced limit would be the one to breach it at the
-wire. Truncating everywhere keeps a single rule -- the current commanded never
-exceeds the current requested -- instead of one rule below the ceiling and
-another at it. The cost is an undershoot of less than one code, 0.0067 mA at
-the default scale.
+# The guarantee
+
+`setpoint_current(light, setpoint_code(light, c)) <= c` for every `c` this
+function accepts. That is the whole of it, and it is worth reading narrowly:
+the *decoded* current is bounded by the request, by this driver's own
+arithmetic. What the controller does with the code -- its DAC, its own rounding,
+its calibration -- is not something this repo has observed, so no claim is made
+about the current at the diode.
+
+Truncation alone does not deliver that. Rounding was the first thing it ruled
+out: at the default scale the 160 mA ceiling rounds to code 23831, which
+decodes to 160.00305 mA, so the one request sitting exactly on the enforced
+limit would be the one to breach it at the wire. But `floor` is applied to
+`current / max_setcurrent * max_setpoint`, and that division and multiplication
+can each round *up*: a request one ulp below a code boundary can be carried to
+the boundary itself, leaving `floor` nothing to cut. A scan of the predecessor
+of every code boundary in the default 0-160 mA range found 1794 such requests,
+the first at `prevfloat(9 / 32767 * 220) = 0.06042664876247444`, which encodes
+to code 9 and decodes back to 0.060426648762474444 -- above the request. The
+excesses are single ulps, not overcurrent; the guarantee was still false.
+
+So the candidate code is corrected *downward* while it decodes above the
+request. The comparison is `>` against [`setpoint_current`](@ref) -- the same
+decode the guarantee is stated in, not an equivalent-looking expression -- and
+the loop terminates because code 0 decodes to 0.0 and `current` is validated
+non-negative. In practice it runs at most once.
+
+The cost of the whole rule is an undershoot of less than one code, 0.0067 mA at
+the default scale. At the bottom of the range that undershoot is the entire
+request: see [`setpower`](@ref).
 """
 function setpoint_code(light::TCubeLaser, current::Float64)
     (isfinite(light.max_setcurrent) && light.max_setcurrent > 0) || throw(ArgumentError(
@@ -82,6 +151,12 @@ function setpoint_code(light::TCubeLaser, current::Float64)
     code = floor(current / light.max_setcurrent * light.max_setpoint)
     code <= light.max_setpoint || throw(ArgumentError(
         "TCubeLaser $(light.serialNo): $(current) mA encodes to setpoint $(code), above the full scale $(light.max_setpoint); it exceeds max_setcurrent=$(light.max_setcurrent) mA and should have been refused by check_current"))
+    # Truncation is not enough: the scaling above can round a request up onto a
+    # code boundary before `floor` sees it. Correct downward until the decoded
+    # current is at or below the request. See the docstring.
+    while code > 0 && setpoint_current(light, code) > current
+        code -= 1.0
+    end
     return UInt16(code)
 end
 
@@ -124,7 +199,7 @@ controller's limit leaves the caller's `max_current` alone -- is testable
 without a controller attached.
 """
 function record_controller_limit!(light::TCubeLaser, raw)
-    light.controller_max_current = Float64(raw) / light.max_setpoint * light.max_setcurrent
+    light.controller_max_current = setpoint_current(light, raw)
     return light.controller_max_current
 end
 
@@ -193,11 +268,31 @@ end
 Set the diode drive current, in **mA** -- despite the interface name, this
 function has always taken a current, and `properties.power_unit` now says so.
 
-Validates through [`check_current`](@ref) first, so an out-of-range request
-throws before any setpoint reaches the controller, then encodes the setpoint
-through [`setpoint_code`](@ref), which truncates so that the commanded current
-never exceeds the requested one. On success
-`properties.power` records the current that was accepted; the driver no longer
+Refuses to command anything unless `properties.power_unit` is `"mA"` (see
+[`check_power_unit`](@ref)): the label is checked here and not only at
+construction, because `properties` is mutable and the caller may hold a
+reference to it.
+
+Then validates through [`check_current`](@ref), so an out-of-range request
+throws before any setpoint reaches the controller, and encodes the setpoint
+through [`setpoint_code`](@ref), whose guarantee is that the *decoded* current
+-- `setpoint_current(light, code)`, the driver's own arithmetic -- never exceeds
+the requested one.
+
+# The bottom of the range commands nothing
+
+Because the encoding only ever rounds down, a positive request smaller than one
+code encodes to code `0`: at the default scale that is any request below
+`220 / 32767 ≈ 0.006714` mA, and the diode is commanded *off*. This is
+deliberate -- rounding such a request up to one code would command more current
+than was asked for, which is the rule this driver will not break -- but it is
+worth saying out loud, because `properties.power` records the **requested**
+current, not the zero that was commanded. A caller reading back `power` after a
+sub-code request sees its own number, and `export_state` writes that number to
+the HDF5 attributes. There is no field here that reports what actually went to
+the wire.
+
+On success `properties.power` records the current that was accepted; the driver no longer
 derives a milliwatt figure from it, because the linear
 `current * max_power / max_current` guess it used to store was contradicted by
 the bench measurements preserved as a comment in `TCubeLaserControl.jl` (they
@@ -205,6 +300,7 @@ came from the deleted `helpers.jl`) and the controller reports no power in open-
 mode.
 """
 function LightSourceInterface.setpower(light::TCubeLaser, current::Float64)
+    check_power_unit(light)
     check_current(light, current)
     current_setpoint = setpoint_code(light, current)
     check_err(LD_SetLaserSetPoint(light.serialNo, current_setpoint), "LD_SetLaserSetPoint", light.serialNo)
@@ -255,8 +351,7 @@ function tcube_get_current(light::TCubeLaser)
     check_err(LD_RequestReadings(serialNo), "LD_RequestReadings", serialNo)
     sleep(0.1)
     out = LD_GetLaserDiodeCurrentReading(serialNo)
-    current = Float64(out) / light.max_setpoint * light.max_setcurrent
-    return current
+    return setpoint_current(light, out)
 end
 
 
@@ -307,8 +402,15 @@ end
 
 Snapshot for HDF5 serialization, matching the package-wide 1-argument
 `export_state` contract.
+
+Throws rather than serialize a falsely labelled current: this is the boundary
+the metadata leaves by, so [`check_power_unit`](@ref) runs here too and not
+only at construction. `"power"` below is a drive current in mA, and writing it
+under any other `"power_unit"` would put that claim into the saved file, where
+nothing downstream can tell it from an optical power.
 """
 function export_state(light::TCubeLaser)
+    check_power_unit(light)
 
     attributes = Dict(
         "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,

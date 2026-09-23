@@ -17,18 +17,32 @@
 # the test, and the calls being replaced could never have succeeded here: the
 # DLL they load does not exist on this machine.
 #
-# Two consequences worth knowing:
+# What this seam does NOT cover, established by review rather than assumed:
 #
-#   * The replacement is global and permanent for the session, so every test
-#     after this include sees the fake. That is the intent -- there is no real
-#     controller to reach -- but it means the SDK path is exercised only as far
-#     as the arguments the driver passes and the order it passes them in, never
-#     against Thorlabs' behaviour.
+#   * The eleven replacements are global and permanent for the process. Every
+#     later testset -- contract, GUI, skills -- runs against them. That is the
+#     intent (there is no real controller to reach) and no current test depends
+#     on the original wrapper bodies: the contract tests inspect public
+#     interface dispatch, the GUI tests drive simulated devices and
+#     `RecordingLight`, and the skills tests inspect public methods and
+#     generated documentation. None of those signatures change here.
+#   * The include must stay at top level and stay early. Replacement bumps the
+#     world age, and an ordinary function -- even one already compiled -- picks
+#     up the fake when it is next called from the new world. A *task* created
+#     before the replacement does not: it keeps the old methods for its
+#     lifetime. So an earlier include that spawns a task, or that runs TCube
+#     code immediately, would silently bypass the fake.
+#   * Including `runtests.jl` into an interactive session leaves that session
+#     contaminated: the replacements are not undone. `Main.FakeKinesis` also
+#     assumes inclusion into `Main`.
+#   * The recorder does not validate serial numbers, and these calls bypass the
+#     DLL on Windows too. So nothing here says anything about DLL loading, the
+#     binding bodies, or how a real controller answers -- all three can be
+#     broken while every assertion below passes. That is the right scope for a
+#     unit test, but it is not hardware verification. If hardware integration
+#     tests are ever added, this fake-backed group needs its own subprocess.
 #   * Julia prints a "Method definition ... overwritten" warning per wrapper as
 #     this file is included. They are expected.
-#
-# Included from `runtests.jl` at top level, before the testsets, so the
-# replacements are in place in a new world age by the time anything calls them.
 
 """
     FakeKinesis
@@ -43,6 +57,19 @@ const calls = String[]
 
 "Status each operation reports; absent means `0`, i.e. success."
 const status = Dict{String,Int}()
+
+"""
+Operations that raise instead of returning a status, and the message they
+raise with.
+
+A status code is not the only way a Kinesis call can fail, and for `LD_Close`
+it is not a way at all: the binding returns `void`, so the only failure it can
+express is a thrown exception. Without this, `initialize`'s cleanup handler --
+the `try`/`catch` around `LD_Close` that exists precisely so a failing close
+cannot replace the error that stopped initialization -- had no way to be
+exercised, and deleting it failed nothing.
+"""
+const throws = Dict{String,String}()
 
 "Every setpoint that reached `LD_SetLaserSetPoint`."
 const setpoints = UInt16[]
@@ -59,15 +86,27 @@ function reset!(; limit_raw::Integer=23830)
     empty!(calls)
     empty!(status)
     empty!(setpoints)
+    empty!(throws)
     diode_limit_raw[] = limit_raw
     return nothing
 end
 
-"Record a call and return the status the test asked for (`0` = success)."
-record!(op::AbstractString) = (push!(calls, op); get(status, op, 0))
+"""
+Record a call, then either raise what `throw!` asked for or return the status
+`fail!` asked for (`0` = success). The call is recorded either way: a call that
+throws still happened, and the order assertions need to see it.
+"""
+function record!(op::AbstractString)
+    push!(calls, op)
+    haskey(throws, op) && error(throws[op])
+    return get(status, op, 0)
+end
 
 "Make `op` report a Thorlabs error code from now on."
 fail!(op::AbstractString, code::Integer=1) = (status[op] = code; nothing)
+
+"Make `op` raise an `ErrorException` from now on, rather than report a code."
+throw!(op::AbstractString, msg::AbstractString="fake Kinesis failure in $op") = (throws[op] = msg; nothing)
 
 end
 

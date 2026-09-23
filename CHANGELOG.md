@@ -43,12 +43,20 @@ caller can see changed:
   MicroscopeControl; tcube_refresh(...)` used to resolve; it is now an
   `UndefVarError`. See Removed below for what it did and why it went.
 
-The constructor also now **rejects** `properties` whose `power_unit` is not
-`"mA"`, with an `ArgumentError`. Defaulting the label to `"mA"` was not enough:
-a caller passing `LightSourceProperties("mW", ...)` got the accepted drive
-current stored under a milliwatt name and carried into `export_state` and the
-HDF5 attributes written from it. That is the silent break this bump exists to
-announce, so it is refused rather than documented.
+A `power_unit` other than `"mA"` is now **rejected**, with an `ArgumentError`,
+at three points: the keyword constructor, `setpower` and `export_state`.
+Defaulting the label to `"mA"` was not enough — a caller passing
+`LightSourceProperties("mW", ...)` got the accepted drive current stored under
+a milliwatt name and carried into `export_state` and the HDF5 attributes
+written from it — and the constructor check alone was not enough either.
+`LightSourceProperties` is mutable, so the label can be changed after
+construction, either through `laser.properties.power_unit` or through a
+reference the caller kept; and the struct's auto-generated positional
+constructor never runs the keyword constructor's check. All three routes still
+produced `power = 40.0` labelled `"mW"` in exported metadata. So the invariant
+is enforced where it acts: `setpower` will not command a current on a wrongly
+labelled device, and `export_state` will not serialize one. That is the silent
+break this bump exists to announce, so it is refused rather than documented.
 
 ### Fixed
 - **`setpower(::TCubeLaser, current)` sent out-of-range currents to the diode.**
@@ -63,9 +71,31 @@ announce, so it is refused rather than documented.
 - **The enforced ceiling now holds at the wire.** The setpoint conversion
   rounded, so the 160 mA ceiling encoded to code 23831 = 160.00305 mA on the
   driver's own scale: the one request sitting exactly on the enforced limit was
-  the one to exceed it. The conversion truncates now, everywhere, so the
-  current commanded never exceeds the current requested; the cost is an
-  undershoot of under one code (0.0067 mA at the default scale).
+  the one to exceed it. The conversion truncates now, and then corrects the
+  code *downward* while it still decodes above the request — truncation alone
+  was not sufficient, because `current / max_setcurrent * max_setpoint` can
+  round a request one ulp below a code boundary up onto the boundary, leaving
+  `floor` nothing to cut. 1794 requests below the default 160 mA ceiling did
+  exactly that, the first being `prevfloat(9/32767*220) = 0.06042664876247444`,
+  which encoded to code 9 and decoded back to 0.060426648762474444. The
+  excesses were single ulps rather than overcurrent, but the guarantee was
+  false as stated.
+
+  The guarantee now, precisely: **the current the code decodes to, by this
+  driver's own arithmetic (`setpoint_current`), never exceeds the current
+  requested.** It is a claim about this driver's conversion, not about the
+  controller's DAC or the current at the diode — neither of which this repo has
+  observed. The cost is an undershoot of under one code (0.0067 mA at the
+  default scale).
+- **The bottom of the range commands nothing, and now says so.** Because the
+  encoding only rounds down, a positive request smaller than one code — below
+  `220/32767 ≈ 0.006714` mA at the default scale — encodes to code `0` and the
+  diode is commanded off. That is deliberate; rounding such a request up would
+  command more current than was asked for. But `properties.power` records the
+  **requested** current, not the zero that was commanded, and `export_state`
+  writes that requested value into the HDF5 attributes. No field here reports
+  what actually reached the wire. This behaviour is unchanged, previously
+  implicit, and now stated in `setpower`'s docstring.
 - **The conversion parameters are validated before converting.** Four
   configurations passed the range check and then died in `UInt16(...)` with an
   `InexactError`: `max_setcurrent=0.0` (0 mA), `max_setcurrent=NaN` (80 mA),
@@ -91,8 +121,10 @@ announce, so it is refused rather than documented.
   the setpoint DAC's full scale has no legal setpoint, and the bound that makes
   that true is the controller's **0–32767 protocol range**, not `UInt16`
   storage: 300 mA encodes to 44682 and 400 mA to 59576, both of which fit a
-  `UInt16` and neither of which the controller will accept. Without the bound
-  such a request passed the range check and then died in the conversion.
+  `UInt16` and neither of which the controller will accept. That is precisely
+  why the bound was needed: such a request passed the range check, converted
+  cleanly — `UInt16` had room for it — and was *sent*, as an illegal setpoint,
+  rather than failing anywhere the caller could see.
 - **Every Kinesis return code is now checked.** `initialize`, `light_on`,
   `setpower`, `light_off`, `shutdown` and `tcube_get_current` each assigned the
   status of every call to an `err` local and never read it, so a failed open, a
