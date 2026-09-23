@@ -6,8 +6,9 @@
 - `unique_id::String`: A unique identifier for the light source.
 - `properties::LightSourceProperties`: The properties of the light source.
   `power_unit` defaults to `"mW"` and `power` holds a **derived, uncalibrated**
-  figure -- see the note below; `drive_current` is the field that holds what
-  was actually commanded.
+  figure -- see the note below; `drive_current` is the honest field, holding
+  the last drive current `setpower` accepted. Neither reports what reached the
+  wire: see `drive_current`'s own entry.
 - `laser_color::String`: The color of the laser.
 - `min_current::Float64`: Lower bound accepted by `setpower`, in mA. Defaults
   to `0.0`; set it to a diode-specific floor if the diode has one. It is a

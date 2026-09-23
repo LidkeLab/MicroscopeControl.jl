@@ -30,8 +30,12 @@ a hardware re-verification session rather than a version digit — and those are
 worth batching. What is queued for that batch is listed under Deferred at the
 end of this entry.
 
-**Behaviour changes a working rig can see.** No calling code has to change,
-but these five are observable, and the first is the point of the release:
+**Behaviour changes a working rig can see.** No calling code has to change for
+the API's sake, but these six are observable, and the first is the point of the
+release. Numbers 3 and 6 were found by a downstream rig repository after five
+adversarial review rounds had missed them, which is worth recording: the
+reviews checked what the package promises, and these are about what consumers
+had built on top of what it happened to do:
 
 1. `setpower(::TCubeLaser, current)` with a current above the rig's own
    configured ceiling now throws an `ArgumentError` instead of logging one and
@@ -41,9 +45,20 @@ but these five are observable, and the first is the point of the release:
 2. `initialize` no longer overwrites `max_current`, so a ceiling the caller
    passed now survives and keeps constraining `setpower`. On 0.2.2 it was
    replaced by the controller's own (higher) limit.
-3. `min_current` defaults to `0.0` rather than `60.0`. Strictly this *widens*
-   what is accepted — the old default was a lower bound, so it rejected safe
-   small currents while protecting against nothing.
+3. `min_current` defaults to `0.0` rather than `60.0`. As a *validation* bound
+   this only widens what is accepted — the old default was a lower bound, so it
+   rejected safe small currents while protecting against nothing. **But
+   `min_current` is also read as a range endpoint, and there the change is
+   silent and severe.** A consumer mapping a percentage linearly across
+   `[min_current, max_current]` gets a different current for the same
+   percentage: on the 642 nm rig that reported it, 40 % fell from about 94 mA
+   to about 53 mA, below the lasing threshold, so the laser went dark at every
+   setting under about 41 % **with no error**. Nothing throws, because every
+   value in the new range is legal. If you map across this range, pass
+   `min_current` explicitly. The default is still `0.0`: a 60 mA floor is
+   actively dangerous on a low-power diode — the 405 nm consumer caps its diode
+   at 32.25 mA, so the old default put the floor above the ceiling and made the
+   whole range empty.
 4. The setpoint conversion truncates where it used to round, so a commanded
    current can be up to one code (~0.0067 mA at the default scale) below the
    request rather than up to half a code above it. This is what makes the
@@ -53,6 +68,17 @@ but these five are observable, and the first is the point of the release:
    because what it did was open the device and drive a hardcoded 90 mA under a
    name that warned nobody. The exported name is kept so the caller gets an
    explanation naming the replacement instead of a `MethodError`.
+
+6. **Adding the 1-argument `export_state(::TCubeLaser)` can break a downstream
+   that defined it first.** Because 0.2.1 shipped only the 2-argument form,
+   `export_state(laser)` fell through to the throwing stub, and at least one
+   consumer defined the 1-argument method itself to work around that. Julia
+   fails precompilation on the method overwrite, so that package stops loading
+   against 0.2.3. The fix downstream is to guard the shim so it stands aside
+   when ours exists. This is the type-piracy hazard `mc-extend` warns about,
+   arriving from the other direction: the risk of defining a method on someone
+   else's generic for someone else's type is not only that you might shadow
+   them, but that they might later define it too.
 
 One further divergence, confined to a field that is already deprecated: if a
 caller assigns `max_current` *after* `initialize`, the derived

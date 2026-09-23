@@ -32,6 +32,18 @@ upstream ships its own fix the two methods collide or diverge silently. So:
 your own type, extend freely (steps 3 and 4); an MC type, report and work
 around from outside (step 2).
 
+**[limitation]** The collision is worse than "diverge silently", and this has
+happened. A rig repo defined `export_state(::TCubeLaser)` itself, because
+v0.2.1 shipped only a 2-argument form and the 1-argument call fell through to
+the throwing stub. When v0.2.3 added that method upstream, Julia failed
+**precompilation** on the overwrite and the downstream package stopped loading
+at all -- not a wrong answer, a dead package, appearing the moment the pin
+moves. Note the direction: the risk is not only that you shadow upstream, but
+that upstream later defines the same method, so the *fix* is what breaks you.
+If you must install such a shim while waiting, **guard it** so it stands aside
+when the upstream method exists (`hasmethod` on the exact signature, checked at
+load), and delete it when you next move the pin.
+
 ## 1. Diagnose first: it is usually not the driver
 
 Before reporting or writing anything, rule out the rig. The full symptom table
