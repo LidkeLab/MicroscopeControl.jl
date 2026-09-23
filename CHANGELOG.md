@@ -43,8 +43,20 @@ had built on top of what it happened to do:
    current than it had declared safe. This breaks toward less light, which is
    why it is not deferred.
 2. `initialize` no longer overwrites `max_current`, so a ceiling the caller
-   passed now survives and keeps constraining `setpower`. On 0.2.2 it was
-   replaced by the controller's own (higher) limit.
+   passed now survives and keeps constraining `setpower`. **`max_current` is
+   also a range endpoint and a persisted `export_state` attribute, so this
+   changes more than validation, and it can move a mapped request in EITHER
+   direction.** Where the controller's limit was higher than the caller's
+   ceiling, a percentage mapped across `[min_current, max_current]` now asks
+   for less. Where it was *lower*, the mapped request now asks for **more**:
+   with `min_current = 60`, `max_current = 220` and a controller limit near
+   160 mA, a 40 % request rose from about 100 mA to 124 mA, and high
+   percentages can now throw because the mapping endpoint exceeds the enforced
+   ceiling. Three quantities that 0.2.2 blurred into one field are now
+   distinct: the caller's ceiling (`max_current`), the controller's limit
+   (`controller_max_current`) and the enforced ceiling (the smaller of those
+   and the DAC full scale). A reader of the exported `"max_current"` attribute
+   gets the first of those where it used to get the second.
 3. `min_current` defaults to `0.0` rather than `60.0`. As a *validation* bound
    this only widens what is accepted — the old default was a lower bound, so it
    rejected safe small currents while protecting against nothing. **But
@@ -53,7 +65,10 @@ had built on top of what it happened to do:
    `[min_current, max_current]` gets a different current for the same
    percentage: on the 642 nm rig that reported it, 40 % fell from about 94 mA
    to about 53 mA, below the lasing threshold, so the laser went dark at every
-   setting under about 41 % **with no error**. Nothing throws, because every
+   setting under about 41 % **with no error**. Note that figure combines this
+   change with item 2 — the lower endpoint moving 60 → 0 accounts for about
+   36 mA of it, and the upper endpoint no longer being replaced by the
+   controller's 160.9 mA accounts for the rest. Nothing throws, because every
    value in the new range is legal. If you map across this range, pass
    `min_current` explicitly. The default is still `0.0`: a 60 mA floor is
    actively dangerous on a low-power diode — the 405 nm consumer caps its diode
@@ -73,8 +88,10 @@ had built on top of what it happened to do:
    that defined it first.** Because 0.2.1 shipped only the 2-argument form,
    `export_state(laser)` fell through to the throwing stub, and at least one
    consumer defined the 1-argument method itself to work around that. Julia
-   fails precompilation on the method overwrite, so that package stops loading
-   against 0.2.3. The fix downstream is to guard the shim so it stands aside
+   fails precompilation on the method overwrite; whether that stops the package
+   loading depends on the environment, since the loader can fall back to source
+   in some configurations — in the one that reported it, the package did not
+   load. The fix downstream is to guard the shim so it stands aside
    when ours exists. This is the type-piracy hazard `mc-extend` warns about,
    arriving from the other direction: the risk of defining a method on someone
    else's generic for someone else's type is not only that you might shadow

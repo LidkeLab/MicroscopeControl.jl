@@ -36,13 +36,32 @@ around from outside (step 2).
 happened. A rig repo defined `export_state(::TCubeLaser)` itself, because
 v0.2.1 shipped only a 2-argument form and the 1-argument call fell through to
 the throwing stub. When v0.2.3 added that method upstream, Julia failed
-**precompilation** on the overwrite and the downstream package stopped loading
-at all -- not a wrong answer, a dead package, appearing the moment the pin
-moves. Note the direction: the risk is not only that you shadow upstream, but
-that upstream later defines the same method, so the *fix* is what breaks you.
-If you must install such a shim while waiting, **guard it** so it stands aside
-when the upstream method exists (`hasmethod` on the exact signature, checked at
-load), and delete it when you next move the pin.
+**precompilation** on the overwrite; in the environment that reported it the
+package then did not load at all -- not a wrong answer, a dead package,
+appearing the moment the pin moves. (The precompilation failure is certain; the
+loader can fall back to source in some configurations, so do not count on
+either outcome.) Note the direction: the risk is not only that you shadow
+upstream, but that upstream later defines the same method, so the *fix* is what
+breaks you.
+
+If you must install such a shim while waiting, **guard it**, and guard it with
+`which`, not `hasmethod`. `hasmethod(export_state, Tuple{TCubeLaser})` is
+`true` both before and after the upstream fix, because before it matches the
+throwing `export_state(::AbstractInstrument)` stub -- concrete argument types
+do not make `hasmethod` an exact-signature test, so that guard suppresses the
+shim exactly when it is needed. Install only while `which` still resolves to
+the known abstract stub:
+
+```julia
+if which(MC.export_state, Tuple{MC.TCubeLaser}).sig.parameters[2] === MC.AbstractInstrument
+    MC.export_state(l::MC.TCubeLaser) = ...   # stands aside once upstream defines it
+end
+```
+
+and delete it when you next move the pin. This is the same distinction
+`test/contract.jl`'s `has_specific_method` exists to make: "a method exists"
+and "a method exists *for this type*" are different questions, and the
+abstract fallbacks in this package make the first one useless.
 
 ## 1. Diagnose first: it is usually not the driver
 
