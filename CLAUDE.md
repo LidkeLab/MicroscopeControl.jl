@@ -21,6 +21,34 @@ julia --project -e 'using Pkg; Pkg.instantiate(); using MicroscopeControl'
 julia -e 'using Pkg; Pkg.develop(url="https://github.com/LidkeLab/MicroscopeControl.jl.git")'
 ```
 
+### Testing policy: local first, CI as confirmation
+
+**Run the full local suite before every push.** CI is confirmation, never the
+first signal that a change works. Actions minutes are a shared, finite
+resource, and a workflow re-run is not a cheap way to find out whether code
+compiles.
+
+```bash
+# the gate, before any push
+xvfb-run -a julia --project -e 'using Pkg; Pkg.test()'
+
+# before a release, or when touching anything version-sensitive, also run the
+# OLDEST supported version, which CI no longer runs on pull requests
+xvfb-run -a ~/.julia/juliaup/julia-1.11*/bin/julia --project -e 'using Pkg; Pkg.test()'
+```
+
+What CI actually runs, deliberately thin (`.github/workflows/CI.yml`):
+- **pull request**: one Julia version, the version-bump check, no docs build,
+  and nothing at all when the change touches only `docs/`, `README.md`,
+  `CHANGELOG.md`, `CLAUDE.md` or `LICENSE`.
+- **push to `main` / tags**: the full version matrix, coverage upload, and the
+  docs build — once, where the tag is actually cut.
+- Full signal on a branch without opening a pull request:
+  `gh workflow run CI.yml --ref <branch>`.
+
+Batch fixups into one push rather than pushing each review round separately;
+every push to an open pull request starts a fresh run.
+
 Tests use simulated devices only (`SimCamera`, `SimStage3d`/`SimStage2d`/`SimStage1d`, `SimLight`) - no hardware required. GLMakie needs a display: run under `xvfb-run -a` on a headless Linux box (CI does this). Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
 
 ## Architecture
@@ -136,4 +164,4 @@ Some hardware modules are commented out in `MicroscopeControl.jl` while under de
 
 ### Versioning
 
-This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. Policy, following Julia's pre-1.0 convention: while the version is `0.x.y`, **`x` is the breaking component and `y` is the non-breaking one** -- `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one, which is also how Julia's `^0.2` compat bound reads them. So bump `x` only when working downstream code can behave differently (a signature, an export, or what a call returns or throws), and bump `y` for everything else, including bug fixes that change behaviour on a path that was already broken. Every merge to `main` is tagged automatically by `.github/workflows/TagOnMerge.yml`. Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is CI (`.github/workflows/CI.yml`) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above.
+This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. Policy, following Julia's pre-1.0 convention: while the version is `0.x.y`, **`x` is the breaking component and `y` is the non-breaking one** -- `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one, which is also how Julia's `^0.2` compat bound reads them. So bump `x` only when working downstream code can behave differently (a signature, an export, or what a call returns or throws), and bump `y` for everything else, including bug fixes that change behaviour on a path that was already broken. Every merge to `main` is tagged automatically by `.github/workflows/TagOnMerge.yml`. Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.

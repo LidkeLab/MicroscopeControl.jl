@@ -1,7 +1,10 @@
 name: CompatHelper
 on:
   schedule:
-    - cron: 0 0 * * *
+    # Weekly, not daily: this package is unregistered and its consumers pin
+    # exact tags, so a one-day-old compat bound is worth nothing and a run a
+    # day is six wasted runs a week.
+    - cron: 0 0 * * 1
   workflow_dispatch:
 jobs:
   CompatHelper:
