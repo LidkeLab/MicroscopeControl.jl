@@ -123,6 +123,20 @@ Reproducing it would mean intercepting writes to the field to reconstruct a
 number the driver invents; `drive_current` is exact and has no lifecycle.
 
 ### Fixed
+- **A wrong camera ROI went through with only a warning, and the argument
+  order invites exactly that mistake.** `setroi!(::DCAM4Camera, hpos, hsize,
+  vpos, vsize)` takes `(x, WIDTH, y, HEIGHT)`, while `CameraROI`'s field order
+  is `(x_start, y_start, width, height)`. Passing a `CameraROI`'s fields
+  positionally in their own order therefore swaps `y_start` with `width`, and
+  the resulting readback mismatch was four `@warn`s — so the next frame was
+  silently not the region asked for. Reported from a rig running an ORCA
+  C11440-22CU. A mismatch now **throws**, naming each field that differs and
+  what the camera took instead, and `camera.roi` is updated first so it tells
+  the truth about the accepted region even on the throwing path. A new
+  `setroi!(camera, ::CameraROI)` method takes the struct directly and is the
+  preferred call; the four-argument form is kept, and its order documented
+  loudly. Also documented: subarray positions are **0-based**, and the ORCA
+  wants positions and sizes in multiples of 4.
 - **Every digital output write to a line above line 0 was silently a no-op,
   and MC's own Vortran laser could not be switched on.** `setvoltage` on a
   digital task called `DAQmxWriteDigitalScalarU32`, which is **port format**:
