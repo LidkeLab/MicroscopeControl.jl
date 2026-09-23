@@ -409,8 +409,23 @@ include("tcube_fake_sdk.jl")
             @test TCube.setpoint_code(laser, 0.001) == 0x0000
             FakeKinesis.reset!()
             setpower(laser, 0.001)
-            @test FakeKinesis.setpoints == [UInt16(0)] # the diode is commanded off
-            @test laser.properties.power == 0.001      # while the field keeps the request
+            @test FakeKinesis.setpoints == [UInt16(0)] # a ZERO SETPOINT is sent --
+            @test laser.properties.is_on == false      # not an "off": is_on is untouched
+            @test laser.properties.power == 0.001      # and the field keeps the request
+            # What `export_state` writes is the request too, not the zero that
+            # went to the wire and not the decoded current. Exporting either of
+            # those instead survived every other assertion here.
+            @test export_state(laser)[1]["power"] == 0.001
+
+            # `tcube_get_current` decodes the controller's raw reading through
+            # the same shared decode as the encoder. Returning zero from it
+            # survived every other assertion, so pin a non-zero reading.
+            FakeKinesis.reset!(limit_raw = 5957)
+            reading = TCube.tcube_get_current(laser)
+            @test reading > 0
+            @test reading == TCube.setpoint_current(laser, 5957)
+            @test "LD_RequestReadings" in FakeKinesis.calls
+            FakeKinesis.reset!()
 
             # Conversion parameters are validated before converting. Each of
             # these passes check_current and used to die in `UInt16(...)` with
@@ -488,7 +503,11 @@ include("tcube_fake_sdk.jl")
             @test_throws ArgumentError setpower(positional, 40.0)
             @test_throws ArgumentError export_state(positional)
 
+            # `setpoints` alone is too weak: a driver that talked to the SDK
+            # before refusing -- LD_RequestReadings, say -- would still leave it
+            # empty. Nothing at all may reach the device under a false label.
             @test isempty(FakeKinesis.setpoints) # none of the three reached the SDK
+            @test isempty(FakeKinesis.calls)     # and none of them called it at all
         end
 
         @testset "export_state" begin

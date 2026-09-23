@@ -137,8 +137,9 @@ decode the guarantee is stated in, not an equivalent-looking expression -- and
 the loop terminates because code 0 decodes to 0.0 and `current` is validated
 non-negative. In practice it runs at most once.
 
-The cost of the whole rule is an undershoot of less than one code, 0.0067 mA at
-the default scale. At the bottom of the range that undershoot is the entire
+The cost of the whole rule is an undershoot of approximately one code, about
+0.0067 mA at the default scale -- "approximately" because the downward
+correction can take a boundary predecessor a hair past one code width. At the bottom of the range that undershoot is the entire
 request: see [`setpower`](@ref).
 """
 function setpoint_code(light::TCubeLaser, current::Float64)
@@ -283,7 +284,10 @@ the requested one.
 
 Because the encoding only ever rounds down, a positive request smaller than one
 code encodes to code `0`: at the default scale that is any request below
-`220 / 32767 ≈ 0.006714` mA, and the diode is commanded *off*. This is
+`220 / 32767 ≈ 0.006714` mA, so a **zero current setpoint** is sent. That is
+not the same as turning the laser off: this path does not disable the output
+and does not touch `properties.is_on`. Use [`light_off`](@ref) to stop
+emission. This is
 deliberate -- rounding such a request up to one code would command more current
 than was asked for, which is the rule this driver will not break -- but it is
 worth saying out loud, because `properties.power` records the **requested**
