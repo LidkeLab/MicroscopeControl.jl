@@ -581,6 +581,21 @@ include("tcube_fake_sdk.jl")
             # `nothing` is not writable as an HDF5 attribute; unset must be "".
             @test export_state(TCubeLaser("00000000"))[1]["daq_device"] == ""
 
+            # The one place `legacy_power` deliberately diverges from 0.2.2:
+            # a caller assigning `max_current` AFTER `initialize`. 0.2.2 divided
+            # by the newly assigned value because `initialize` had overwritten
+            # that same field; we divide by the separately recorded controller
+            # limit. Pinned rather than chased -- reproducing it would mean
+            # intercepting field writes to rebuild a number the driver invents,
+            # and 0.3.0 removes it. `drive_current` is the exact one.
+            diverge = TCubeLaser("00000000"; max_current = 80.0)
+            @test TCube.legacy_power(diverge, 40.0) == 40.0 * 100.0 / 80.0 # 50.0, as 0.2.2
+            TCube.record_controller_limit!(diverge, 23830)
+            diverge.max_current = 80.0                                      # the post-init write
+            @test TCube.legacy_power(diverge, 40.0) ==
+                  40.0 * 100.0 / TCube.setpoint_current(diverge, 23830)      # not 50.0
+            @test TCube.legacy_power(diverge, 40.0) != 50.0
+
             # The 2-argument form is the one that existed before 0.2.3; the bug
             # was that it was the ONLY one, so `export_state(laser)` fell
             # through to the throwing stub. Adding the 1-arg method is the

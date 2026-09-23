@@ -30,12 +30,37 @@ a hardware re-verification session rather than a version digit — and those are
 worth batching. What is queued for that batch is listed under Deferred at the
 end of this entry.
 
-**One behaviour change a working rig can see, and it is the point of the
-release.** `setpower(::TCubeLaser, current)` with a current above the rig's own
-configured ceiling now throws an `ArgumentError` instead of logging one and
-sending the setpoint anyway. A rig relying on that log line was driving more
-current than it had declared safe. This one breaks toward less light, which is
-why it is not deferred.
+**Behaviour changes a working rig can see.** No calling code has to change,
+but these five are observable, and the first is the point of the release:
+
+1. `setpower(::TCubeLaser, current)` with a current above the rig's own
+   configured ceiling now throws an `ArgumentError` instead of logging one and
+   sending the setpoint anyway. A rig relying on that log line was driving more
+   current than it had declared safe. This breaks toward less light, which is
+   why it is not deferred.
+2. `initialize` no longer overwrites `max_current`, so a ceiling the caller
+   passed now survives and keeps constraining `setpower`. On 0.2.2 it was
+   replaced by the controller's own (higher) limit.
+3. `min_current` defaults to `0.0` rather than `60.0`. Strictly this *widens*
+   what is accepted — the old default was a lower bound, so it rejected safe
+   small currents while protecting against nothing.
+4. The setpoint conversion truncates where it used to round, so a commanded
+   current can be up to one code (~0.0067 mA at the default scale) below the
+   request rather than up to half a code above it. This is what makes the
+   ceiling hold at the wire.
+5. `tcube_refresh` now throws. It is an **intentional removal, not a compatible
+   deprecation**: a rig on which it worked will stop, and that is deliberate,
+   because what it did was open the device and drive a hardcoded 90 mA under a
+   name that warned nobody. The exported name is kept so the caller gets an
+   explanation naming the replacement instead of a `MethodError`.
+
+One further divergence, confined to a field that is already deprecated: if a
+caller assigns `max_current` *after* `initialize`, the derived
+`properties.power` no longer follows that assignment, because the divisor is
+now the controller limit recorded separately. 0.2.2 gave `50.0` where this
+gives `25.000572235150496` for a 40 mA request with `max_current = 80.0`.
+Reproducing it would mean intercepting writes to the field to reconstruct a
+number the driver invents; `drive_current` is exact and has no lifecycle.
 
 ### Fixed
 - **`setpower(::TCubeLaser, current)` sent out-of-range currents to the diode.**

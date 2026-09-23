@@ -34,7 +34,15 @@ controller's limit. `max_current` is now the caller's and stays so, so the
 divisor is `controller_max_current` once `initialize` has read it and
 `max_current` before that -- which is the same quantity the old field held at
 each of those two moments.
-"""
+
+**One case where this deliberately does not reproduce 0.2.2.** If a caller
+assigns `max_current` *after* `initialize`, 0.2.2 divided by the newly assigned
+value; this divides by the controller's limit still. With `max_current = 80.0`
+and a 40 mA request after a controller limit of 23830, 0.2.2 gave `50.0` and
+this gives `25.000572235150496`. Reproducing it would mean intercepting writes
+to the field, which is not worth doing for a number the driver invents and
+which 0.3.0 removes. Read `drive_current` instead; it is exact and has no
+lifecycle. """
 function legacy_power(light::TCubeLaser, current::Float64)
     divisor = isnan(light.controller_max_current) ? light.max_current : light.controller_max_current
     return current * light.properties.max_power / divisor
@@ -431,11 +439,13 @@ end
 """
     EXPORT_STATE_2ARG_WARNED
 
-Whether the deprecated 2-argument [`export_state`](@ref) has already warned in
-this session. A plain `Ref` rather than `@warn`'s `maxlog=1` so that the
-warning is testable more than once per process.
+Whether the deprecated 2-argument [`export_state`](@ref) has already attempted
+its warning in this session. Not `@warn`'s `maxlog=1`, so that the warning is
+testable more than once per process; `Threads.Atomic` rather than a plain `Ref`
+because a check followed by a store lets two concurrent callers both warn and
+is a data race besides. Reset it with `[] = false` in a test.
 """
-const EXPORT_STATE_2ARG_WARNED = Ref(false)
+const EXPORT_STATE_2ARG_WARNED = Threads.Atomic{Bool}(false)
 
 """
     export_state(light::TCubeLaser, ignored)
@@ -451,8 +461,12 @@ to get anything at all keeps working. The forwarder is scheduled for removal in
 0.3.0.
 """
 function export_state(light::TCubeLaser, ignored)
-    if !EXPORT_STATE_2ARG_WARNED[]
-        EXPORT_STATE_2ARG_WARNED[] = true
+    # Test-and-set in one atomic step: a plain `Ref` check followed by a store
+    # lets two concurrent callers both observe `false` and both warn, and is a
+    # data race besides. Note this is "attempt to warn once", not "display
+    # once": a first call under a logger that swallows warnings still spends
+    # the allowance.
+    if !Threads.atomic_cas!(EXPORT_STATE_2ARG_WARNED, false, true)
         @warn "export_state(::TCubeLaser, x): the second argument is ignored and this method is deprecated; " *
               "call export_state(laser). The 2-argument form is scheduled for removal in 0.3.0." ignored_argument = ignored
     end

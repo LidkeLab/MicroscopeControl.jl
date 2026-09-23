@@ -30,8 +30,12 @@
 - `ao_channel::Union{Nothing,String}`: AO channel name `setupIO` should use.
   `nothing` keeps the historical discovery behaviour (see `setupIO`).
 - `drive_current::Float64`: The drive current in mA that `setpower` last
-  accepted, and the only field here that reports what was commanded. `NaN`
-  before the first successful `setpower`.
+  accepted. It is the last accepted *request*, not what reached the wire: a
+  request below one setpoint code is accepted and encodes to zero, so the two
+  differ at the bottom of the range. It is still the honest field --
+  `properties.power` is a derived guess -- but nothing here reports the
+  commanded code. Defaults to `NaN`, i.e. before the first successful
+  `setpower`; both constructors accept an explicit value.
 
 The first ten fields are in the order they have always been in, so positional
 construction from before v0.2.3 still works; the four added fields are at the
