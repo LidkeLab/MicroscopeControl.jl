@@ -59,6 +59,10 @@ include("interface_methods.jl")
 export TCubeLaser
 export red_laser_gui
 export light_on, light_off, setpower, shutdown, tcube_get_current
+# `tcube_refresh` is an exported name from before v0.2.3 and stays one: the
+# method now throws and explains itself rather than vanishing into an
+# `UndefVarError`. See its docstring.
+export tcube_refresh
 export export_state
 # `setupIO` is kept unexported here: OK_XEM also exports an unrelated `setupIO`
 # for its own FPGA IO pins, and the two collided as distinct top-level bindings.

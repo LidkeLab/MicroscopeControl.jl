@@ -95,8 +95,11 @@ not necessarily the one you are about to call. The case that exposed this was
 `TCubeLaser`: up to v0.2.2 its only `export_state` was `export_state(::TCubeLaser,
 sth)`, the map listed that and nothing else, and the 1-arg `export_state(laser)` every
 lifecycle loop calls fell through to the throwing `AbstractInstrument` stub.
-**[fixed in v0.3.0]** — the 2-arg method is gone, `export_state(::TCubeLaser)` is the
-only one, and `which(export_state, Tuple{TCubeLaser})` now lands on it. The blind spot
+**[fixed in v0.2.3]** — `export_state(::TCubeLaser)` exists and
+`which(export_state, Tuple{TCubeLaser})` lands on it. The 2-arg method is still
+there as a deprecated forwarder that warns and delegates (removal scheduled for
+a future 0.3.0), so the map may still list *that* signature: adding the 1-arg
+method was the fix, not deleting the other one. The blind spot
 is a property of the generator rather than of that driver, and an installed map
 generated against an older pinned tag still shows the old signature. `light_on` is a
 live example (below). When the listed signature is not the one you are calling, check
@@ -136,8 +139,10 @@ which(light_on, Tuple{TCubeLaser,Float64}).sig
 #                                                       driver implements 2-arg light_on)
 
 which(export_state, Tuple{TCubeLaser}).sig
-# -> Tuple{typeof(export_state), TCubeLaser}           (real driver code from v0.3.0;
-#                                                       up to v0.2.2, the throwing stub)
+# -> Tuple{typeof(export_state), TCubeLaser}           (real driver code from v0.2.3;
+#                                                       up to v0.2.2, the throwing stub.
+#                                                       Tuple{TCubeLaser,Any} still resolves,
+#                                                       to the deprecated forwarder)
 
 which(getdata, Tuple{SimCamera}).sig
 # -> Tuple{typeof(getdata), SimCamera}                 (real driver code)

@@ -80,7 +80,7 @@ Two qualifications:
    driver: take the dependency as a keyword argument and the channel as a field,
    as `LCC1620(; scope, dac_channel)` and
    `TCubeLaser(serialNo; daq, daq_device, ao_channel)` do (the latter two
-   keywords exist from v0.3.0; before that the DAQ device and AO channel were
+   keywords exist from v0.2.3; before that the DAQ device and AO channel were
    hardcoded to the second of each).
 
 Writing a driver downstream for a device you own, and extending MC's generics
@@ -176,7 +176,7 @@ Each is stated as what the code does today; the label says how far to trust it.
 
 | Kind | Lives in | Example | Trust |
 |---|---|---|---|
-| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.properties.power` | what you asked for. **[limitation]** `properties.power` is only updated by `setpower` on `SimLight` and `TCubeLaser` (which from **v0.3.0** stores the drive current it was given, in mA, with `power_unit == "mA"`; before v0.3.0 it stored a linear current-to-power guess in a field labelled `"mW"`, contradicted by bench measurement -- read `power_unit`, do not assume milliwatts); `CrystaLaser`, `VortranLaser` and `DaqTrLight` write the voltage to the DAQ and leave the field at its constructor value (traced). Where the driver does not track it, the system must record the requested power itself: `Bench` below retains the last `BenchState` in `sys.requested`, `get_state` returns that, and `measured_power` reads the field (executed against a DAQ-like fake: requested `3.5`, measured `0.0`). |
+| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.properties.power` | what you asked for. **[limitation]** `properties.power` is only updated by `setpower` on `SimLight` and `TCubeLaser` -- and on `TCubeLaser` it holds a linear current-to-power guess in a field labelled `"mW"`, contradicted by bench measurement and **deprecated from v0.2.3** (removal queued for a future 0.3.0). From v0.2.3 read `laser.drive_current` instead: the drive current in mA that `setpower` last accepted, `NaN` before the first one; `CrystaLaser`, `VortranLaser` and `DaqTrLight` write the voltage to the DAQ and leave the field at its constructor value (traced). Where the driver does not track it, the system must record the requested power itself: `Bench` below retains the last `BenchState` in `sys.requested`, `get_state` returns that, and `measured_power` reads the field (executed against a DAQ-like fake: requested `3.5`, measured `0.0`). |
 | **Measured hardware state** | whatever the driver reads back | `stage.real_x` after `getposition`; a frame; `connectionstatus` | what the hardware said, at the moment you asked. **[limitation]** the Sim stages copy `targ_*` into `real_*`, so measured equals requested there by construction. |
 | **Saved metadata** | the `export_state` tree in the HDF5 file | `attrs["Main/camera"]["exposure_time"]` | a record of the above at snapshot time, plus whatever the system adds (which is missing, which is requested versus measured). |
 
@@ -377,7 +377,8 @@ end
 # get_state returns what was REQUESTED; measured values are read from device fields separately.
 MC.get_state(sys::Bench) = sys.requested === nothing ? error("no configuration has been requested yet") : sys.requested
 measured_power(sys::Bench) = sys.laser.properties.power          # cached by SimLight/TCube only; stale on the DAQ lights
-                                                                 # and in TCube's own unit: mA from v0.3.0, check power_unit
+                                                                 # and on TCube it is a deprecated uncalibrated guess:
+                                                                 # read laser.drive_current (mA) from v0.2.3 instead
 
 function MC.set_state(sys::Bench, st::BenchState)
     sys.in_flight && error("refusing to change configuration while an acquisition is in flight")
@@ -516,12 +517,13 @@ stop; each is false at v0.2.0.
   the panel is observably read-only. **Caveat:** what `properties.power`
   holds after a `setpower` differs by driver (traced). `SimLight` stores the
   argument it was given. `TCubeLaser`'s `setpower` takes current in
-  **milliamps**. Up to v0.2.2 it stored a *calculated* power
-  (`current * max_power / max_current`) in a field labelled `"mW"`, so the
-  units on display and on the wire differed; **from v0.3.0** it stores the
-  current it was given and `power_unit` reads `"mA"`, so the panel's slider
-  reads in mA on this device. An installed copy of this skill older than
-  v0.3.0 describes the old behaviour. `CrystaLaser`,
+  **milliamps** but stores a *calculated* power
+  (`current * max_power / <controller limit>`) in a field labelled `"mW"`, so
+  the units on display and on the wire differ. That pair is **deprecated from
+  v0.2.3** and queued for removal in a future 0.3.0; v0.2.3 adds
+  `laser.drive_current`, the accepted current in mA, which is what the panel
+  would have to read to show the wire. The slider still reads the deprecated
+  field. `CrystaLaser`,
   `VortranLaser` and `DaqTrLight` never write the field at all, so the slider
   can display a stale cached value on those three. This is not a new opening-time write -- it is
   about what the widget shows. If you're on an installed copy older

@@ -88,9 +88,11 @@ end
     # excluded. TCubeLaser used to be excluded from `no_export_state` too --
     # its `export_state` took an extra unused positional argument, so the
     # 1-arg contract call never reached it and fell through to the
-    # (throwing) instrument-level stub; the argument is gone as of 0.3.0 and
-    # the exclusion with it, which is what makes the generic assertion below
-    # cover this type.
+    # (throwing) instrument-level stub. As of 0.2.3 the 1-arg method exists
+    # and the exclusion is gone with it, which is what makes the generic
+    # assertion below cover this type. The 2-arg form survives as a
+    # deprecated forwarder, so the assertion below is about which method
+    # answers a 1-arg call, not about the other one being absent.
     no_core_methods = Set([:MLSLM])
     no_initialize = Set([:ThorCamCSCCamera])
     no_shutdown = Set{Symbol}()
@@ -222,16 +224,15 @@ end
 
         # `export_state` arity, named for the type it was actually wrong on.
         # The generic loop above now covers `TCubeLaser` (it is no longer in
-        # `no_export_state`), but "a 1-arg method exists" does not by itself
-        # rule out the shape of the bug: the old
-        # `export_state(::TCubeLaser, sth)` had an unused second positional
-        # argument, so `export_state(laser)` matched nothing on this type and
-        # fell through to the throwing stub. Assert both halves -- the 1-arg
-        # form dispatches here, and no extra-argument method survives to be
-        # called by mistake. No other `export_state` method in the package
-        # takes more than one argument, so the negative is meaningful.
+        # `no_export_state`). The bug was that the only method took an unused
+        # second positional argument, so `export_state(laser)` matched nothing
+        # on this type and fell through to the throwing stub; adding the 1-arg
+        # method is the whole fix. The 2-arg form is deliberately still here as
+        # a deprecated forwarder (removal scheduled for 0.3.0), so assert both:
+        # the 1-arg form dispatches to this type, and the 2-arg form is a
+        # method on this type rather than the generic stub it used to shadow.
         @test has_specific_method(MC.export_state, MC.TCubeLaser)
-        @test !hasmethod(MC.export_state, Tuple{MC.TCubeLaser,Any})
+        @test has_specific_method(MC.export_state, MC.TCubeLaser, Any)
     end
 
     @testset "Stub throws" begin

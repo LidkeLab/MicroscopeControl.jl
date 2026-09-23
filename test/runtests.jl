@@ -115,7 +115,7 @@ include("tcube_fake_sdk.jl")
     # unmodified against the recorder installed by `tcube_fake_sdk.jl`, which
     # is what makes their *own* control flow (not a helper's) a thing the suite
     # can fail on. What no test here can tell you is how a real controller
-    # answers: see CHANGELOG 0.3.0, hardware verification NOT DONE.
+    # answers: see CHANGELOG 0.2.3, hardware verification NOT DONE.
     @testset "TCube Laser (no hardware)" begin
         TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
 
@@ -128,10 +128,48 @@ include("tcube_fake_sdk.jl")
             # `initialize` records the controller's limit here, not over the
             # caller's `max_current`; NaN means "not read yet".
             @test isnan(laser.controller_max_current)
-            # setpower takes mA and now says so.
-            @test laser.properties.power_unit == "mA"
+            # `setpower` takes mA and records what it accepted here; NaN means
+            # "nothing commanded yet".
+            @test isnan(laser.drive_current)
+            # The deprecated derived-power pair is unchanged from 0.2.2: the
+            # label is still "mW" and the figure is still the linear guess, so
+            # a rig reading them across this upgrade reads what it read before.
+            @test laser.properties.power_unit == "mW"
+            @test laser.properties.power == 0.0
             @test laser.daq_device === nothing
             @test laser.ao_channel === nothing
+        end
+
+        @testset "Positional construction, old arity and new" begin
+            # The four fields added since 0.2.2 sit at the end of the struct so
+            # that the ten-argument positional call a pre-0.2.3 caller wrote
+            # still constructs, with the new fields defaulted. Deleting the
+            # ten-argument inner constructor must fail this.
+            props = LightSourceProperties("mW", 0.0, false, 0.0, 100.0)
+            old = TCubeLaser("TCubeLaser", props, "red", 0.0, 160.0,
+                220.0, 32767.0, "00000000", 0, NIdaq())
+            @test old.serialNo == "00000000"
+            @test old.max_current == 160.0
+            @test old.max_setcurrent == 220.0 # slot 6, as in 0.2.2
+            @test old.max_setpoint == 32767.0 # slot 7
+            @test isnan(old.controller_max_current)
+            @test old.daq_device === nothing
+            @test old.ao_channel === nothing
+            @test isnan(old.drive_current)
+
+            # ... and the full arity names the new fields explicitly.
+            full = TCubeLaser("TCubeLaser", props, "red", 0.0, 160.0,
+                220.0, 32767.0, "00000000", 0, NIdaq(),
+                150.0, "Dev2", "Dev2/ao1", 40.0)
+            @test full.controller_max_current == 150.0
+            @test full.daq_device == "Dev2"
+            @test full.ao_channel == "Dev2/ao1"
+            @test full.drive_current == 40.0
+
+            # Neither positional form runs any check the keyword constructor
+            # runs, and neither does the keyword constructor refuse a label:
+            # `power_unit` is documentation, not an enforced invariant.
+            @test TCubeLaser("00000000"; properties=LightSourceProperties("mA", 0.0, false, 0.0, 220.0)).properties.power_unit == "mA"
         end
 
         @testset "Current validation" begin
@@ -215,6 +253,7 @@ include("tcube_fake_sdk.jl")
             # The old code wrote it before the call: `setpower(laser, 200.0)`
             # left `properties.power == 125.0` (executed).
             @test laser.properties.power == 0.0
+            @test isnan(laser.drive_current) # nothing was commanded
             # And "before touching the SDK" is now an observation rather than
             # an inference: the fake records every setpoint it is handed.
             @test isempty(FakeKinesis.setpoints)
@@ -253,7 +292,13 @@ include("tcube_fake_sdk.jl")
             setpower(laser, 40.0)
             @test FakeKinesis.setpoints == [UInt16(5957)]
             @test Float64(5957) / laser.max_setpoint * laser.max_setcurrent <= 40.0
-            @test laser.properties.power == 40.0
+            @test laser.drive_current == 40.0 # the accepted current, in mA
+            # The deprecated derived figure divides by the controller's limit
+            # once `initialize` has read it -- which is the value 0.2.2's
+            # `max_current` held at this point, since `initialize` overwrote
+            # it. Same number, from a field that is no longer destroyed.
+            @test laser.properties.power == 40.0 * laser.properties.max_power / laser.controller_max_current
+            @test laser.properties.power ≈ 25.0 rtol = 1e-3
 
             # A second initialize, with a different controller reading. One
             # fixture does not establish that the reading is what determines
@@ -411,11 +456,11 @@ include("tcube_fake_sdk.jl")
             setpower(laser, 0.001)
             @test FakeKinesis.setpoints == [UInt16(0)] # a ZERO SETPOINT is sent --
             @test laser.properties.is_on == false      # not an "off": is_on is untouched
-            @test laser.properties.power == 0.001      # and the field keeps the request
+            @test laser.drive_current == 0.001         # and the field keeps the request
             # What `export_state` writes is the request too, not the zero that
             # went to the wire and not the decoded current. Exporting either of
             # those instead survived every other assertion here.
-            @test export_state(laser)[1]["power"] == 0.001
+            @test export_state(laser)[1]["drive_current"] == 0.001
 
             # `tcube_get_current` decodes the controller's raw reading through
             # the same shared decode as the encoder. Returning zero from it
@@ -449,81 +494,109 @@ include("tcube_fake_sdk.jl")
             @test occursin("non-negative", offender(TCubeLaser("00000000"; min_current=-10.0), -5.0))
         end
 
-        @testset "Properties must be labelled mA" begin
-            # The default is "mA", but the label is the caller's to pass, and a
-            # caller passing "mW" got the accepted *current* stored under a
-            # milliwatt name -- into export_state and the HDF5 attributes with
-            # it. That is exactly the silent break the 0.3.0 bump announces, so
-            # the constructor refuses it.
-            mW = LightSourceProperties("mW", 0.0, false, 0.0, 100.0)
-            @test_throws ArgumentError TCubeLaser("00000000"; properties=mW)
+        @testset "properties.power keeps its pre-0.2.3 value (deprecated)" begin
+            # `properties.power`/`power_unit` are an uncalibrated linear guess
+            # and are on their way out, but removing them would have forced a
+            # migration on every rig reading them. So they keep the exact value
+            # 0.2.2 produced, which is not the same as keeping 0.2.2's line:
+            # that line divided by `light.max_current`, and 0.2.2's
+            # `initialize` overwrote that field with the controller's limit.
+            # Both moments are checked against the old expression written out
+            # literally, with the divisor 0.2.2 would have had in the field.
+            v022_power(divisor, current, max_power) = current * max_power / divisor
+
+            FakeKinesis.reset!()
+            fresh = TCubeLaser("00000000"; max_current=80.0)
+            @test fresh.properties.power_unit == "mW" # unchanged label
+            setpower(fresh, 40.0)
+            # Before initialize, 0.2.2's max_current was the caller's 80.0.
+            @test fresh.properties.power == v022_power(80.0, 40.0, fresh.properties.max_power)
+            @test fresh.properties.power == 50.0
+            @test fresh.drive_current == 40.0 # the truth, alongside it
+
+            # After initialize, 0.2.2's max_current was the controller's limit,
+            # decoded from the same raw reading this driver decodes into
+            # controller_max_current.
+            FakeKinesis.reset!()
+            initialize(fresh)
+            v022_max_current = Float64(FakeKinesis.diode_limit_raw[]) / fresh.max_setpoint * fresh.max_setcurrent
+            @test fresh.max_current == 80.0 # the caller's ceiling still survives
+            @test fresh.controller_max_current == v022_max_current
+            setpower(fresh, 40.0)
+            @test fresh.properties.power == v022_power(v022_max_current, 40.0, fresh.properties.max_power)
+            @test fresh.properties.power ≈ 25.0 rtol = 1e-3
+            @test fresh.drive_current == 40.0
+
+            # A caller's own max_power scales it, as it always did.
+            scaled = TCubeLaser("00000000"; properties=LightSourceProperties("mW", 0.0, false, 0.0, 250.0))
+            setpower(scaled, 80.0)
+            @test scaled.properties.power == v022_power(160.0, 80.0, 250.0)
+            @test scaled.properties.power == 125.0
+
+            # A refused request updates neither field.
+            FakeKinesis.reset!()
+            refused = TCubeLaser("00000000"; max_current=80.0)
+            @test_throws ArgumentError setpower(refused, 100.0)
+            @test refused.properties.power == 0.0
+            @test isnan(refused.drive_current)
+            @test isempty(FakeKinesis.calls)
+        end
+
+        @testset "tcube_refresh explains itself instead of firing" begin
+            # It drove a hardcoded 90 mA under a name that warned nobody, so it
+            # is gone as a behaviour -- but it was an exported name, and
+            # deleting an exported name turns a caller's line into an
+            # `UndefVarError` that explains nothing. The throwing stub is the
+            # non-breaking form of the same removal.
+            FakeKinesis.reset!()
+            laser = TCubeLaser("00000000")
             err = try
-                TCubeLaser("00000000"; properties=mW)
+                tcube_refresh(laser)
+                nothing
             catch e
                 e
             end
-            @test occursin("mW", err.msg)
-            @test occursin("current", err.msg)
-
-            # Properties that are labelled correctly are kept as given.
-            ok = TCubeLaser("00000000"; properties=LightSourceProperties("mA", 0.0, false, 0.0, 220.0))
-            @test ok.properties.max_power == 220.0
-            @test export_state(ok)[1]["power_unit"] == "mA" # the checks refuse, they do not block
-
-            # The constructor is the earliest check, not a barrier. Three ways
-            # around it, each of which used to put a current of 40.0 into
-            # exported metadata under a "mW" label. The invariant is therefore
-            # enforced at the use boundary (`setpower`) and the export boundary
-            # (`export_state`) as well.
-            #
-            # 1. `properties` is mutable and reachable through the device.
-            FakeKinesis.reset!()
-            mutated = TCubeLaser("00000000")
-            mutated.properties.power_unit = "mW"
-            @test_throws ArgumentError setpower(mutated, 40.0)
-            @test isempty(FakeKinesis.setpoints) # nothing commanded under a false label
-            @test_throws ArgumentError export_state(mutated)
-
-            # 2. ... and through a reference the caller kept after passing it.
-            kept = LightSourceProperties("mA", 0.0, false, 0.0, 100.0)
-            aliased = TCubeLaser("00000000"; properties=kept)
-            kept.power_unit = "mW"
-            @test aliased.properties.power_unit == "mW" # same object, not a copy
-            @test_throws ArgumentError setpower(aliased, 40.0)
-            @test_throws ArgumentError export_state(aliased)
-
-            # 3. The struct's auto-generated positional constructor never runs
-            # the keyword constructor's check at all.
-            t = TCubeLaser("00000000")
-            positional = TCubeLaser(t.unique_id, LightSourceProperties("mW", 0.0, false, 0.0, 100.0),
-                t.laser_color, t.min_current, t.max_current, t.controller_max_current,
-                t.max_setcurrent, t.max_setpoint, t.serialNo, t.task_mod, t.daq,
-                t.daq_device, t.ao_channel)
-            @test positional.properties.power_unit == "mW" # constructed, not refused
-            @test_throws ArgumentError setpower(positional, 40.0)
-            @test_throws ArgumentError export_state(positional)
-
-            # `setpoints` alone is too weak: a driver that talked to the SDK
-            # before refusing -- LD_RequestReadings, say -- would still leave it
-            # empty. Nothing at all may reach the device under a false label.
-            @test isempty(FakeKinesis.setpoints) # none of the three reached the SDK
-            @test isempty(FakeKinesis.calls)     # and none of them called it at all
+            @test err isa ErrorException
+            @test occursin("90 mA", err.msg)   # says what it used to do ...
+            @test occursin("setpower", err.msg) # ... and what to call instead
+            @test isempty(FakeKinesis.calls)    # and reaches no hardware
+            @test isempty(FakeKinesis.setpoints)
+            # Still exported, which is the point of keeping it.
+            @test :tcube_refresh in names(MicroscopeControl)
         end
 
         @testset "export_state" begin
             laser = TCubeLaser("00000000"; daq_device="Dev2", ao_channel="Dev2/ao1")
             attrs, data, children = export_state(laser) # 1-arg: used to throw
             @test attrs isa Dict{String,Any}
-            @test attrs["power_unit"] == "mA"
+            @test attrs["power_unit"] == "mW"
             @test attrs["min_current"] == 0.0
             @test attrs["max_current"] == 160.0
             @test isnan(attrs["controller_max_current"])
+            @test isnan(attrs["drive_current"]) # nothing commanded yet
             @test attrs["daq_device"] == "Dev2"
             @test attrs["ao_channel"] == "Dev2/ao1"
             @test data === nothing
             @test haskey(children, "daq")
             # `nothing` is not writable as an HDF5 attribute; unset must be "".
             @test export_state(TCubeLaser("00000000"))[1]["daq_device"] == ""
+
+            # The 2-argument form is the one that existed before 0.2.3; the bug
+            # was that it was the ONLY one, so `export_state(laser)` fell
+            # through to the throwing stub. Adding the 1-arg method is the
+            # whole fix, so the old form survives as a deprecated forwarder
+            # rather than becoming a MethodError. It warns once, ignores its
+            # argument and returns the same thing.
+            TCube.EXPORT_STATE_2ARG_WARNED[] = false
+            forwarded = @test_logs (:warn,) match_mode = :any export_state(laser, nothing)
+            @test isequal(forwarded[1], attrs) # isequal: NaN attributes
+            @test forwarded[2] === data
+            @test keys(forwarded[3]) == keys(children)
+            # The argument really is ignored, whatever it is ...
+            @test isequal(export_state(laser, "anything at all")[1], attrs)
+            # ... and the warning does not repeat.
+            @test_logs export_state(laser, nothing)
+            @test TCube.EXPORT_STATE_2ARG_WARNED[]
         end
     end
 

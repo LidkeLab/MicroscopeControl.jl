@@ -9,10 +9,10 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-09-22
+## [0.2.3] - 2026-09-23
 
-TCube laser driver: safety, then correctness, then unit honesty. Reported
-independently by two downstream rig repositories.
+TCube laser driver: safety, then correctness, then saying what was actually
+commanded. Reported independently by two downstream rig repositories.
 
 **Hardware verification: NOT DONE.** There is no Thorlabs TCube laser diode
 controller on any build machine, so no change below has been exercised against
@@ -21,42 +21,21 @@ are ordered as they are: a change that can only *reduce* what reaches a laser
 diode is worth taking unverified, while a change to what a working rig sees is
 not, and the ones in the latter class are called out individually.
 
-**Interface change (breaking, hence the minor bump).** Four things a working
-caller can see changed:
+**Non-breaking.** Every fix below arrives without a line of calling code
+changing. The safety fixes never needed an API change; the four places where
+this work did originally break one are deprecations instead, listed under
+Deprecated. The maintained consumers of this package are internal rig
+repositories that pin exact tags, so what a breaking release actually costs is
+a hardware re-verification session rather than a version digit — and those are
+worth batching. What is queued for that batch is listed under Deferred at the
+end of this entry.
 
-- `TCubeLaser`'s `properties.power_unit` is now `"mA"` and `properties.power`
-  holds the drive current in milliamps that `setpower` accepted. It used to be
-  labelled `"mW"` and hold `current * max_power / max_current`, a linear
-  current-to-power guess the driver has no way to measure and that the bench
-  data in the (now deleted) `helpers.jl` contradicts. A caller reading
-  `laser.properties.power` as milliwatts now silently reads milliamps, so read
-  `power_unit` or convert at your own boundary.
-- `export_state(::TCubeLaser, sth)` is now `export_state(::TCubeLaser)`. The
-  second positional argument was unused and meant the 1-argument call every
-  other device answers fell through to the throwing stub. A caller passing a
-  second argument now gets a `MethodError`.
-- `TCubeLaser`'s field list and positional order changed (new
-  `controller_max_current`, `daq_device`, `ao_channel`). The keyword
-  constructor `TCubeLaser(serialNo; ...)` is unaffected; a direct positional
-  construction is not.
-- **`tcube_refresh` is gone, and it was an exported name.** `using
-  MicroscopeControl; tcube_refresh(...)` used to resolve; it is now an
-  `UndefVarError`. See Removed below for what it did and why it went.
-
-A `power_unit` other than `"mA"` is now **rejected**, with an `ArgumentError`,
-at three points: the keyword constructor, `setpower` and `export_state`.
-Defaulting the label to `"mA"` was not enough — a caller passing
-`LightSourceProperties("mW", ...)` got the accepted drive current stored under
-a milliwatt name and carried into `export_state` and the HDF5 attributes
-written from it — and the constructor check alone was not enough either.
-`LightSourceProperties` is mutable, so the label can be changed after
-construction, either through `laser.properties.power_unit` or through a
-reference the caller kept; and the struct's auto-generated positional
-constructor never runs the keyword constructor's check. All three routes still
-produced `power = 40.0` labelled `"mW"` in exported metadata. So the invariant
-is enforced where it acts: `setpower` will not command a current on a wrongly
-labelled device, and `export_state` will not serialize one. That is the silent
-break this bump exists to announce, so it is refused rather than documented.
+**One behaviour change a working rig can see, and it is the point of the
+release.** `setpower(::TCubeLaser, current)` with a current above the rig's own
+configured ceiling now throws an `ArgumentError` instead of logging one and
+sending the setpoint anyway. A rig relying on that log line was driving more
+current than it had declared safe. This one breaks toward less light, which is
+why it is not deferred.
 
 ### Fixed
 - **`setpower(::TCubeLaser, current)` sent out-of-range currents to the diode.**
@@ -151,6 +130,35 @@ break this bump exists to announce, so it is refused rather than documented.
   so the old default protected nothing and merely rejected safe small currents.
   A diode-specific floor is the caller's to set.
 
+### Deprecated
+Each of these was a genuine API break in an earlier draft of this release and
+is now a deprecation, so nothing has to be migrated to receive the fixes
+above. All four are scheduled for removal in a future 0.3.0.
+
+- **`properties.power` and `properties.power_unit` on `TCubeLaser`.**
+  `power_unit` still defaults to `"mW"` and `power` still holds
+  `current * max_power / <controller limit>`, the same number 0.2.2 produced
+  — reproducing that exactly took one extra step, because the old expression
+  divided by `light.max_current` and 0.2.2's `initialize` overwrote that field
+  with the controller's limit. `max_current` is the caller's now and stays so,
+  so the divisor is `controller_max_current` once `initialize` has read it and
+  `max_current` before that: the same quantity the old field held at each of
+  those two moments. The figure is an uncalibrated linear guess the driver has
+  no way to measure, contradicted by the bench data in the (now deleted)
+  `helpers.jl` and preserved as a comment in `TCubeLaserControl.jl`, and the
+  controller reports no optical power in the open-loop mode this driver uses.
+  Read the new `drive_current` field instead (see Added).
+- **`export_state(::TCubeLaser, sth)`.** The bug was the *absence* of the
+  1-argument method — `export_state(laser)` matched nothing on this type and
+  fell through to the throwing instrument-level stub — so adding that method
+  is the whole fix and is purely additive. The 2-argument form stays as a
+  forwarder that warns once per session, ignores its (never-read) argument and
+  delegates.
+- **`tcube_refresh`.** Its behaviour is gone; the exported name is not. See
+  Removed.
+- **`min_current`'s `60.0` default** is now `0.0`; see Fixed. Reading
+  `laser.min_current` and expecting `60.0` is the only way to notice.
+
 ### Removed
 - **`tcube_get_power`** — it was uncallable four ways over: it referenced an
   undefined `out`, overwrote its `serialNo` local with the hardcoded literal
@@ -163,10 +171,15 @@ break this bump exists to announce, so it is refused rather than documented.
   cannot read back, and the controller reports no optical power in the
   open-loop mode this driver uses. So the getter was deleted rather than
   repaired around a guess.
-- **`tcube_refresh`** — it opened the device, enabled the output, drove a
-  hardcoded **90 mA**, slept a second, then disabled and closed. A bench
-  procedure whose name warned no one. Deleted rather than renamed; speak up if
-  a rig depends on it.
+- **`tcube_refresh`'s behaviour** — it opened the device, enabled the output,
+  drove a hardcoded **90 mA**, slept a second, then disabled and closed. A
+  bench procedure whose name warned no one, and the only function here that
+  could raise the current on a diode without being handed a number. The
+  **name and its export are kept**, with a body that throws and says what it
+  used to do and that `setpower(light, current)` is the replacement: deleting
+  an exported name would turn a caller's line into an `UndefVarError` that
+  explains nothing, which is a break that buys nothing. Speak up if a rig
+  depended on it.
 - **`src/hardware_implementations/tcube_laser/helpers.jl`** — a top-level
   script that built a device list, opened the hardcoded serial `64849775`, set
   open-loop mode, enabled the output and drove 80 mA, all at `include` time.
@@ -177,6 +190,12 @@ break this bump exists to announce, so it is refused rather than documented.
   a comment in `TCubeLaserControl.jl`.
 
 ### Added
+- **`TCubeLaser.drive_current`** — the drive current in mA that `setpower` last
+  accepted, `NaN` before the first successful call, and the only field here
+  that reports what the driver acted on. It is also written to
+  `export_state`'s attributes. `properties.power` remains beside it, unchanged
+  and deprecated, so a consumer can move across at its own pace rather than at
+  this release's.
 - Tests that do not need a controller, covering the parts of the driver that
   decide whether a current reaches the diode: constructor defaults,
   `check_current`'s bounds and message, that a caller's `max_current` survives
@@ -194,14 +213,36 @@ break this bump exists to announce, so it is refused rather than documented.
   `LD_Open` is followed by `LD_Close`. What no test here can tell you is how a
   real controller answers.
 - `test/contract.jl` no longer excludes `TCubeLaser` from `no_export_state`,
-  and asserts directly that the 1-argument form dispatches to this type while
-  no extra-argument method survives.
+  and asserts directly that the 1-argument form dispatches to this type and
+  that the deprecated 2-argument form is a method on this type rather than the
+  throwing stub it used to shadow.
 - The five Claude Code skills' TCube rows are updated, each naming the version
-  that fixed the item, since a downstream may hold an older installed copy.
+  that fixed the item (v0.2.3), since a downstream may hold an older installed
+  copy.
   `mc-system-design` also gains an unrelated `[limitation]` note: `using
   MicroscopeControl` plus a blanket `using GLMakie` makes `Camera` ambiguous
   (it is the only name both packages export), so a field typed `::Camera`
   fails with `UndefVarError`.
+
+### Deferred to a batched 0.3.0
+Not in this release. Each is a real break, and a breaking release costs a rig
+re-verification session, so they are queued to be spent once rather than four
+times. Listed here so the queue is visible in one place rather than spread
+across issues.
+
+- Remove `properties.power` and `properties.power_unit` from this driver in
+  favour of `drive_current`. The pair is a linear guess under a milliwatt
+  label; the field that reports what was commanded already exists.
+- Remove the deprecated 2-argument `export_state(::TCubeLaser, sth)` and the
+  `tcube_refresh` throwing stub, both of which exist only to keep an old call
+  site resolving.
+- Rename `LightSourceProperties.is_on` to `is_on_requested` and add an
+  optional measured counterpart. The field is a *requested* state across the
+  whole package, not just in this driver, and nothing reads it back from
+  hardware; a name that says so is a package-wide interface change. (From the
+  Shutter interface ruling.)
+- Fix `getposition`'s return shape across all stage drivers, which is
+  inconsistent between them today.
 
 ## [0.2.2] - 2026-09-22
 

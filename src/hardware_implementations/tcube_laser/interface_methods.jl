@@ -16,36 +16,29 @@ function check_err(err, operation::AbstractString, serialNo::AbstractString)
 end
 
 """
-    check_power_unit(unit::AbstractString, serialNo::AbstractString)
-    check_power_unit(light::TCubeLaser)
+    legacy_power(light::TCubeLaser, current::Float64)
 
-Throw an `ArgumentError` unless `properties.power_unit` is `"mA"`.
+The value `properties.power` has held since before v0.2.3: the requested
+current scaled linearly onto `properties.max_power`. **Deprecated, and
+scheduled for removal in 0.3.0** -- read `light.drive_current` instead.
 
-The label is not decoration. `setpower` takes a drive current in milliamps and
-`properties.power` stores the current it accepted, so any other label puts
-milliamps under a foreign name and carries it into `export_state` and the HDF5
-attributes written from it.
+It is a guess, not a measurement. The controller reports no optical power in
+the open-loop mode this driver uses, and the bench table preserved in
+`TCubeLaserControl.jl` shows the real curve is not this line. It is reproduced
+here only so that a rig reading `properties.power` across an upgrade reads the
+same number it read before.
 
-Checked at three points, not one. The constructor is the earliest, but it is
-not a barrier: `properties` is a mutable struct the caller keeps a reference
-to, `power_unit` is a plain mutable field, and the struct's auto-generated
-positional constructor does not run the keyword constructor's check at all. So
-the invariant is enforced where it actually matters -- at [`setpower`](@ref),
-the use boundary, and [`export_state`](@ref), the boundary the metadata leaves
-by. Both are refusals: a wrongly labelled device cannot command a current and
-cannot be serialized, rather than doing either under a false name.
+Reproducing it exactly needs one step the old expression did not: it divided by
+`light.max_current`, and `initialize` used to overwrite that field with the
+controller's limit. `max_current` is now the caller's and stays so, so the
+divisor is `controller_max_current` once `initialize` has read it and
+`max_current` before that -- which is the same quantity the old field held at
+each of those two moments.
 """
-function check_power_unit(unit::AbstractString, serialNo::AbstractString)
-    unit == "mA" || throw(ArgumentError(
-        "TCubeLaser $serialNo: properties.power_unit must be \"mA\", got \"$unit\". " *
-        "This controller drives the diode in open-loop current mode: `setpower` takes a drive current in " *
-        "milliamps and `properties.power` records the current it accepted, not an optical power, so any " *
-        "other label would be false -- including in `export_state` and the HDF5 attributes written from it. " *
-        "Convert to your own units at your own boundary."))
-    return nothing
+function legacy_power(light::TCubeLaser, current::Float64)
+    divisor = isnan(light.controller_max_current) ? light.max_current : light.controller_max_current
+    return current * light.properties.max_power / divisor
 end
-
-check_power_unit(light::TCubeLaser) = check_power_unit(light.properties.power_unit, light.serialNo)
 
 """
     effective_max_current(light::TCubeLaser)
@@ -267,14 +260,9 @@ end
     setpower(light::TCubeLaser, current::Float64)
 
 Set the diode drive current, in **mA** -- despite the interface name, this
-function has always taken a current, and `properties.power_unit` now says so.
+function has always taken a current.
 
-Refuses to command anything unless `properties.power_unit` is `"mA"` (see
-[`check_power_unit`](@ref)): the label is checked here and not only at
-construction, because `properties` is mutable and the caller may hold a
-reference to it.
-
-Then validates through [`check_current`](@ref), so an out-of-range request
+Validates through [`check_current`](@ref), so an out-of-range request
 throws before any setpoint reaches the controller, and encodes the setpoint
 through [`setpoint_code`](@ref), whose guarantee is that the *decoded* current
 -- `setpoint_current(light, code)`, the driver's own arithmetic -- never exceeds
@@ -290,25 +278,31 @@ and does not touch `properties.is_on`. Use [`light_off`](@ref) to stop
 emission. This is
 deliberate -- rounding such a request up to one code would command more current
 than was asked for, which is the rule this driver will not break -- but it is
-worth saying out loud, because `properties.power` records the **requested**
-current, not the zero that was commanded. A caller reading back `power` after a
+worth saying out loud, because `drive_current` records the **requested**
+current, not the zero that was commanded. A caller reading it back after a
 sub-code request sees its own number, and `export_state` writes that number to
 the HDF5 attributes. There is no field here that reports what actually went to
 the wire.
 
-On success `properties.power` records the current that was accepted; the driver no longer
-derives a milliwatt figure from it, because the linear
-`current * max_power / max_current` guess it used to store was contradicted by
-the bench measurements preserved as a comment in `TCubeLaserControl.jl` (they
-came from the deleted `helpers.jl`) and the controller reports no power in open-loop
-mode.
+# What is recorded
+
+On success, `light.drive_current` holds the current that was accepted, in mA.
+That is the field to read.
+
+`properties.power` is also updated, to [`legacy_power`](@ref)'s linear
+`current * max_power / <controller limit>` figure under the historical `"mW"`
+label. It is an **uncalibrated guess**, contradicted by the bench measurements
+preserved as a comment in `TCubeLaserControl.jl` (they came from the deleted
+`helpers.jl`), and the controller reports no power in open-loop mode. It is
+kept only so an existing rig reads the same number across this upgrade, is
+**deprecated**, and is scheduled for removal in 0.3.0.
 """
 function LightSourceInterface.setpower(light::TCubeLaser, current::Float64)
-    check_power_unit(light)
     check_current(light, current)
     current_setpoint = setpoint_code(light, current)
     check_err(LD_SetLaserSetPoint(light.serialNo, current_setpoint), "LD_SetLaserSetPoint", light.serialNo)
-    light.properties.power = current
+    light.drive_current = current
+    light.properties.power = legacy_power(light, current) # deprecated; see legacy_power
     println("Laser current set to $current mA")
     return nothing
 end
@@ -405,17 +399,16 @@ end
     export_state(light::TCubeLaser)
 
 Snapshot for HDF5 serialization, matching the package-wide 1-argument
-`export_state` contract.
+`export_state` contract. Before v0.2.3 the only method took an unused second
+positional argument, so this 1-argument call fell through to the throwing
+instrument-level stub.
 
-Throws rather than serialize a falsely labelled current: this is the boundary
-the metadata leaves by, so [`check_power_unit`](@ref) runs here too and not
-only at construction. `"power"` below is a drive current in mA, and writing it
-under any other `"power_unit"` would put that claim into the saved file, where
-nothing downstream can tell it from an optical power.
+`"drive_current"` is the drive current in mA that `setpower` last accepted, and
+is the attribute to read. `"power"`/`"power_unit"` are the deprecated derived
+guess described in [`legacy_power`](@ref), written for continuity with files
+saved by earlier versions and scheduled for removal in 0.3.0.
 """
 function export_state(light::TCubeLaser)
-    check_power_unit(light)
-
     attributes = Dict(
         "unique_id" => light.unique_id, "laser_color" => light.laser_color, "serialNo" => light.serialNo,
         "min_current" => light.min_current, "max_current" => light.max_current,
@@ -423,6 +416,7 @@ function export_state(light::TCubeLaser)
         "max_setcurrent" => light.max_setcurrent, "max_setpoint" => light.max_setpoint,
         # `nothing` is not an HDF5-writable attribute value; "" means "not set".
         "daq_device" => something(light.daq_device, ""), "ao_channel" => something(light.ao_channel, ""),
+        "drive_current" => light.drive_current,
         "power_unit" => light.properties.power_unit, "power" => light.properties.power, "is_on" => light.properties.is_on,
         "min_power" => light.properties.min_power, "max_power" => light.properties.max_power
     )
@@ -432,4 +426,60 @@ function export_state(light::TCubeLaser)
     )
 
     return attributes, data, children
+end
+
+"""
+    EXPORT_STATE_2ARG_WARNED
+
+Whether the deprecated 2-argument [`export_state`](@ref) has already warned in
+this session. A plain `Ref` rather than `@warn`'s `maxlog=1` so that the
+warning is testable more than once per process.
+"""
+const EXPORT_STATE_2ARG_WARNED = Ref(false)
+
+"""
+    export_state(light::TCubeLaser, ignored)
+
+Deprecated forwarder to [`export_state(::TCubeLaser)`](@ref). Warns once per
+session and ignores its second argument, which was never read.
+
+It is kept because removing it would be a break for no benefit. The bug was the
+*absence* of the 1-argument method -- `export_state(laser)` matched nothing on
+this type and fell through to the throwing instrument-level stub -- so adding
+that method is the whole fix, and a caller that had to pass a second argument
+to get anything at all keeps working. The forwarder is scheduled for removal in
+0.3.0.
+"""
+function export_state(light::TCubeLaser, ignored)
+    if !EXPORT_STATE_2ARG_WARNED[]
+        EXPORT_STATE_2ARG_WARNED[] = true
+        @warn "export_state(::TCubeLaser, x): the second argument is ignored and this method is deprecated; " *
+              "call export_state(laser). The 2-argument form is scheduled for removal in 0.3.0." ignored_argument = ignored
+    end
+    return export_state(light)
+end
+
+"""
+    tcube_refresh(light::TCubeLaser)
+
+Removed in v0.2.3. Always throws; reaches no hardware.
+
+It used to open the device, enable the output, drive a hardcoded **90 mA**,
+sleep a second, then disable and close -- a bench procedure whose name warned
+nobody, and the one function here that could raise the current on a diode
+without being asked for a number. It is kept as a throwing stub rather than
+deleted so that `using MicroscopeControl; tcube_refresh(laser)` still resolves
+and explains itself, instead of failing with an `UndefVarError` that says
+nothing about what the call used to do.
+
+`setpower(light, current)` is the replacement: it takes the current explicitly
+and refuses one outside the configured range.
+"""
+function tcube_refresh(light::TCubeLaser)
+    error("TCubeLaser $(light.serialNo): tcube_refresh was removed in v0.2.3 and does nothing. " *
+          "It opened the controller, enabled the output, drove a hardcoded 90 mA for one second, " *
+          "then disabled and closed -- a bench procedure whose name warned nobody about the current it " *
+          "commanded. Use `setpower(light, current)` with the current you want, which is checked against " *
+          "min_current, max_current, the controller's limit and max_setcurrent before anything is sent; " *
+          "`light_on`/`light_off` control the output.")
 end
