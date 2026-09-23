@@ -123,6 +123,26 @@ Reproducing it would mean intercepting writes to the field to reconstruct a
 number the driver invents; `drive_current` is exact and has no lifecycle.
 
 ### Fixed
+- **Every digital output write to a line above line 0 was silently a no-op,
+  and MC's own Vortran laser could not be switched on.** `setvoltage` on a
+  digital task called `DAQmxWriteDigitalScalarU32`, which is **port format**:
+  bit `n` is line `n` of the port, even when the task holds a single line. So
+  a task on `Dev1/port0/line1` written with `1` set bit 0, which is not in the
+  task, and nothing happened — no error, no warning. Only line 0 ever worked.
+  Confirmed on hardware by a rig repository (NI-DAQmx 23.5, USB-6008): a TTL
+  shutter on `port0/line1` ignored `1` and responded to `2`.
+  `VortranLaser.light_on` was worse than a no-op: it wrote `8.0`, as though
+  this were a voltage, setting bit 3 — not the line its task holds — so the
+  intended line was driven LOW and the laser did not come on. It now writes
+  `1.0`.
+  `setvoltage` now computes the port word from what the task actually holds
+  (`do_port_word`): a single line channel shifts the level to that line's bit;
+  a port-wide channel passes the word through unchanged, which is what the old
+  code was right about; and a task holding several channels is refused,
+  because one scalar across several lines is ambiguous. A single-line task
+  also refuses any value other than `0` or `1`, since such a value is almost
+  certainly a caller pre-shifting around this very defect — and shifting it
+  again would drive a *different* line.
 - **`setpower(::TCubeLaser, current)` sent out-of-range currents to the diode.**
   The range check logged `@error` and then execution continued: the setpoint was
   computed and `LD_SetLaserSetPoint` called anyway. What that cost depended on

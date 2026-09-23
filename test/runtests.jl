@@ -628,6 +628,40 @@ include("tcube_fake_sdk.jl")
         end
     end
 
+    @testset "NIdaq digital output" begin
+        # Digital scalar writes are PORT format: bit n is line n of the port,
+        # even for a single-line task. Confirmed on hardware (NI-DAQmx 23.5,
+        # USB-6008): a shutter on port0/line1 ignored 1 and responded to 2.
+        # `do_port_word` is the whole of the fix and is testable without a DAQ.
+        DAQ = MicroscopeControl.HardwareImplementations.NIDAQcard
+
+        # A line task: the value is a level and lands on that line's bit.
+        @test DAQ.do_port_word(["Dev1/port0/line0"], 1.0) === UInt32(1)
+        @test DAQ.do_port_word(["Dev1/port0/line1"], 1.0) === UInt32(2)
+        @test DAQ.do_port_word(["Dev1/port0/line3"], 1.0) === UInt32(8)
+        @test DAQ.do_port_word(["Dev1/port1/line2"], 1.0) === UInt32(4)
+        @test DAQ.do_port_word(["Dev1/port0/line7"], 1.0) === UInt32(128)
+        # Zero clears that line, whichever line it is.
+        @test DAQ.do_port_word(["Dev1/port0/line5"], 0.0) === UInt32(0)
+
+        # The defect itself: before the fix every one of these was UInt32(1),
+        # so only line0 could ever be driven.
+        @test DAQ.do_port_word(["Dev1/port0/line1"], 1.0) != UInt32(1)
+
+        # A pre-shifted port word on a line task is refused, because shifting
+        # it again would drive a different line.
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/port0/line1"], 2.0)
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/port0/line3"], 8.0)
+
+        # A port-wide task keeps the old pass-through: the value IS the word.
+        @test DAQ.do_port_word(["Dev1/port0"], 8.0) === UInt32(8)
+        @test DAQ.do_port_word(["Dev1/port1"], 0.0) === UInt32(0)
+
+        # Several channels in one task is ambiguous and is refused.
+        @test_throws ErrorException DAQ.do_port_word(
+            ["Dev1/port0/line0", "Dev1/port0/line1"], 1.0)
+    end
+
     @testset "Export State" begin
         devices = [SimCamera(), SimStage3d(), SimStage2d(), SimStage1d(), SimLight()]
 

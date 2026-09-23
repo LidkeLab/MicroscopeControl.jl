@@ -49,7 +49,11 @@ function LightSourceInterface.light_on(light::VortranLaser)
     end
     try
         td = NIDAQcard.createtask(light.daq, "DO", light.channelsDO[12])
-        NIDAQcard.setvoltage(light.daq, td, 8.0)
+        # 1.0, not 8.0: this is a DIGITAL line, so the value is a level, not
+        # a voltage. The old 8.0 set bit 3 of the port word, which is not the
+        # line this task holds, so `light_on` drove the intended line LOW --
+        # it did not turn the laser on. See `NIDAQcard.do_port_word`.
+        NIDAQcard.setvoltage(light.daq, td, 1.0)
         NIDAQcard.deletetask(light.daq, td)
     catch e
         @warn "VortranLaser light_on failed: $e"
