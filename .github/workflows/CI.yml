@@ -1,16 +1,37 @@
 name: CI
+# Actions minutes are a shared, finite resource, so this workflow is
+# deliberately thin. The real gate is the LOCAL suite, run before pushing
+# (see CLAUDE.md "Testing policy"); CI is confirmation, not the first
+# signal. Concretely: a pull request runs ONE Julia version, no docs build,
+# and nothing at all for a prose-only change; the full matrix and the docs
+# build run once on `main` and on tags, where the tag is actually cut.
+# To get full signal on a branch without opening a pull request:
+#   gh workflow run CI.yml --ref <branch>
 on:
   push:
     branches:
       - main
     tags: ['*']
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'dev/**'
+      - '.claude/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
+      # NOT a blanket '**.md': test/skills.jl reads each shipped SKILL.md and
+      # asserts on its frontmatter and version stamp, so a skills/*.md edit
+      # really can break the suite and must still be tested.
   workflow_dispatch:
 concurrency:
-  # Skip intermediate builds: always.
-  # Cancel intermediate builds: only if it is a pull request build.
+  # Cancel superseded runs on EVERY ref, not just pull requests: when a branch
+  # gets several pushes in a row only the last one is worth building, and the
+  # earlier runs are pure waste. Tags are unaffected in practice because each
+  # tag is its own ref and so its own group.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+  cancel-in-progress: true
 jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
@@ -22,9 +43,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - '1.11'
-          - '1'
+        # A pull request runs current Julia only. The oldest supported
+        # version is exercised locally before pushing and again here on
+        # `main`/tags, which is where a version actually ships. Halving the
+        # matrix on the branch that gets pushed most is most of the saving.
+        version: ${{ github.event_name == 'pull_request' && fromJSON('["1"]') || fromJSON('["1.11", "1"]') }}
         os:
           - ubuntu-latest
         arch:
@@ -48,8 +71,12 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         with:
           prefix: xvfb-run -a
+      # Coverage is computed and uploaded once, from the `main`/tag run, not
+      # from every push to every branch.
       - uses: julia-actions/julia-processcoverage@v1
+        if: github.event_name != 'pull_request'
       - uses: codecov/codecov-action@v6
+        if: github.event_name != 'pull_request'
         with:
           files: lcov.info
   version-bumped:
@@ -93,6 +120,11 @@ jobs:
           fi
   docs:
     name: Documentation
+    # The longest job in this workflow by a wide margin, and it deploys
+    # nothing from a pull request anyway. It runs on `main`, on tags, and on
+    # demand. A docs change is checked locally with
+    # `julia --project=docs docs/make.jl`.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       actions: write # needed to allow julia-actions/cache to proactively delete old caches that it has created

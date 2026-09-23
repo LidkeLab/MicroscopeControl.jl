@@ -9,6 +9,34 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-22
+
+No functional change; CI configuration and contributor guidance only.
+
+### Changed
+- CI is trimmed to the minimum useful signal, because Actions minutes are a
+  shared resource and a workflow re-run is not a cheap way to find out
+  whether code compiles. A pull request now runs **one** Julia version
+  instead of two, skips the docs build entirely, and does not run at all for
+  a change confined to `docs/`, `dev/`, `.claude/`, `README.md`,
+  `CHANGELOG.md`, `CLAUDE.md` or `LICENSE`. The full version matrix,
+  coverage upload and docs build run once on `main` and on tags, where a
+  version actually ships. Superseded runs are now cancelled on every ref
+  rather than only on pull requests, so a branch pushed several times in a
+  row builds once. `CompatHelper` drops from daily to weekly: this package
+  is unregistered and its consumers pin exact tags, so a one-day-old compat
+  bound buys nothing.
+  `paths-ignore` deliberately does **not** include a blanket `**.md`:
+  `test/skills.jl` reads each shipped `SKILL.md` and asserts on its
+  frontmatter and version stamp, so a change under `skills/` must still be
+  tested.
+- `CLAUDE.md` gains a "Testing policy" section stating what was already
+  true in practice: the **local** suite is the gate, run before every push,
+  and CI is confirmation rather than the first signal. It records the
+  command for the oldest supported Julia version, which pull requests no
+  longer run, and how to get full signal on a branch without opening a pull
+  request (`gh workflow run CI.yml --ref <branch>`).
+
 ## [0.2.1] - 2026-09-22
 
 Hardware verification: NOT DONE for the DCAM4 change (touches a driver
