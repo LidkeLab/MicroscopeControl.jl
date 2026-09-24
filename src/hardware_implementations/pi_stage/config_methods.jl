@@ -42,13 +42,24 @@ function initialize_original(stage::PIStage) #TODO: Error handling
     #Set servo mode to on for both axes, noting axis X is labeled "1" and axis Y is labeled "2"
     servo(stage, true, true)
 
-    #Reference stage
-    referencemove(stage)
+    #Reference stage. A rejected FRF (e.g. GCS error 5, servo off on one axis) used to be
+    # ignored: every later PI_MOV was refused too, while the driver's cached position said
+    # the stage was centred. Refuse to come back from initialize unreferenced.
+    # On failure, close the connection so a retried initialize starts clean.
+    try
+        if referencemove(stage) != 1
+            error("PI_FRF refused (GCS error $(_pi_geterror(stage))); stage is not referenced")
+        end
+        _waitforreference(stage)
+    catch
+        shutdown_original(stage)
+        rethrow()
+    end
 
     #Find the max and min position of the axes
     getrange(stage)
-    
-    #Sleep 1 second for initialization
+
+    #Wait for any remaining motion to finish
     ismoving(stage)
     while stage.ismoving[1] == 1 || stage.ismoving[2] == 1
         ismoving(stage)
@@ -69,6 +80,27 @@ Possibly must use PiMikroMove to calibrate, but this is not ideal, however there
 function referencemove(stage::PIStage)
     ismoved = @ccall gcs2path.PI_FRF(stage.id::Cint, "1 2"::Ptr{UInt8})::Cint
     return ismoved
+end
+
+# PI_GetError returns and clears the controller's last GCS error code (0 = none).
+_pi_geterror(stage::PIStage) = @ccall gcs2path.PI_GetError(stage.id::Cint)::Cint
+
+"""
+Poll `PI_qFRF` until both axes report referenced; throw if that has not happened within
+`timeout` seconds or the query itself fails.
+"""
+function _waitforreference(stage::PIStage; timeout::Real = 60.0)
+    # PI_qFRF fills `BOOL*`: one 32-bit int per axis, like PI_SVO.
+    referenced = zeros(Cint, 2)
+    deadline = time() + timeout
+    while true
+        ok = @ccall gcs2path.PI_qFRF(stage.id::Cint, "1 2"::Ptr{UInt8}, referenced::Ptr{Cint})::Cint
+        ok == 1 || error("PI_qFRF failed (GCS error $(_pi_geterror(stage)))")
+        all(!=(0), referenced) && return nothing
+        time() > deadline && error("PI stage not referenced after $(timeout) s: " *
+            "qFRF = $(Int.(referenced)), GCS error $(_pi_geterror(stage))")
+        sleep(0.1)
+    end
 end
 
 
