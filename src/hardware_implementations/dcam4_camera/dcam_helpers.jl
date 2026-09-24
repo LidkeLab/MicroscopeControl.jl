@@ -133,12 +133,59 @@ function setroi!(camera::DCAM4Camera)
         @warn "ROI VSIZE set to $(vsize) instead of $(camera.roi.height)"
     end
     setvalue(camera, DCAM_IDPROP_SUBARRAYMODE, 2) # set subarray mode to on to apply the ROI
+    requested = (camera.roi.x_start, camera.roi.width, camera.roi.y_start, camera.roi.height)
+    # Write the accepted values back FIRST, so the struct tells the truth about
+    # what the camera took even when we are about to throw.
     camera.roi.x_start = hpos
     camera.roi.width = hsize
     camera.roi.y_start = vpos
     camera.roi.height = vsize
+
+    accepted = (hpos, hsize, vpos, vsize)
+    if accepted != requested
+        names = ("x_start (HPOS)", "width (HSIZE)", "y_start (VPOS)", "height (VSIZE)")
+        differing = [ "$(names[i]): asked $(requested[i]), got $(accepted[i])"
+                      for i in eachindex(names) if accepted[i] != requested[i] ]
+        error("DCAM4Camera $(camera.unique_id): the camera did not accept the requested " *
+              "ROI. " * join(differing, "; ") * ". `camera.roi` now holds what the camera " *
+              "actually took. Common causes: the ORCA requires subarray positions and sizes " *
+              "in multiples of 4, and positions are 0-based; a size that exceeds the sensor " *
+              "from the given position is clipped. This used to be four `@warn`s, so a wrong " *
+              "ROI went through and the next frame was silently not the region asked for.")
+    end
+    return camera.roi
 end
 
+"""
+    setroi!(camera::DCAM4Camera, roi::CameraROI)
+
+Apply `roi` to the camera. **Prefer this over the four-argument form**, whose
+positional order is `(hpos, hsize, vpos, vsize)` — that is
+`(x, WIDTH, y, HEIGHT)` — while `CameraROI`'s field order is
+`(x_start, y_start, width, height)`. Passing a `CameraROI`'s fields
+positionally in their own order therefore swaps `y_start` with `width`, and
+before v0.2.3 the resulting mismatch was only warned about, so the wrong
+region went through. Reported from a rig running an ORCA C11440-22CU.
+
+Positions are **0-based**, and the ORCA wants positions and sizes in multiples
+of 4; a value the camera does not accept now throws.
+"""
+function setroi!(camera::DCAM4Camera, roi::CameraROI)
+    camera.roi.x_start = roi.x_start
+    camera.roi.y_start = roi.y_start
+    camera.roi.width   = roi.width
+    camera.roi.height  = roi.height
+    return setroi!(camera)
+end
+
+"""
+    setroi!(camera::DCAM4Camera, hpos, hsize, vpos, vsize)
+
+Apply an ROI given as `(x, WIDTH, y, HEIGHT)` — note that this is **not**
+`CameraROI`'s field order, which is `(x_start, y_start, width, height)`. The
+`setroi!(camera, ::CameraROI)` method above avoids the confusion and is
+preferred.
+"""
 function setroi!(camera::DCAM4Camera, hpos::Int32, hsize::Int32, vpos::Int32, vsize::Int32)
     camera.roi.x_start = hpos
     camera.roi.width  = hsize

@@ -90,12 +90,20 @@ device-specific.
 
 **[limitation]** The remaining blind spot is **arity**. A device is filed as device-specific for a
 name as soon as *any* method of that name takes the concrete type, and the other
-arities are then not examined. `TCubeLaser`'s section lists `export_state(TCubeLaser,
-Any)` and nothing else for `export_state`; the 1-arg `export_state(laser)` that every
-lifecycle loop calls is not device-specific and not listed as a fallback either. It
-resolves to the `AbstractInstrument` stub and throws (verified with `which`, below).
-When the listed signature is not the one you are calling, check the exact tuple with
-`hasmethod`/`which`.
+arities are then not examined, so an entry names a signature the generator found and
+not necessarily the one you are about to call. The case that exposed this was
+`TCubeLaser`: up to v0.2.2 its only `export_state` was `export_state(::TCubeLaser,
+sth)`, the map listed that and nothing else, and the 1-arg `export_state(laser)` every
+lifecycle loop calls fell through to the throwing `AbstractInstrument` stub.
+**[fixed in v0.2.3]** — `export_state(::TCubeLaser)` exists and
+`which(export_state, Tuple{TCubeLaser})` lands on it. The 2-arg method is still
+there as a deprecated forwarder that warns and delegates (removal scheduled for
+a future 0.3.0), so the map may still list *that* signature: adding the 1-arg
+method was the fix, not deleting the other one. The blind spot
+is a property of the generator rather than of that driver, and an installed map
+generated against an older pinned tag still shows the old signature. `light_on` is a
+live example (below). When the listed signature is not the one you are calling, check
+the exact tuple with `hasmethod`/`which`.
 
 **[limitation]** `MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy (`SLM`
 and `TRIG` are `abstract type ... end` with no supertype). A lifecycle name missing
@@ -122,12 +130,19 @@ where dispatch lands and whether that is the concrete type:
 using MicroscopeControl
 
 # true for every LightSource, because the interface stub exists
-hasmethod(export_state, Tuple{TCubeLaser})
+hasmethod(light_on, Tuple{TCubeLaser,Float64})
 # -> true
 
 # where the call actually goes
+which(light_on, Tuple{TCubeLaser,Float64}).sig
+# -> Tuple{typeof(light_on), LightSource, Float64}     (the throwing stub: no
+#                                                       driver implements 2-arg light_on)
+
 which(export_state, Tuple{TCubeLaser}).sig
-# -> Tuple{typeof(export_state), AbstractInstrument}   (the throwing stub)
+# -> Tuple{typeof(export_state), TCubeLaser}           (real driver code from v0.2.3;
+#                                                       up to v0.2.2, the throwing stub.
+#                                                       Tuple{TCubeLaser,Any} still resolves,
+#                                                       to the deprecated forwarder)
 
 which(getdata, Tuple{SimCamera}).sig
 # -> Tuple{typeof(getdata), SimCamera}                 (real driver code)

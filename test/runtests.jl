@@ -3,6 +3,11 @@ using Test
 
 const HDF5 = MicroscopeControl.HDF5
 
+# Replaces the TCube laser's Kinesis wrappers with a recorder, so the driver's
+# own `initialize`/`setpower`/`shutdown` can be run without a controller. Must
+# be included at top level, before the testsets. See the file for the seam.
+include("tcube_fake_sdk.jl")
+
 @testset "MicroscopeControl.jl" begin
     @testset "Simulated Camera" begin
         cam = SimCamera(exposure_time=0.01)
@@ -99,6 +104,574 @@ const HDF5 = MicroscopeControl.HDF5
 
         shutdown(light)
         @test light.properties.is_on == false
+    end
+
+    # No Thorlabs TCube on any build machine, so nothing here touches the
+    # Kinesis DLL. Two things are still testable. The part of the driver that
+    # decides whether a current ever reaches the diode is factored out of the
+    # SDK path (`check_current`, `effective_max_current`, `setpoint_code`,
+    # `record_controller_limit!`) and exercised directly. The lifecycle
+    # functions themselves -- `initialize`, `setpower`, `shutdown` -- are run
+    # unmodified against the recorder installed by `tcube_fake_sdk.jl`, which
+    # is what makes their *own* control flow (not a helper's) a thing the suite
+    # can fail on. What no test here can tell you is how a real controller
+    # answers: see CHANGELOG 0.2.3, hardware verification NOT DONE.
+    @testset "TCube Laser (no hardware)" begin
+        TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
+
+        @testset "Constructor defaults" begin
+            laser = TCubeLaser("00000000")
+            # 60.0 mA used to be the default floor: not a floor at all, since
+            # it is a *lower* bound, so it only rejected safe small currents.
+            @test laser.min_current == 0.0
+            @test laser.max_current == 160.0
+            # `initialize` records the controller's limit here, not over the
+            # caller's `max_current`; NaN means "not read yet".
+            @test isnan(laser.controller_max_current)
+            # `setpower` takes mA and records what it accepted here; NaN means
+            # "nothing commanded yet".
+            @test isnan(laser.drive_current)
+            # The deprecated derived-power pair is unchanged from 0.2.2: the
+            # label is still "mW" and the figure is still the linear guess, so
+            # a rig reading them across this upgrade reads what it read before.
+            @test laser.properties.power_unit == "mW"
+            @test laser.properties.power == 0.0
+            @test laser.daq_device === nothing
+            @test laser.ao_channel === nothing
+        end
+
+        @testset "Positional construction, old arity and new" begin
+            # The four fields added since 0.2.2 sit at the end of the struct so
+            # that the ten-argument positional call a pre-0.2.3 caller wrote
+            # still constructs, with the new fields defaulted. Deleting the
+            # ten-argument inner constructor must fail this.
+            props = LightSourceProperties("mW", 0.0, false, 0.0, 100.0)
+            old = TCubeLaser("TCubeLaser", props, "red", 0.0, 160.0,
+                220.0, 32767.0, "00000000", 0, NIdaq())
+            @test old.serialNo == "00000000"
+            @test old.max_current == 160.0
+            @test old.max_setcurrent == 220.0 # slot 6, as in 0.2.2
+            @test old.max_setpoint == 32767.0 # slot 7
+            @test isnan(old.controller_max_current)
+            @test old.daq_device === nothing
+            @test old.ao_channel === nothing
+            @test isnan(old.drive_current)
+
+            # ... and the full arity names the new fields explicitly.
+            full = TCubeLaser("TCubeLaser", props, "red", 0.0, 160.0,
+                220.0, 32767.0, "00000000", 0, NIdaq(),
+                150.0, "Dev2", "Dev2/ao1", 40.0)
+            @test full.controller_max_current == 150.0
+            @test full.daq_device == "Dev2"
+            @test full.ao_channel == "Dev2/ao1"
+            @test full.drive_current == 40.0
+
+            # Neither positional form runs any check the keyword constructor
+            # runs, and neither does the keyword constructor refuse a label:
+            # `power_unit` is documentation, not an enforced invariant.
+            @test TCubeLaser("00000000"; properties=LightSourceProperties("mA", 0.0, false, 0.0, 220.0)).properties.power_unit == "mA"
+        end
+
+        @testset "Current validation" begin
+            laser = TCubeLaser("00000000")
+
+            @test TCube.check_current(laser, 100.0) == 100.0
+            @test TCube.check_current(laser, 0.0) == 0.0
+            @test_throws ArgumentError TCube.check_current(laser, 500.0)
+            @test_throws ArgumentError TCube.check_current(laser, -1.0)
+            # The message must name the request and both bounds: the old code
+            # logged exactly this information and then proceeded anyway, so an
+            # informative message is not evidence of an enforced limit --
+            # hence the throw assertions above and the ordering test below.
+            err = try
+                TCube.check_current(laser, 500.0)
+            catch e
+                e
+            end
+            @test occursin("500.0", err.msg)
+            @test occursin("160.0", err.msg)
+            @test occursin("0.0", err.msg)
+
+            # A caller floor is honoured.
+            floored = TCubeLaser("00000000"; min_current=20.0)
+            @test_throws ArgumentError TCube.check_current(floored, 10.0)
+
+            # Above the setpoint DAC's full scale is rejected as out of range
+            # rather than dying in `UInt16(...)` with an InexactError.
+            wide = TCubeLaser("00000000"; max_current=400.0)
+            @test TCube.effective_max_current(wide) == wide.max_setcurrent
+            @test_throws ArgumentError TCube.check_current(wide, 300.0)
+        end
+
+        @testset "Caller ceiling survives the controller's limit" begin
+            # The 1b-bis regression: `initialize` used to assign the
+            # controller's limit straight over `max_current`, so a rig that
+            # asked for 80 mA on a weak diode silently got the controller's
+            # 160-220 mA, and `setpower` then validated against the
+            # controller. `record_controller_limit!` is the field-writing half
+            # of `initialize` with the SDK read removed.
+            laser = TCubeLaser("00000000"; max_current=80.0)
+            raw = UInt16(round(160.0 / laser.max_setcurrent * laser.max_setpoint))
+            TCube.record_controller_limit!(laser, raw)
+
+            @test laser.max_current == 80.0 # untouched
+            # rtol, not the default: the raw reading is a UInt16 setpoint, so
+            # 160.0 mA round-trips as 160.003 mA.
+            @test laser.controller_max_current ≈ 160.0 rtol = 1e-3 # recorded separately
+            @test TCube.effective_max_current(laser) == 80.0
+            @test_throws ArgumentError TCube.check_current(laser, 100.0)
+
+            # ... and the controller wins when it is the stricter of the two.
+            strict = TCubeLaser("00000000"; max_current=200.0)
+            TCube.record_controller_limit!(strict, UInt16(round(120.0 / strict.max_setcurrent * strict.max_setpoint)))
+            @test TCube.effective_max_current(strict) ≈ 120.0 rtol = 1e-3
+            @test_throws ArgumentError TCube.check_current(strict, 150.0)
+        end
+
+        @testset "setpower rejects before touching the SDK" begin
+            # Ordering, not just rejection. `setpower`'s first statement is
+            # the range check, so an out-of-range request must fail with the
+            # check's own `ArgumentError`. Under the old code the check was an
+            # `@error` log and execution continued, so the exception *type* is
+            # what distinguishes "refused" from "attempted".
+            #
+            # 200.0 mA is the case that matters and the reason it is here
+            # rather than 500.0 alone: it is over the 160 mA ceiling but under
+            # `max_setcurrent`, so it converts to a valid `UInt16` setpoint and
+            # the old code carried it all the way into the
+            # `LD_SetLaserSetPoint` ccall (executed against the pre-fix driver:
+            # `ErrorException`, "could not load library ...LaserDiode.dll" --
+            # on a Windows rig that call would have driven 200 mA into the
+            # diode). 500.0 and -5.0 happen to die earlier, in `UInt16(...)`
+            # with an `InexactError`, which is a crash rather than a refusal.
+            FakeKinesis.reset!()
+            laser = TCubeLaser("00000000")
+            @test_throws ArgumentError setpower(laser, 200.0)
+            @test_throws ArgumentError setpower(laser, 500.0)
+            @test_throws ArgumentError setpower(laser, -5.0)
+            # A refused request must not be recorded as the laser's state.
+            # The old code wrote it before the call: `setpower(laser, 200.0)`
+            # left `properties.power == 125.0` (executed).
+            @test laser.properties.power == 0.0
+            @test isnan(laser.drive_current) # nothing was commanded
+            # And "before touching the SDK" is now an observation rather than
+            # an inference: the fake records every setpoint it is handed.
+            @test isempty(FakeKinesis.setpoints)
+            @test isempty(FakeKinesis.calls)
+        end
+
+        @testset "initialize keeps the caller's ceiling (fake SDK)" begin
+            # The regression this driver was fixed for lives inside
+            # `initialize`, so this runs the real `initialize` against the fake
+            # Kinesis SDK. Restoring the old `light.max_current = ...`
+            # assignment must fail this testset; testing
+            # `record_controller_limit!` alone did not, which is why this
+            # exists.
+            FakeKinesis.reset!() # controller reports a 160 mA limit
+            laser = TCubeLaser("00000000"; max_current=80.0)
+            initialize(laser)
+
+            @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
+                "LD_Open", "LD_SetOpenLoopMode", "LD_RequestReadings",
+                "LD_RequestLaserDiodeMaxCurrentLimit",
+                "LD_GetLaserDiodeMaxCurrentLimit"]
+            @test laser.max_current == 80.0 # survived initialize
+            @test laser.controller_max_current ≈ 160.0 rtol = 1e-3
+            @test TCube.effective_max_current(laser) == 80.0
+
+            # The consequence, which is the point: a post-initialize request
+            # between the caller's ceiling and the controller's is refused, and
+            # nothing reaches the SDK.
+            empty!(FakeKinesis.setpoints)
+            @test_throws ArgumentError setpower(laser, 100.0)
+            @test isempty(FakeKinesis.setpoints)
+            # ... while one under the caller's ceiling is sent. The exact code
+            # matters, not just that a call happened: sending code 0 for this
+            # accepted request passed every assertion here until the setpoint
+            # itself was pinned. 40 mA is floor(40/220*32767) = 5957, which
+            # decodes to 39.9957 mA -- at or below the request, as always.
+            setpower(laser, 40.0)
+            @test FakeKinesis.setpoints == [UInt16(5957)]
+            @test Float64(5957) / laser.max_setpoint * laser.max_setcurrent <= 40.0
+            @test laser.drive_current == 40.0 # the accepted current, in mA
+            # The deprecated derived figure divides by the controller's limit
+            # once `initialize` has read it -- which is the value 0.2.2's
+            # `max_current` held at this point, since `initialize` overwrote
+            # it. Same number, from a field that is no longer destroyed.
+            @test laser.properties.power == 40.0 * laser.properties.max_power / laser.controller_max_current
+            @test laser.properties.power ≈ 25.0 rtol = 1e-3
+
+            # A second initialize, with a different controller reading. One
+            # fixture does not establish that the reading is what determines
+            # the stored limit: replacing the recording with a constant 160.0
+            # while still calling the SDK passed everything above. This limit
+            # is also *below* the caller's ceiling, so the `min` in
+            # `effective_max_current` is exercised in the other direction too.
+            FakeKinesis.reset!(limit_raw=8936) # 8936/32767*220 = 59.997 mA
+            weak = TCubeLaser("00000000"; max_current=80.0)
+            initialize(weak)
+            @test weak.controller_max_current ≈ 60.0 rtol = 1e-3
+            @test weak.max_current == 80.0 # still the caller's
+            @test TCube.effective_max_current(weak) == weak.controller_max_current # controller is stricter now
+            @test_throws ArgumentError setpower(weak, 70.0) # between the two ceilings
+            @test isempty(FakeKinesis.setpoints)
+        end
+
+        @testset "a failed initialize closes the connection (fake SDK)" begin
+            # A controller left open refuses the next LD_Open, so a failure
+            # after the open must not leak the handle -- and the error the
+            # caller sees must be the one that stopped initialization.
+            FakeKinesis.reset!()
+            FakeKinesis.fail!("LD_SetOpenLoopMode", 3)
+            laser = TCubeLaser("00000000")
+            err = try
+                initialize(laser)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("LD_SetOpenLoopMode", err.msg)
+            @test occursin("3", err.msg) # the Thorlabs code, not a cleanup error
+            @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
+                "LD_Open", "LD_SetOpenLoopMode", "LD_Close"]
+            @test isnan(laser.controller_max_current) # nothing recorded
+
+            # A failure at the open itself has no handle to close.
+            FakeKinesis.reset!()
+            FakeKinesis.fail!("LD_Open", 2)
+            @test_throws ErrorException initialize(TCubeLaser("00000000"))
+            @test "LD_Close" ∉ FakeKinesis.calls
+
+            # A close that *throws* must not displace the error that stopped
+            # initialization. This is the case the cleanup's inner try/catch
+            # exists for, and the only failure `LD_Close` can express: the
+            # binding returns void, so there is no status code to fail with.
+            # Until the fake could raise, deleting that handler -- letting the
+            # close error propagate in place of the real one -- failed nothing.
+            FakeKinesis.reset!()
+            FakeKinesis.fail!("LD_SetOpenLoopMode", 3)
+            FakeKinesis.throw!("LD_Close", "fake close explosion")
+            both = TCubeLaser("00000000")
+            # The close failure is reported, hence the expected @error record.
+            bothErr = @test_logs (:error,) match_mode = :any try
+                initialize(both)
+                nothing
+            catch e
+                e
+            end
+            @test bothErr isa ErrorException
+            @test occursin("LD_SetOpenLoopMode", bothErr.msg) # the original failure ...
+            @test occursin("3", bothErr.msg)
+            @test !occursin("fake close explosion", bothErr.msg) # ... not the cleanup's
+            @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
+                "LD_Open", "LD_SetOpenLoopMode", "LD_Close"] # and the close was still attempted
+            @test isnan(both.controller_max_current)
+        end
+
+        @testset "shutdown closes the connection either way (fake SDK)" begin
+            # `shutdown` runs against the recorder like the rest of the
+            # lifecycle; nothing invoked it until this testset, so the
+            # commentary above was ahead of the tests.
+            FakeKinesis.reset!()
+            laser = TCubeLaser("00000000")
+            laser.properties.is_on = true
+            shutdown(laser)
+            @test FakeKinesis.calls == ["LD_DisableOutput", "LD_Close"]
+            @test laser.properties.is_on == false
+
+            # A failed disable throws -- and the handle is closed anyway,
+            # because leaving it open would block the reconnection a caller
+            # needs in order to retry that disable.
+            FakeKinesis.reset!()
+            FakeKinesis.fail!("LD_DisableOutput", 5)
+            stuck = TCubeLaser("00000000")
+            stuck.properties.is_on = true
+            err = try
+                shutdown(stuck)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("LD_DisableOutput", err.msg)
+            @test FakeKinesis.calls == ["LD_DisableOutput", "LD_Close"] # closed regardless
+            # The disable failed, so the output is not recorded as off: the
+            # field follows the call, not the request.
+            @test stuck.properties.is_on == true
+        end
+
+        @testset "Setpoint encoding" begin
+            # The ceiling has to hold at the wire, not just in the check.
+            # Rounding put the 160 mA ceiling at code 23831 = 160.00305 mA on
+            # the driver's own scale, so the one request sitting exactly on the
+            # enforced limit was the one to exceed it.
+            FakeKinesis.reset!()
+            laser = TCubeLaser("00000000")
+            setpower(laser, 160.0)
+            @test FakeKinesis.setpoints == [UInt16(23830)]
+            encoded(l, code) = Float64(code) / l.max_setpoint * l.max_setcurrent
+            @test encoded(laser, FakeKinesis.setpoints[end]) <= 160.0
+
+            # The guarantee is stated in terms of the driver's own decode, so
+            # check that this testset's `encoded` is that same arithmetic
+            # before using it to check the guarantee.
+            @test encoded(laser, 12345) == TCube.setpoint_current(laser, 12345)
+
+            # The commanded current never decodes above the requested one, at
+            # any setpoint.
+            for request in (0.0, 0.5, 1.0, 37.3, 99.9, 159.999, 160.0)
+                @test encoded(laser, TCube.setpoint_code(laser, request)) <= request
+            end
+            @test TCube.setpoint_code(laser, 0.0) == 0x0000
+
+            # Truncation alone did NOT deliver that, which is why the encoder
+            # corrects downward afterwards. `current / max_setcurrent *
+            # max_setpoint` can round a request one ulp below a code boundary
+            # up onto the boundary itself, leaving `floor` nothing to cut. The
+            # first such request in the default range:
+            just_under_9 = prevfloat(9.0 / 32767.0 * 220.0) # 0.06042664876247444
+            @test floor(just_under_9 / laser.max_setcurrent * laser.max_setpoint) == 9.0 # what floor alone gives
+            @test encoded(laser, UInt16(9)) > just_under_9                               # and it is over the request
+            @test TCube.setpoint_code(laser, just_under_9) == UInt16(8)                  # so the encoder steps down
+
+            # Not one special case: 1794 of these exist below the default 160
+            # mA ceiling. Sweep the predecessor of every code boundary in it.
+            boundary_neighbours = [prevfloat(Float64(k) / laser.max_setpoint * laser.max_setcurrent) for k in 1:23830]
+            @test all(r -> encoded(laser, TCube.setpoint_code(laser, r)) <= r, boundary_neighbours)
+            # The correction is a step of exactly one code, and only when it is
+            # needed: the boundary itself still encodes to its own code.
+            @test all(k -> TCube.setpoint_code(laser, boundary_neighbours[k]) == UInt16(k - 1), 1:23830)
+            @test all(k -> TCube.setpoint_code(laser, Float64(k) / laser.max_setpoint * laser.max_setcurrent) == UInt16(k),
+                (1, 9, 5957, 23830))
+
+            # The bottom of the range commands nothing, and says so. A positive
+            # request under one code (220/32767 = 0.006714 mA here) rounds down
+            # to code 0 -- rounding it up would command more than was asked for
+            # -- but `properties.power` still records the request, so the field
+            # is what the caller asked for and not what went to the wire.
+            one_code = laser.max_setcurrent / laser.max_setpoint
+            @test TCube.setpoint_code(laser, prevfloat(one_code)) == 0x0000
+            @test TCube.setpoint_code(laser, 0.001) == 0x0000
+            FakeKinesis.reset!()
+            setpower(laser, 0.001)
+            @test FakeKinesis.setpoints == [UInt16(0)] # a ZERO SETPOINT is sent --
+            @test laser.properties.is_on == false      # not an "off": is_on is untouched
+            @test laser.drive_current == 0.001         # and the field keeps the request
+            # What `export_state` writes is the request too, not the zero that
+            # went to the wire and not the decoded current. Exporting either of
+            # those instead survived every other assertion here.
+            @test export_state(laser)[1]["drive_current"] == 0.001
+
+            # `tcube_get_current` decodes the controller's raw reading through
+            # the same shared decode as the encoder. Returning zero from it
+            # survived every other assertion, so pin a non-zero reading.
+            FakeKinesis.reset!(limit_raw = 5957)
+            reading = TCube.tcube_get_current(laser)
+            @test reading > 0
+            @test reading == TCube.setpoint_current(laser, 5957)
+            @test "LD_RequestReadings" in FakeKinesis.calls
+            FakeKinesis.reset!()
+
+            # Conversion parameters are validated before converting. Each of
+            # these passes check_current and used to die in `UInt16(...)` with
+            # an InexactError.
+            empty!(FakeKinesis.setpoints)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; max_setcurrent=0.0), 0.0)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; max_setcurrent=NaN), 80.0)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; max_setpoint=100000.0), 160.0)
+            @test_throws ArgumentError setpower(TCubeLaser("00000000"; min_current=-10.0), -5.0)
+            @test isempty(FakeKinesis.setpoints) # none of them reached the SDK
+
+            # The message has to name the field at fault.
+            offender(l, c) = try
+                setpower(l, c)
+                ""
+            catch e
+                e.msg
+            end
+            @test occursin("max_setcurrent", offender(TCubeLaser("00000000"; max_setcurrent=NaN), 80.0))
+            @test occursin("max_setpoint", offender(TCubeLaser("00000000"; max_setpoint=100000.0), 160.0))
+            @test occursin("non-negative", offender(TCubeLaser("00000000"; min_current=-10.0), -5.0))
+        end
+
+        @testset "properties.power keeps its pre-0.2.3 value (deprecated)" begin
+            # `properties.power`/`power_unit` are an uncalibrated linear guess
+            # and are on their way out, but removing them would have forced a
+            # migration on every rig reading them. So they keep the exact value
+            # 0.2.2 produced, which is not the same as keeping 0.2.2's line:
+            # that line divided by `light.max_current`, and 0.2.2's
+            # `initialize` overwrote that field with the controller's limit.
+            # Both moments are checked against the old expression written out
+            # literally, with the divisor 0.2.2 would have had in the field.
+            v022_power(divisor, current, max_power) = current * max_power / divisor
+
+            FakeKinesis.reset!()
+            fresh = TCubeLaser("00000000"; max_current=80.0)
+            @test fresh.properties.power_unit == "mW" # unchanged label
+            setpower(fresh, 40.0)
+            # Before initialize, 0.2.2's max_current was the caller's 80.0.
+            @test fresh.properties.power == v022_power(80.0, 40.0, fresh.properties.max_power)
+            @test fresh.properties.power == 50.0
+            @test fresh.drive_current == 40.0 # the truth, alongside it
+
+            # After initialize, 0.2.2's max_current was the controller's limit,
+            # decoded from the same raw reading this driver decodes into
+            # controller_max_current.
+            FakeKinesis.reset!()
+            initialize(fresh)
+            v022_max_current = Float64(FakeKinesis.diode_limit_raw[]) / fresh.max_setpoint * fresh.max_setcurrent
+            @test fresh.max_current == 80.0 # the caller's ceiling still survives
+            @test fresh.controller_max_current == v022_max_current
+            setpower(fresh, 40.0)
+            @test fresh.properties.power == v022_power(v022_max_current, 40.0, fresh.properties.max_power)
+            @test fresh.properties.power ≈ 25.0 rtol = 1e-3
+            @test fresh.drive_current == 40.0
+
+            # A caller's own max_power scales it, as it always did.
+            scaled = TCubeLaser("00000000"; properties=LightSourceProperties("mW", 0.0, false, 0.0, 250.0))
+            setpower(scaled, 80.0)
+            @test scaled.properties.power == v022_power(160.0, 80.0, 250.0)
+            @test scaled.properties.power == 125.0
+
+            # A refused request updates neither field.
+            FakeKinesis.reset!()
+            refused = TCubeLaser("00000000"; max_current=80.0)
+            @test_throws ArgumentError setpower(refused, 100.0)
+            @test refused.properties.power == 0.0
+            @test isnan(refused.drive_current)
+            @test isempty(FakeKinesis.calls)
+        end
+
+        @testset "tcube_refresh explains itself instead of firing" begin
+            # It drove a hardcoded 90 mA under a name that warned nobody, so it
+            # is gone as a behaviour -- but it was an exported name, and
+            # deleting an exported name turns a caller's line into an
+            # `UndefVarError` that explains nothing. The throwing stub is the
+            # non-breaking form of the same removal.
+            FakeKinesis.reset!()
+            laser = TCubeLaser("00000000")
+            err = try
+                tcube_refresh(laser)
+                nothing
+            catch e
+                e
+            end
+            @test err isa ErrorException
+            @test occursin("90 mA", err.msg)   # says what it used to do ...
+            @test occursin("setpower", err.msg) # ... and what to call instead
+            @test isempty(FakeKinesis.calls)    # and reaches no hardware
+            @test isempty(FakeKinesis.setpoints)
+            # Still exported, which is the point of keeping it.
+            @test :tcube_refresh in names(MicroscopeControl)
+        end
+
+        @testset "export_state" begin
+            laser = TCubeLaser("00000000"; daq_device="Dev2", ao_channel="Dev2/ao1")
+            attrs, data, children = export_state(laser) # 1-arg: used to throw
+            @test attrs isa Dict{String,Any}
+            @test attrs["power_unit"] == "mW"
+            @test attrs["min_current"] == 0.0
+            @test attrs["max_current"] == 160.0
+            @test isnan(attrs["controller_max_current"])
+            @test isnan(attrs["drive_current"]) # nothing commanded yet
+            @test attrs["daq_device"] == "Dev2"
+            @test attrs["ao_channel"] == "Dev2/ao1"
+            @test data === nothing
+            @test haskey(children, "daq")
+            # `nothing` is not writable as an HDF5 attribute; unset must be "".
+            @test export_state(TCubeLaser("00000000"))[1]["daq_device"] == ""
+
+            # The diode current limit has a dedicated Kinesis request;
+            # `LD_RequestReadings` does not refresh it. Since the limit feeds
+            # the enforced ceiling, reading it after only the generic request
+            # can enforce a stale bound. Assert the dedicated request is made,
+            # and made BEFORE the read.
+            FakeKinesis.reset!(limit_raw = 23830)
+            initialize(TCubeLaser("00000000"))
+            @test "LD_RequestLaserDiodeMaxCurrentLimit" in FakeKinesis.calls
+            @test findfirst(==("LD_RequestLaserDiodeMaxCurrentLimit"), FakeKinesis.calls) <
+                  findfirst(==("LD_GetLaserDiodeMaxCurrentLimit"), FakeKinesis.calls)
+            FakeKinesis.reset!()
+
+            # The one place `legacy_power` deliberately diverges from 0.2.2:
+            # a caller assigning `max_current` AFTER `initialize`. 0.2.2 divided
+            # by the newly assigned value because `initialize` had overwritten
+            # that same field; we divide by the separately recorded controller
+            # limit. Pinned rather than chased -- reproducing it would mean
+            # intercepting field writes to rebuild a number the driver invents,
+            # and 0.3.0 removes it. `drive_current` is the exact one.
+            diverge = TCubeLaser("00000000"; max_current = 80.0)
+            @test TCube.legacy_power(diverge, 40.0) == 40.0 * 100.0 / 80.0 # 50.0, as 0.2.2
+            TCube.record_controller_limit!(diverge, 23830)
+            diverge.max_current = 80.0                                      # the post-init write
+            @test TCube.legacy_power(diverge, 40.0) ==
+                  40.0 * 100.0 / TCube.setpoint_current(diverge, 23830)      # not 50.0
+            @test TCube.legacy_power(diverge, 40.0) != 50.0
+
+            # The 2-argument form is the one that existed before 0.2.3; the bug
+            # was that it was the ONLY one, so `export_state(laser)` fell
+            # through to the throwing stub. Adding the 1-arg method is the
+            # whole fix, so the old form survives as a deprecated forwarder
+            # rather than becoming a MethodError. It warns once, ignores its
+            # argument and returns the same thing.
+            TCube.EXPORT_STATE_2ARG_WARNED[] = false
+            forwarded = @test_logs (:warn,) match_mode = :any export_state(laser, nothing)
+            @test isequal(forwarded[1], attrs) # isequal: NaN attributes
+            @test forwarded[2] === data
+            @test keys(forwarded[3]) == keys(children)
+            # The argument really is ignored, whatever it is ...
+            @test isequal(export_state(laser, "anything at all")[1], attrs)
+            # ... and the warning does not repeat.
+            @test_logs export_state(laser, nothing)
+            @test TCube.EXPORT_STATE_2ARG_WARNED[]
+        end
+    end
+
+    @testset "NIdaq digital output" begin
+        # Digital scalar writes are PORT format: bit n is line n of the port,
+        # even for a single-line task. Confirmed on hardware (NI-DAQmx 23.5,
+        # USB-6008): a shutter on port0/line1 ignored 1 and responded to 2.
+        # `do_port_word` is the whole of the fix and is testable without a DAQ.
+        DAQ = MicroscopeControl.HardwareImplementations.NIDAQcard
+
+        # A line task: the value is a level and lands on that line's bit.
+        @test DAQ.do_port_word(["Dev1/port0/line0"], 1.0) === UInt32(1)
+        @test DAQ.do_port_word(["Dev1/port0/line1"], 1.0) === UInt32(2)
+        @test DAQ.do_port_word(["Dev1/port0/line3"], 1.0) === UInt32(8)
+        @test DAQ.do_port_word(["Dev1/port1/line2"], 1.0) === UInt32(4)
+        @test DAQ.do_port_word(["Dev1/port0/line7"], 1.0) === UInt32(128)
+        # Zero clears that line, whichever line it is.
+        @test DAQ.do_port_word(["Dev1/port0/line5"], 0.0) === UInt32(0)
+
+        # The defect itself: before the fix every one of these was UInt32(1),
+        # so only line0 could ever be driven.
+        @test DAQ.do_port_word(["Dev1/port0/line1"], 1.0) != UInt32(1)
+
+        # A pre-shifted port word on a line task is refused, because shifting
+        # it again would drive a different line.
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/port0/line1"], 2.0)
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/port0/line3"], 8.0)
+
+        # A port-wide task keeps the old pass-through: the value IS the word.
+        @test DAQ.do_port_word(["Dev1/port0"], 8.0) === UInt32(8)
+        @test DAQ.do_port_word(["Dev1/port1"], 0.0) === UInt32(0)
+
+        # Several channels in one task is ambiguous and is refused.
+        @test_throws ErrorException DAQ.do_port_word(
+            ["Dev1/port0/line0", "Dev1/port0/line1"], 1.0)
+
+        # A name that is neither a line nor a port is REFUSED, not assumed to
+        # be a port. `channel_names` returns VIRTUAL names, which DAQmx lets
+        # you assign independently of the physical line, so a renamed line task
+        # would otherwise fall through to port semantics and reproduce the
+        # original defect exactly.
+        @test_throws ErrorException DAQ.do_port_word(["shutter"], 1.0)
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/myLine"], 1.0)
+        # A line RANGE needs a grouping policy this driver does not have.
+        @test_throws ErrorException DAQ.do_port_word(["Dev1/port0/line0:3"], 1.0)
+        # A line with no port still reads as a line.
+        @test DAQ.do_port_word(["Dev1/line5"], 1.0) === UInt32(32)
     end
 
     @testset "Export State" begin

@@ -10,6 +10,22 @@ const __int32 = Cint
 
 const BOOL = Cuint
 
+"""
+    CPPBOOL
+
+Julia's `Bool`, i.e. one byte, for the Kinesis entry points the header declares
+as C++ `bool` rather than as a Windows `BOOL`. The distinction is not cosmetic:
+a `bool` return sets only the low byte of the return register, so reading it as
+a 4-byte `BOOL` reads three bytes of whatever happened to be there, and
+`LD_CheckConnection(...) != 0` can then report a disconnected controller as
+connected. Reported by the 642 nm rig from the Kinesis header, 2026-09-23; the
+same file's `tcubeapi.jl` already used `::Bool` for `LD_StartPolling` and
+`LD_StopPolling`, so the package disagreed with itself. Not hardware-verified.
+
+`BOOL` above stays `Cuint` for the genuine Windows `BOOL` uses.
+"""
+const CPPBOOL = Bool
+
 struct tagSAFEARRAYBOUND
     cElements::Culong
     lLbound::Clong
@@ -48,6 +64,26 @@ end
     MOT_CustomMotor = 100
 end
 
+"""
+    TLI_DeviceInfo
+
+**[limitation] This layout is suspect and unverified.** The Kinesis header
+declares the `is*` fields as C++ `bool` (one byte), and they are typed here as
+`BOOL` = `Cuint` (four). If that is right, every field from `isKnownType`
+onward is misaligned and `TLI_GetDeviceInfo` returns nonsense. Nothing in this
+package calls `TLI_GetDeviceInfo`, so the defect is latent rather than active,
+and it is left alone as deferred ABI repair rather than corrected in passing.
+
+Correcting it is more than retyping the five fields, and does NOT need a
+controller -- it needs the vendor header, which this repo does not carry. The
+header declares the structure `#pragma pack(1)` at 100 bytes; this declaration
+is 120, and the divergence starts at `PID`, *before* the first `bool`. So
+retyping the booleans alone would leave it wrong. Repair it against the header,
+with the size asserted, or do not call it. The function signatures in
+`functions_Tlaser.jl` had a related discrepancy and WERE corrected -- see
+`CPPBOOL` -- because there the fix moves no field and the ABI rule is
+unambiguous.
+"""
 struct TLI_DeviceInfo
     typeID::DWORD
     description::NTuple{65, Cchar}

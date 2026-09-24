@@ -148,20 +148,84 @@ function DAQInterface.setvoltage(daq::NIdaq, t::DAQmx.AOTask, voltage::Float64)
 end
 
 """
+    do_port_word(channels::Vector{String}, value::Float64) -> UInt32
+
+The `UInt32` to hand `DAQmxWriteDigitalScalarU32` for a digital output task
+holding `channels`, given a requested `value`.
+
+Digital scalar writes are **port format**: bit `n` is line `n` of the port,
+even when the task holds a single line. So a task on `Dev1/port0/line1`
+written with `1` drives nothing — bit 0 is line 0, which is not in the task.
+Only line 0 ever worked. Confirmed on hardware (NI-DAQmx 23.5, USB-6008): a
+TTL shutter on `port0/line1` did not respond to `1`, and did respond to `2`.
+
+So the word depends on what the task actually holds:
+- one **line** channel (`.../portN/lineK`) — the value is a level, and the
+  word is `UInt32(value != 0) << K`. Any value other than `0` or `1` is
+  rejected: it is almost certainly a caller pre-shifting to work around this
+  very defect, and shifting it again would drive a *different* line.
+- one **port** channel (`.../portN`) — the value is already a port word and is
+  passed through. The old behaviour was correct for this case.
+- more than one channel — rejected. A single scalar across several lines is
+  ambiguous, and guessing is what produced the defect.
+
+This is split out from `setvoltage` so it can be tested without a DAQ.
+"""
+function do_port_word(channels::Vector{String}, value::Float64)
+    length(channels) == 1 || error(
+        "setvoltage(::NIdaq, ::DOTask, value): the task holds $(length(channels)) channels " *
+        "($(join(channels, ", "))). A single scalar across several digital lines is ambiguous; " *
+        "use one task per line, or write the port word to a port-wide task.")
+    channel = channels[1]
+    line = match(r"/line(\d+)$", channel)
+    port = match(r"/port\d+$", channel)
+    if line === nothing && port === nothing
+        # NOT a fallback to port semantics. `DAQmx.channel_names` returns
+        # VIRTUAL names, which DAQmx lets you assign independently of the
+        # physical line, and the wrapper exposes no physical-name lookup. So a
+        # task on line 1 named "shutter" is indistinguishable here from a
+        # port-wide task -- and guessing "port" would silently reproduce the
+        # very defect this function exists to fix. A line range
+        # (`.../line0:3`) lands here too, and one scalar across a range needs a
+        # grouping policy this driver does not have. Refuse instead.
+        error("setvoltage(::NIdaq, ::DOTask, value): cannot tell what \"$(channel)\" addresses. " *
+              "Digital scalar writes are port format (bit n = line n), so the value to send " *
+              "depends on whether the task holds one line or a whole port, and this name is " *
+              "neither `.../portN/lineK` nor `.../portN`. It is probably a custom virtual " *
+              "channel name or a line range; DAQmx does not expose the physical mapping " *
+              "through this wrapper. Create the task with the physical channel string, one " *
+              "line per task. `createtask(daq, \"DO\", channel)` does that.")
+    end
+    if port !== nothing
+        # A port-wide task: the caller's value IS the port word.
+        return UInt32(value)
+    end
+    m = line
+    (value == 0 || value == 1) || error(
+        "setvoltage(::NIdaq, ::DOTask, value): $(channel) is a single line, so value must be " *
+        "0 or 1, got $(value). If you are pre-shifting a port word to work around digital " *
+        "writes not reaching lines above line 0, stop: that is fixed, and shifting again would " *
+        "drive a different line.")
+    return UInt32(value != 0) << parse(Int, m.captures[1])
+end
+
+"""
     setvoltage(daq::NIdaq,t::DAQmx.DOTask,voltage::Float64)
 
-Set the voltage of a digital output task.
+Set the state of a digital output task. For a single-line task `voltage` is a
+level, `0` or `1`; for a port-wide task it is the port word. See
+[`do_port_word`](@ref), which explains why those differ.
 
 # Arguments
 - `daq::NIdaq`: A NIdaq type.
 - `t::DAQmx.DOTask`: A DAQmx DOTask type.
-- `voltage::Float64`: The voltage to set (0 or 1).
+- `voltage::Float64`: `0` or `1` for a line task; the port word for a port task.
 
 # Returns
 - `ret::Int`: The number of samples written to the task.
 """
 function DAQInterface.setvoltage(daq::NIdaq, t::DAQmx.DOTask, voltage::Float64)
-    DAQmx.write_scalar(t, UInt32(voltage); auto_start=true)
+    DAQmx.write_scalar(t, do_port_word(DAQmx.channel_names(t), voltage); auto_start=true)
     return 1
 end
 

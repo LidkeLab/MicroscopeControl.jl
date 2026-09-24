@@ -32,6 +32,39 @@ upstream ships its own fix the two methods collide or diverge silently. So:
 your own type, extend freely (steps 3 and 4); an MC type, report and work
 around from outside (step 2).
 
+**[limitation]** The collision is worse than "diverge silently", and this has
+happened. A rig repo defined `export_state(::TCubeLaser)` itself, because
+v0.2.1 shipped only a 2-argument form and the 1-argument call fell through to
+the throwing stub. When v0.2.3 added that method upstream, Julia failed
+**precompilation** on the overwrite; in the environment that reported it the
+package then did not load at all -- not a wrong answer, a dead package,
+appearing the moment the pin moves. (The precompilation failure is certain; the
+loader can fall back to source in some configurations, so do not count on
+either outcome.) Note the direction: the risk is not only that you shadow
+upstream, but that upstream later defines the same method, so the *fix* is what
+breaks you.
+
+If you must install such a shim while waiting, **guard it**, and guard it with
+`which`, not `hasmethod`. `hasmethod(export_state, Tuple{TCubeLaser})` is
+`true` both before and after the upstream fix, because before it matches the
+throwing `export_state(::AbstractInstrument)` stub -- concrete argument types
+do not make `hasmethod` an exact-signature test, so that guard suppresses the
+shim exactly when it is needed. Install only while `which` still resolves to
+the known abstract stub:
+
+```julia
+# Runs at load. Installs the shim only while dispatch still lands on the
+# abstract stub, so it stands aside once upstream defines the method.
+if which(MC.export_state, Tuple{MC.TCubeLaser}).sig.parameters[2] === MC.AbstractInstrument
+    @eval MC.export_state(l::MC.TCubeLaser) = (Dict{String,Any}("unique_id" => l.unique_id), nothing, Dict{String,Any}())
+end
+```
+
+and delete it when you next move the pin. This is the same distinction
+`test/contract.jl`'s `has_specific_method` exists to make: "a method exists"
+and "a method exists *for this type*" are different questions, and the
+abstract fallbacks in this package make the first one useless.
+
 ## 1. Diagnose first: it is usually not the driver
 
 Before reporting or writing anything, rule out the rig. The full symptom table
@@ -207,7 +240,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 | Calibration | table in the device (`AttenuatorProperties.cal_*`); values from the rig | `LCC1620.settransmission` `@error`s and returns when uncalibrated |
 | Cached versus measured | name it (`power_requested`); update `real_*` only from a readback | Sim stages copy `targ_*` into `real_*`; `getposition(::SimStage3d)` returns a scalar, not the documented tuple (executed) |
 | Image axis convention | `(H, W)` per frame, `(H, W, N)` per stack; at a row-major SDK boundary `permutedims(reshape(buf, (W, H)), (2, 1))` | DCAM4 does this in `dcambuf.jl`; `SimCamera` returns `(roi.height, roi.width[, N])` (executed); `save_h5` stamps `dimension_order` assuming it |
-| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `TCubeLaser` has only a 2-arg method, so the contract call throws; `Triggerscope4` has none (`MethodError`) |
+| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `Triggerscope4` has none (`MethodError`). `TCubeLaser` had only a 2-arg method until **v0.2.3**, so the contract call threw; the 1-arg method was added there and the 2-arg one kept as a deprecated forwarder |
 | Unsupported operations | do not define the method; let the throwing stub answer | `stopmotion(::MCLStage)` is a concrete method whose body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed), so `hasmethod` and the API map count it as implemented |
 
 ## 4. Define a new interface (rare, consequential)
