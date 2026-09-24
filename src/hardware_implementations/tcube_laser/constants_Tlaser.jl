@@ -112,32 +112,39 @@ end
 """
     TLI_DeviceInfo
 
-**[limitation] This layout is wrong for the real DLL, and is left alone
-deliberately.**
+**[limitation] This layout does not match either Kinesis version we have
+looked at, and it is left alone deliberately, because there is no single
+layout that would match both.**
 
-The installed vendor header declares this struct under an ACTIVE
-`#pragma pack(1)` with C++ `bool` flags. Packed, the real layout is
-**100 bytes with `PID` at offset 85**: `typeID` 4 + `description` 65 +
-`serialNo` 16 puts `PID` at 85 with no padding, and the five flags are one
-byte each. This declaration uses 4-byte `BOOL` and default alignment, so it
-measures **120 bytes with `PID` at offset 88** (verified by execution) and is
-wrong from `PID` onward.
+Two rigs read their installed headers and reported different declarations:
 
-Nothing in this package calls `TLI_GetDeviceInfo`, so this is latent rather
-than a hazard, and correcting it means changing field types AND adding
-packing — not a change to make without a controller to read a real device
-list back from. Fix it against the installed header with the size asserted,
-or do not call it.
+| | Kinesis 1.14.10 (405 rig) | the 642 rig's install |
+|---|---|---|
+| `serialNo` | `char serialNo[9]` | `char serialNo[16]` |
+| flags | 1-byte C++ `bool` | 1-byte C++ `bool` |
+| `#pragma pack(1)` | ACTIVE (lines 63-125) | ACTIVE |
+| reported size | — | 100 bytes, `PID` at 85 |
 
-**A copy of this header on the lab NAS says otherwise; do not trust it.** That
-copy (`Personal Folders/Sheng/code/generate_lib/lib/`) is a Clang.jl
-generation input, hand-edited to parse without Windows headers: the vendor
-preamble was replaced with local typedefs including
-`typedef unsigned int BOOL`, `OaIdl.h` and `__declspec` were removed, both
-pack pragmas were commented out, and every lowercase `bool` was rewritten to
-`BOOL`. Those are artefacts of the editing, not the vendor's ABI. This
-docstring briefly claimed, on the strength of that copy, that the layout was
-correct; it is not.
+This declaration uses `NTuple{16,Cchar}`, 4-byte `BOOL` flags and default
+alignment, measuring **120 bytes with `PID` at offset 88** (verified by
+execution). It is wrong for both, and the field that differs between the two
+vendor versions is an array LENGTH, so no reinterpretation fixes both at once.
+
+`[policy]` Do not call `TLI_GetDeviceInfo` through this declaration. Nothing
+in this package does — `initialize` uses only `TLI_BuildDeviceList` and
+`TLI_GetDeviceListSize`, both of which return counts and touch no struct
+(verified). If a caller ever needs device info, declare the struct for the
+SDK version in use, assert `sizeof`, and keep it beside the header it was
+read from.
+
+**One copy of this header on the lab NAS contradicts all of the above; do not
+trust it.** `Personal Folders/Sheng/code/generate_lib/lib/` holds a Clang.jl
+generation input, hand-edited to parse without Windows headers: local
+typedefs including `typedef unsigned int BOOL`, `OaIdl.h` and `__declspec`
+stripped, both pack pragmas commented out, every lowercase `bool` rewritten.
+Those are artefacts of the editing. This docstring briefly asserted, on the
+strength of that file, that our layout was correct; it is not, and the round
+trip cost two wrong rulings in opposite directions.
 """
 struct TLI_DeviceInfo
     typeID::DWORD
