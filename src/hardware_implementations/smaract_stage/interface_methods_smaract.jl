@@ -9,34 +9,41 @@ After this call, `stage.connectionstatus == true` and `stage.pos_pm` holds
 the current hardware positions.
 """
 function initialize!(stage::MCS2Stage)
+    # Every failure below throws rather than logging and returning. Returning
+    # normally left `stage.dHandle` unopened while callers carried on using
+    # it: the bridge's `initialize` goes straight on to `getposition`, which
+    # then failed with "invalid device handle" and buried the real cause.
+    # A caller expecting an initialised stage should get one or an exception,
+    # never neither.
     if stage.connectionstatus
-        @error "Stage already initialized — call shutdown!(stage) first."
-        return
+        error("Stage already initialized — call shutdown!(stage) first.")
     end
 
-    # Find devices 
+    # Find devices
     bufsize = 1024
     device_buf = Vector{Cchar}(undef, bufsize)
     device_len = Ref{Csize_t}(bufsize)
 
     result = SA_CTL_FindDevices("", device_buf, device_len)
     if result != SA_CTL_ERROR_NONE
-        @error "SA_CTL_FindDevices failed: $(unsafe_string(SA_CTL_GetResultInfo(result)))"
-        return
+        error("SA_CTL_FindDevices failed: $(unsafe_string(SA_CTL_GetResultInfo(result)))")
     end
 
     locator = unsafe_string(pointer(device_buf))
     if isempty(locator)
-        @error "No SmarAct MCS2 devices found.  Check USB/Ethernet connection."
-        return
+        error("No SmarAct MCS2 devices found. Check the USB/Ethernet connection, " *
+              "and note that the MCS2 allows only one open connection at a time — " *
+              "a REPL or script that opened the stage and never called shutdown! " *
+              "still holds it.")
     end
     @info "Device found: $locator"
 
     # Open device
     result = SA_CTL_Open(stage.dHandle, locator, C_NULL)
     if result != SA_CTL_ERROR_NONE
-        @error "SA_CTL_Open failed: $(unsafe_string(SA_CTL_GetResultInfo(result)))"
-        return
+        error("SA_CTL_Open failed on $locator: $(unsafe_string(SA_CTL_GetResultInfo(result))). " *
+              "If the device was found but will not open, another process most " *
+              "likely still has it open.")
     end
     stage.connectionstatus = true
     @info "Device opened.  Handle: $(stage.dHandle[])"
@@ -82,8 +89,22 @@ function initialize!(stage::MCS2Stage)
 
         # Amplifier-side settings (safe to set; channel is connected)
         try
-            SA_CTL_SetProperty_i32(stage.dHandle[], ch,
-                                   SA_CTL_PKEY_MAX_CL_FREQUENCY, Int32(18500))
+            # Drive frequency: use the controller's own per-positioner default
+            # rather than a hardcoded value. The default is derived from the
+            # configured positioner type, so it matches whatever is actually
+            # mounted; forcing a higher value drives a stick-slip actuator
+            # above its rated step rate (audible whine, extra wear). If the
+            # property cannot be read, leave MAX_CL_FREQUENCY as the
+            # controller has it rather than guessing.
+            clf = Ref{Int32}()
+            if SA_CTL_GetProperty_i32(stage.dHandle[], ch,
+                                      SA_CTL_PKEY_DEFAULT_MAX_CL_FREQUENCY,
+                                      clf, Ref{Csize_t}(1)) == SA_CTL_ERROR_NONE
+                SA_CTL_SetProperty_i32(stage.dHandle[], ch,
+                                       SA_CTL_PKEY_MAX_CL_FREQUENCY, clf[])
+            else
+                @warn "Channel $ch: could not read DEFAULT_MAX_CL_FREQUENCY — leaving drive frequency at the controller's current setting."
+            end
             SA_CTL_SetProperty_i32(stage.dHandle[], ch,
                                    SA_CTL_PKEY_HOLD_TIME, SA_CTL_HOLD_TIME_INFINITE)
             SA_CTL_SetProperty_i64(stage.dHandle[], ch,

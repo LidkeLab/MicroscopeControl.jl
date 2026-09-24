@@ -4,6 +4,7 @@
 const _smaract_src = joinpath(@__DIR__, "..", "src", "hardware_implementations", "smaract_stage")
 include(joinpath(_smaract_src, "constants_smaract.jl"))
 include(joinpath(_smaract_src, "functions_smaract.jl"))
+include(joinpath(@__DIR__, "smaract_rig_config.jl"))
 
 const SmarAct = "C:\\Windows\\System32\\SmarActCTL.dll"
 
@@ -110,7 +111,7 @@ println("Total Number of Channels: ", noOfChannels)
 
 # ===== Module info =====
 for i in 0:(noOfBusModules - 1)
-    type = get_property_i32(dHandle, i, SA_CTL_PKEY_MODULE_TYPE)
+    local type = get_property_i32(dHandle, i, SA_CTL_PKEY_MODULE_TYPE)
     print("Module $i")
 
     if type == SA_CTL_STICK_SLIP_PIEZO_DRIVER
@@ -125,7 +126,7 @@ for i in 0:(noOfBusModules - 1)
 
     num = get_property_i32(dHandle, i, SA_CTL_PKEY_NUMBER_OF_BUS_MODULE_CHANNELS)
     println("    Number of Bus Module Channels: $num")
-    state = get_property_i32(dHandle, i, SA_CTL_PKEY_MODULE_STATE)
+    local state = get_property_i32(dHandle, i, SA_CTL_PKEY_MODULE_STATE)
     print("    Sensor Module present: ")
     println((state & SA_CTL_MOD_STATE_BIT_SM_PRESENT) != 0 ? "yes" : "no")
 end
@@ -135,11 +136,11 @@ for i in 0:(noOfChannels - 1)
     println("        Channel: $i")
 
     pos_name = get_property_string(dHandle, i, SA_CTL_PKEY_POSITIONER_TYPE_NAME)
-    type = get_property_i32(dHandle, i, SA_CTL_PKEY_POSITIONER_TYPE)
+    local type = get_property_i32(dHandle, i, SA_CTL_PKEY_POSITIONER_TYPE)
 
     println("        Positioner Type: $pos_name ($type)")
 
-    state = get_property_i32(dHandle, i, SA_CTL_PKEY_CHANNEL_STATE)
+    local state = get_property_i32(dHandle, i, SA_CTL_PKEY_CHANNEL_STATE)
 
     print("        Amplifier enabled: ")
     println((state & SA_CTL_CH_STATE_BIT_AMPLIFIER_ENABLED) != 0 ? "yes" : "no")
@@ -180,8 +181,15 @@ for channel in (X_channel, Y_channel)
     #Set to closed-loop movement
     set_property_i32(dHandle, channel, SA_CTL_PKEY_MOVE_MODE, SA_CTL_MOVE_MODE_CL_ABSOLUTE)
 
-    #Set max closed loop frequency (maxCLF) to 18.5 kHz. Vendor software uses 18.5 kHz as default.
-    set_property_i32(dHandle, channel, SA_CTL_PKEY_MAX_CL_FREQUENCY, 18500)
+    # Max closed-loop frequency: use the controller's own per-positioner
+    # default rather than a hardcoded value. The default follows the
+    # configured positioner type, so it is right for whatever is mounted.
+    # (This rig's CT001/AT001 positioners default to 5 kHz; the previous
+    # hardcoded 18.5 kHz drove them at 3.7x their rated step rate, which is
+    # audible as a whine and is needless wear.)
+    default_clf = get_property_i32(dHandle, channel, SA_CTL_PKEY_DEFAULT_MAX_CL_FREQUENCY)
+    set_property_i32(dHandle, channel, SA_CTL_PKEY_MAX_CL_FREQUENCY, default_clf)
+    println("Channel $channel max-CLF set to $(default_clf) Hz (positioner default).")
 
     #set the hold time to infinite ms. Infinte hold time to prevent drift when the stage is not moving.
     set_property_i32(dHandle, channel, SA_CTL_PKEY_HOLD_TIME, SA_CTL_HOLD_TIME_INFINITE)
@@ -211,9 +219,28 @@ function findReference(dHandle, channel)
     println("Referencing started.")
 end
 
-function wait_for_referencing(dHandle, channel)
+# Channel-state bits that mean motion ended badly rather than completing.
+# ACTIVELY_MOVING / REFERENCING clearing only says the channel stopped — not
+# that it arrived — so decode these before trusting any position read back.
+const CH_FAULT_BITS = (
+    (SA_CTL_CH_STATE_BIT_END_STOP_REACHED,        "mechanical end stop reached"),
+    (SA_CTL_CH_STATE_BIT_RANGE_LIMIT_REACHED,     "software range limit reached"),
+    (SA_CTL_CH_STATE_BIT_FOLLOWING_LIMIT_REACHED, "following limit reached"),
+    (SA_CTL_CH_STATE_BIT_MOVEMENT_FAILED,         "movement failed"),
+    (SA_CTL_CH_STATE_BIT_POSITIONER_OVERLOAD,     "positioner overload"),
+    (SA_CTL_CH_STATE_BIT_OVER_TEMPERATURE,        "over temperature"),
+    (SA_CTL_CH_STATE_BIT_POSITIONER_FAULT,        "positioner fault"),
+)
+
+function warn_channel_faults(channel, state; context="move")
+    for (bit, name) in CH_FAULT_BITS
+        (state & bit) != 0 && @warn "Channel $channel: $name during $context."
+    end
+end
+
+function wait_for_referencing(dHandle, channel; timeout_s=60.0)
     println("Waiting for referencing to complete on channel $channel...")
-    
+
     t0 = time()
 
     while true
@@ -224,6 +251,7 @@ function wait_for_referencing(dHandle, channel)
         is_referencing = (state & SA_CTL_CH_STATE_BIT_REFERENCING) != 0
 
         if !is_referencing
+            warn_channel_faults(channel, state; context="referencing")
 
             # Check if referenced
             referenced = (state & SA_CTL_CH_STATE_BIT_IS_REFERENCED) !=0
@@ -234,6 +262,14 @@ function wait_for_referencing(dHandle, channel)
 
             println("Channel $channel referenced.")
             return
+        end
+
+        # Without this the loop can spin forever while the positioner keeps
+        # driving — homing does not set ABORT_ON_ENDSTOP, so a missed
+        # reference mark means it grinds against the end stop indefinitely.
+        if time() - t0 > timeout_s
+            SA_CTL_Stop(dHandle, channel, 0)
+            error("Referencing timeout on channel $channel after $(timeout_s)s — stop sent")
         end
 
         sleep(0.1)   # avoid busy-waiting (100 ms)
@@ -271,8 +307,9 @@ function get_position(dHandle, channel)
     return value[]
 end
 
-function wait_for_move(dHandle, channel; timeout_s=60.0)
+function wait_for_move(dHandle, channel; timeout_s=60.0, context="move")
     t0 = time()
+    state = Int32(0)
     while true
         state  = get_property_i32(dHandle, channel, SA_CTL_PKEY_CHANNEL_STATE)
         moving = (state & SA_CTL_CH_STATE_BIT_ACTIVELY_MOVING) != 0
@@ -283,6 +320,8 @@ function wait_for_move(dHandle, channel; timeout_s=60.0)
         end
         sleep(0.05)
     end
+    warn_channel_faults(channel, state; context=context)
+    return state
 end
 
 function _drive_to_endstop(dHandle, channel, target_pm; timeout_s=60.0)
@@ -291,7 +330,7 @@ function _drive_to_endstop(dHandle, channel, target_pm; timeout_s=60.0)
     errcode = SA_CTL_Move(dHandle, channel, target_pm, 0)
     error_check!(errcode, msg="Move command failed on channel $channel")
 
-    wait_for_move(dHandle, channel; timeout_s=timeout_s)
+    wait_for_move(dHandle, channel; timeout_s=timeout_s, context="end-stop scan")
 
     SA_CTL_Stop(dHandle, channel, 0)
 end
@@ -370,17 +409,37 @@ function set_xy_travel_range(dHandle, min_pm::Int64, max_pm::Int64)
     return (x_min, x_max, y_min, y_max)
 end
 
-# Physical travel range — drives the stage to each mechanical end stop
-p_x_min, p_x_max, p_y_min, p_y_max = find_xy_travel_range(dHandle)
-println("Physical travel range — X: $(p_x_min/1e6) to $(p_x_max/1e6) µm  (≈$((p_x_max-p_x_min)/1e9) mm)")
-println("Physical travel range — Y: $(p_y_min/1e6) to $(p_y_max/1e6) µm  (≈$((p_y_max-p_y_min)/1e9) mm)")
+# ---------------------------------------------------------------------------
+# Optional end-stop scan
+#
+# This drives each axis into both hard stops. It is off by default, and it is
+# NOT how the working window below is decided — running it on 2026-09-24 showed
+# the stop is not at a repeatable position: X halted as early as -225.8 µm and
+# then crept to -244.2 over successive attempts, with MOVEMENT_FAILED set
+# alongside END_STOP_REACHED every time. What the scan measures is how hard the
+# actuator was pushed, not where the stage ends. Use the vendor's travel spec
+# instead; keep this only for a rough sanity check on a cleared stage.
+const RUN_ENDSTOP_SCAN = false
 
-# Set software travel range limits
-min_position_pm = Int64(-20e9)
-max_position_pm = Int64(20e9)
+if RUN_ENDSTOP_SCAN
+    @warn "End-stop scan enabled — this drives both axes into their hard stops. Ensure the stage is clear."
+    p_x_min, p_x_max, p_y_min, p_y_max = find_xy_travel_range(dHandle)
+    println("Scan result — X: $(p_x_min/1e6) to $(p_x_max/1e6) µm, Y: $(p_y_min/1e6) to $(p_y_max/1e6) µm")
+    println("Treat these as indicative only; the software limits below do not come from them.")
+end
 
-# Software range limits (0/0 by default — these are configurable limits, not the physical range)
-s_x_min, s_x_max, s_y_min, s_y_max = set_xy_travel_range(dHandle, min_position_pm,max_position_pm)
+# ---------------------------------------------------------------------------
+# Software travel limits
+#
+# These default to 0/0, which means "no software limit configured" — not "zero
+# range" — and they are volatile, so the controller forgets them on a power
+# cycle. The controller accepts limits far wider than the real travel without
+# complaint: an earlier revision wrote ±20 mm to a stage with under 0.5 mm of
+# travel, which protected nothing and later drove a sweep straight into the
+# stops. The window comes from dev/smaract_rig_config.jl, the one place it is
+# defined.
+s_x_min, s_x_max = set_travel_range(dHandle, X_channel, rig_window_pm(:X)...)
+s_y_min, s_y_max = set_travel_range(dHandle, Y_channel, rig_window_pm(:Y)...)
 println("Software travel range - X: $(s_x_min/1e6) to $(s_x_max/1e6) µm" )
 println("Software travel range - Y: $(s_y_min/1e6) to $(s_y_max/1e6) µm" )
 

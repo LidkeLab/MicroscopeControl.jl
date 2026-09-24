@@ -1,4 +1,36 @@
 
+# Channel-state bits that mean a move ended badly rather than completing
+# normally. ACTIVELY_MOVING clearing only says the channel stopped — not that
+# it arrived, so every wait loop should decode these before trusting the
+# position it reads back.
+const _CH_FAULT_BITS = (
+    (SA_CTL_CH_STATE_BIT_END_STOP_REACHED,       "mechanical end stop reached"),
+    (SA_CTL_CH_STATE_BIT_RANGE_LIMIT_REACHED,    "software range limit reached"),
+    (SA_CTL_CH_STATE_BIT_FOLLOWING_LIMIT_REACHED, "following limit reached"),
+    (SA_CTL_CH_STATE_BIT_MOVEMENT_FAILED,        "movement failed"),
+    (SA_CTL_CH_STATE_BIT_POSITIONER_OVERLOAD,    "positioner overload"),
+    (SA_CTL_CH_STATE_BIT_OVER_TEMPERATURE,       "over temperature"),
+    (SA_CTL_CH_STATE_BIT_POSITIONER_FAULT,       "positioner fault"),
+)
+
+"""
+    _warn_channel_faults(ch, state; context="move") -> Bool
+
+Logs a warning for each fault bit set in `state`. Returns `true` if any were
+set. Warns rather than throws: the motion has already stopped by the time this
+is called, so the useful thing is to say why.
+"""
+function _warn_channel_faults(ch::Int32, state::Int32; context::String = "move")
+    faulted = false
+    for (bit, name) in _CH_FAULT_BITS
+        if (state & bit) != 0
+            @warn "Channel $ch: $name during $context."
+            faulted = true
+        end
+    end
+    return faulted
+end
+
 function _check!(errcode::SA_CTL_Result_t; msg::String = "Operation failed")
     if errcode != SA_CTL_ERROR_NONE
         sdk_msg = unsafe_string(SA_CTL_GetResultInfo(errcode))
@@ -52,6 +84,55 @@ function query_channel_states!(stage::MCS2Stage)
     end
 end
 
+# Software travel limits
+
+"""
+    set_range_limits!(stage, ch_index, min_pm, max_pm) -> (min_pm, max_pm)
+
+Writes the software travel limits of one channel and returns what the
+controller stored, which is the only trustworthy confirmation.
+
+These limits are the controller's own guard: a move outside them is refused
+and sets `RANGE_LIMIT_REACHED` instead of driving into a mechanical stop. They
+default to `0 / 0`, which means "no limit configured" — **not** "zero range" —
+so until something sets them, nothing bounds a move.
+
+Two things make them easy to get wrong:
+
+  * They are **volatile**. The controller forgets them on a power cycle, so
+    they must be re-established every session. `initialize!` only reads them.
+  * They are **not validated against the positioner**. Setting them wider than
+    the real travel is accepted and silently protects nothing.
+
+So set them from a known-good travel figure — the vendor's spec for the
+positioner — and treat an end-stop scan as a last resort, since driving a
+stick-slip actuator into its stop does not stop it at a repeatable place.
+"""
+function set_range_limits!(stage::MCS2Stage, ch_index::Int,
+                           min_pm::Int64, max_pm::Int64)
+    ch = stage.channel_ids[ch_index]
+
+    if !stage.connected[ch_index]
+        @warn "Channel $ch has no positioner attached — limits not set."
+        return (stage.min_pm[ch_index], stage.max_pm[ch_index])
+    end
+    min_pm < max_pm ||
+        error("Channel $ch: range limits must satisfy min < max (got $min_pm, $max_pm pm).")
+
+    _set_i64(stage, ch, SA_CTL_PKEY_RANGE_LIMIT_MIN, min_pm)
+    _set_i64(stage, ch, SA_CTL_PKEY_RANGE_LIMIT_MAX, max_pm)
+
+    # Read back rather than assuming the write took.
+    stage.min_pm[ch_index] = _get_i64(stage, ch, SA_CTL_PKEY_RANGE_LIMIT_MIN)
+    stage.max_pm[ch_index] = _get_i64(stage, ch, SA_CTL_PKEY_RANGE_LIMIT_MAX)
+
+    if (stage.min_pm[ch_index], stage.max_pm[ch_index]) != (min_pm, max_pm)
+        @warn "Channel $ch: controller stored $(stage.min_pm[ch_index]) / $(stage.max_pm[ch_index]) pm, not the requested $min_pm / $max_pm pm."
+    end
+    @info "Channel $ch limits: $(stage.min_pm[ch_index] / 1e6) … $(stage.max_pm[ch_index] / 1e6) µm"
+    return (stage.min_pm[ch_index], stage.max_pm[ch_index])
+end
+
 # Set velocity and acceleration
 
 function set_velocity!(stage::MCS2Stage, vel_pm_s::Int64)
@@ -91,15 +172,27 @@ function find_reference!(stage::MCS2Stage, ch_index::Int; timeout_s::Float64 = 6
             msg = "Failed to start referencing on channel $ch")
 
     t0 = time()
+    state = Int32(0)
     while true
         state        = _get_i32(stage, ch, SA_CTL_PKEY_CHANNEL_STATE)
         referencing  = (state & SA_CTL_CH_STATE_BIT_REFERENCING) != 0
         referencing  || break
-        time() - t0 > timeout_s && error("Referencing timeout on channel $ch after $(timeout_s)s")
+        if time() - t0 > timeout_s
+            SA_CTL_Stop(stage.dHandle[], ch, Int32(0))
+            error("Referencing timeout on channel $ch after $(timeout_s)s — stop sent")
+        end
         sleep(0.1)
     end
+    _warn_channel_faults(ch, state; context = "referencing")
 
-    stage.is_referenced[ch_index] = true
+    # The REFERENCING bit clearing only means homing stopped. Confirm it
+    # actually succeeded rather than assuming it did — an unreferenced channel
+    # reports positions against an arbitrary zero, so absolute moves made on
+    # that assumption can drive straight into an end stop.
+    stage.is_referenced[ch_index] = (state & SA_CTL_CH_STATE_BIT_IS_REFERENCED) != 0
+    if !stage.is_referenced[ch_index]
+        error("Referencing failed on channel $ch — channel is not referenced.")
+    end
     @info "Channel $ch referenced."
 end
 
@@ -124,6 +217,7 @@ function move_abs!(stage::MCS2Stage, ch_index::Int, target_pm::Int64;
 
     # Poll until not moving
     t0 = time()
+    state = Int32(0)
     while true
         state  = _get_i32(stage, ch, SA_CTL_PKEY_CHANNEL_STATE)
         moving = (state & SA_CTL_CH_STATE_BIT_ACTIVELY_MOVING) != 0
@@ -134,6 +228,7 @@ function move_abs!(stage::MCS2Stage, ch_index::Int, target_pm::Int64;
         end
         sleep(0.05)
     end
+    _warn_channel_faults(ch, state)
 
     # Refresh position
     stage.pos_pm[ch_index] = _get_i64(stage, ch, SA_CTL_PKEY_POSITION)
@@ -163,13 +258,20 @@ function move_all!(stage::MCS2Stage, targets_pm::Vector{Int64}; timeout_s::Float
         push!(moving_channels, ch)
     end
 
-    # Wait for those channels to finish
+    # Wait for those channels to finish.
+    #
+    # This blocks. It used to run the poll loop inside an `@async` block while
+    # query_positions! ran immediately after it, so the function returned
+    # before any motion had finished and reported positions sampled mid-move —
+    # any readback taken after a move was a race. Blocking here is what makes
+    # `move!` / `StageInterface.move` mean what their docstrings say.
     t0 = time()
-    @async begin
+    final_states = Dict{Int32,Int32}()
     while true
         all_done = true
         for ch in moving_channels
             state  = _get_i32(stage, ch, SA_CTL_PKEY_CHANNEL_STATE)
+            final_states[ch] = state
             moving = (state & SA_CTL_CH_STATE_BIT_ACTIVELY_MOVING) != 0
             moving && (all_done = false; break)
         end
@@ -178,14 +280,14 @@ function move_all!(stage::MCS2Stage, targets_pm::Vector{Int64}; timeout_s::Float
             for ch in moving_channels
                 SA_CTL_Stop(stage.dHandle[], ch, Int32(0))
             end
-            # This runs inside the @async task: a thrown error would only
-            # surface as a failed Task, so log it instead.
-            @error "Move-all timeout after $(timeout_s)s — all channels stopped"
-            break
+            error("Move-all timeout after $(timeout_s)s — all channels stopped")
         end
         sleep(0.05)
     end
+    for ch in moving_channels
+        _warn_channel_faults(ch, final_states[ch])
     end
+
     # Refresh all positions
     query_positions!(stage)
 end

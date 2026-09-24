@@ -9,6 +9,71 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
+### Changed
+- **Breaking.** `MCS2Stage`'s `initialize!` no longer forces
+  `MAX_CL_FREQUENCY` to a hardcoded 18500 Hz. It reads
+  `SA_CTL_PKEY_DEFAULT_MAX_CL_FREQUENCY` per channel and applies that
+  instead, falling back to whatever the controller already has if the
+  property cannot be read. The hardcoded value was justified in a comment as
+  the vendor default; it is not one for every positioner. The CT001/AT001
+  units on the rig this was found on default to 5 kHz, so the override drove
+  them at 3.7× their rated step rate — audible as a whine, and needless
+  wear. Connected channels will now run at a different drive frequency than
+  they did before, which is why this is the breaking component.
+- **Breaking.** `find_reference!` now verifies the `IS_REFERENCED` state bit
+  after homing and throws if it is clear, where it previously set
+  `stage.is_referenced[i] = true` unconditionally. The `REFERENCING` bit
+  clearing only means homing stopped, not that it succeeded, and an
+  unreferenced channel reports positions against an arbitrary zero — so the
+  old behaviour let an absolute move be computed from a zero that does not
+  exist. It also sends a stop on timeout rather than leaving the positioner
+  driving.
+
+### Fixed
+- **Breaking.** `MCS2Stage`'s `initialize!` throws on every failure path
+  instead of logging and returning. Device-not-found, `SA_CTL_FindDevices`
+  failure, `SA_CTL_Open` failure and double-initialise all returned normally
+  with `dHandle` unopened, and the bridge's `initialize` then went straight
+  on to `getposition` — so the visible error was `invalid device handle` from
+  a property read, with the real cause buried in a log line above it. Same
+  defect class as the DCAM4Camera fix in 0.2.x: a caller expecting an
+  initialised stage now gets one or an exception, never neither. The
+  device-not-found and open-failure messages also name the MCS2's
+  single-connection limit, which is the usual cause when the controller is
+  plugged in and enumerating but will not open.
+- **Breaking.** `move_all!` now actually waits for motion to finish. Its poll
+  loop ran inside an `@async` block while `query_positions!` ran immediately
+  after it, so the function returned before anything had moved and reported
+  positions sampled mid-move. Every readback after a `move!` or
+  `StageInterface.move` was therefore a race, including the GUI's. It now
+  blocks, and throws on timeout rather than logging from inside a task whose
+  failure nothing observes. Callers that relied on the move returning
+  immediately will now block until it completes or `timeout_s` elapses.
+
+### Added
+- `set_range_limits!(stage, ch_index, min_pm, max_pm)` for the MCS2. Nothing
+  in the driver could write the controller's software travel limits —
+  `initialize!` only read them — so whatever the last session happened to
+  leave in the controller bounded every subsequent move, the GUI's included.
+  The limits are volatile (forgotten on a power cycle) and are not validated
+  against the positioner, so a value far wider than the real travel is
+  accepted silently and protects nothing; the setter reads back what was
+  actually stored and warns if it differs.
+- `dev/smaract_rig_config.jl`, one definition of the rig's safe travel window
+  shared by all three SmarAct dev scripts, so they cannot drift apart.
+- `dev/test_smaract_motion.jl`, a hardware motion characterisation for the
+  MCS2: long-range accuracy and hysteresis across the full travel,
+  minimum incremental motion over a range of step sizes, and the two
+  combined — fine positioning immediately after a long traverse, plus
+  bidirectional repeatability. Every target is clamped into the controller's
+  software limits, and it refuses to run against an unreferenced channel.
+- Channel-state fault decoding for the SmarAct MCS2. `ACTIVELY_MOVING`
+  clearing says only that a channel stopped, not that it arrived, so
+  `move_abs!`, `move_all!` and `find_reference!` now decode and warn on
+  `END_STOP_REACHED`, `RANGE_LIMIT_REACHED`, `FOLLOWING_LIMIT_REACHED`,
+  `MOVEMENT_FAILED`, `POSITIONER_OVERLOAD`, `OVER_TEMPERATURE` and
+  `POSITIONER_FAULT` before the position is read back.
+
 ## [0.2.2] - 2026-09-22
 
 No functional change; CI configuration and contributor guidance only.
