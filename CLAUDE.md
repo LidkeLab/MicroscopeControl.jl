@@ -164,4 +164,16 @@ Some hardware modules are commented out in `MicroscopeControl.jl` while under de
 
 ### Versioning
 
-This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. Policy, following Julia's pre-1.0 convention: while the version is `0.x.y`, **`x` is the breaking component and `y` is the non-breaking one** -- `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one, which is also how Julia's `^0.2` compat bound reads them. So bump `x` only when working downstream code can behave differently (a signature, an export, or what a call returns or throws), and bump `y` for everything else, including bug fixes that change behaviour on a path that was already broken. Every merge to `main` is tagged automatically by `.github/workflows/TagOnMerge.yml`. Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.
+This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. **Work accumulates on a release-candidate branch between releases.** `main`
+is what gets tagged; a branch named like `0.3rc1` is where fixes for the next
+release collect. Open sub-branches and merge them into the release-candidate
+branch with a pull request as usual; the version in `Project.toml` does **not**
+move per merge, only once when the release is cut. CI knows: the version-bump
+check runs only for pull requests into `main`, and a merge into a
+release-candidate branch runs the full matrix because it is an integration
+point. Keep `main` open for genuine safety hotfixes, tagged as patches, and
+merge `main` into the release-candidate branch whenever one lands — the drift
+is the standing cost of this arrangement and merging forward promptly is what
+keeps it small.
+
+Policy, following Julia's pre-1.0 convention: while the version is `0.x.y`, **`x` is the breaking component and `y` is the non-breaking one** -- `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one, which is also how Julia's `^0.2` compat bound reads them. So bump `x` only when working downstream code can behave differently (a signature, an export, or what a call returns or throws), and bump `y` for everything else, including bug fixes that change behaviour on a path that was already broken. Every merge to `main` is tagged automatically by `.github/workflows/TagOnMerge.yml`. Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.
