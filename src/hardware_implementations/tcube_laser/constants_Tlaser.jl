@@ -11,9 +11,48 @@ const __int32 = Cint
 const BOOL = Cuint
 
 """
+    KBOOL_ARG
+
+The type to pass a Kinesis C++ `bool` ARGUMENT: a zero-extended `Cuint`
+carrying exactly 0 or 1.
+
+This is robust whichever width the callee really reads. A `bool` callee takes
+the low byte and sees 0 or 1; a `BOOL` callee takes all four and sees 0 or 1.
+Passing a 1-byte `Bool` is NOT robust in this direction: the upper three bytes
+of the register are undefined, so a `false` can arrive as true. That matters
+for `LD_EnableMaxCurrentAdjust(serialNo, enableAdjust, enableDiode)`, whose
+second flag enables the laser diode during a max-current adjustment.
+"""
+const KBOOL_ARG = Cuint
+
+"""
+    KBOOL_RET
+
+The type to read a Kinesis C++ `bool` RETURN: one byte.
+
+The installed vendor header declares these `bool`, which on MSVC x86-64
+returns in `AL` and leaves the rest of `EAX` **undefined**. Reading four bytes
+can therefore turn a `false` into a nonzero value — `LD_CheckConnection`
+reporting a disconnected controller as connected. Reading the low byte is
+correct under the `bool` ABI and still correct under a `BOOL` ABI returning
+0 or 1.
+
+**History, because this was got wrong twice.** v0.2.3 retyped both roles to a
+1-byte `Bool`, which was right for returns and wrong for arguments. A copy of
+the header on the lab NAS appeared to contradict it — but that copy is a
+Clang.jl generation input, hand-edited to parse without Windows headers: its
+`typedef unsigned int BOOL` and its commented-out `#pragma pack` are artefacts
+of that editing, not the vendor's ABI. The installed header has 32 lowercase
+`bool`, zero `BOOL`, and an active `#pragma pack(1)`. Splitting the two roles
+is what is actually correct, and is safe under either reading.
+"""
+const KBOOL_RET = Bool
+
+"""
     BOOL
 
-The Kinesis headers `typedef unsigned int BOOL` (verified at line 37 of
+Retained for `TLI_DeviceInfo`'s fields only. Note the Kinesis headers
+`typedef unsigned int BOOL` (verified at line 37 of
 `Thorlabs.MotionControl.TCube.LaserDiode.h`), so this is four bytes, and every
 `BOOL` argument and return in `functions_Tlaser.jl` is that width.
 
@@ -73,19 +112,32 @@ end
 """
     TLI_DeviceInfo
 
-Mirrors the `TLI_DeviceInfo` struct in the Kinesis headers. `BOOL` is four
-bytes there (`typedef unsigned int BOOL`, line 37), the fields are in this
-order, and the struct is NOT packed -- the header's `#pragma pack(1)` is
-commented out, so default alignment applies and both declarations come to 120
-bytes with `PID` at offset 88.
+**[limitation] This layout is wrong for the real DLL, and is left alone
+deliberately.**
 
-**This declaration carried a `[limitation]` warning in v0.2.3 saying it was
-suspect and wrong from `PID` onward. That warning was itself wrong** and is
-removed. It came from a second-hand report that the header packs to one byte
-and declares the flags as C++ `bool`; the header on the lab NAS does neither.
-Nothing in this package calls `TLI_GetDeviceInfo`, so nothing depended on
-either claim -- but a false warning costs the next reader a hunt for a defect
-that is not there, which is why it is deleted rather than softened.
+The installed vendor header declares this struct under an ACTIVE
+`#pragma pack(1)` with C++ `bool` flags. Packed, the real layout is
+**100 bytes with `PID` at offset 85**: `typeID` 4 + `description` 65 +
+`serialNo` 16 puts `PID` at 85 with no padding, and the five flags are one
+byte each. This declaration uses 4-byte `BOOL` and default alignment, so it
+measures **120 bytes with `PID` at offset 88** (verified by execution) and is
+wrong from `PID` onward.
+
+Nothing in this package calls `TLI_GetDeviceInfo`, so this is latent rather
+than a hazard, and correcting it means changing field types AND adding
+packing — not a change to make without a controller to read a real device
+list back from. Fix it against the installed header with the size asserted,
+or do not call it.
+
+**A copy of this header on the lab NAS says otherwise; do not trust it.** That
+copy (`Personal Folders/Sheng/code/generate_lib/lib/`) is a Clang.jl
+generation input, hand-edited to parse without Windows headers: the vendor
+preamble was replaced with local typedefs including
+`typedef unsigned int BOOL`, `OaIdl.h` and `__declspec` were removed, both
+pack pragmas were commented out, and every lowercase `bool` was rewritten to
+`BOOL`. Those are artefacts of the editing, not the vendor's ABI. This
+docstring briefly claimed, on the strength of that copy, that the layout was
+correct; it is not.
 """
 struct TLI_DeviceInfo
     typeID::DWORD
