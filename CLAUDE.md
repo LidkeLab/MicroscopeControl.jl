@@ -177,3 +177,50 @@ is the standing cost of this arrangement and merging forward promptly is what
 keeps it small.
 
 Policy, following Julia's pre-1.0 convention: while the version is `0.x.y`, **`x` is the breaking component and `y` is the non-breaking one** -- `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one, which is also how Julia's `^0.2` compat bound reads them. So bump `x` only when working downstream code can behave differently (a signature, an export, or what a call returns or throws), and bump `y` for everything else, including bug fixes that change behaviour on a path that was already broken. Every merge to `main` is tagged automatically by `.github/workflows/TagOnMerge.yml`. Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.
+
+## Instrument documentation archive (`manuals/`)
+
+`manuals/` is a **local-only symlink** to the lab-wide instrument archive on
+the NAS — vendor manuals, SDK headers, API references and the driver-facing
+notes that explain why a binding is the way it is. It is gitignored and must
+**never** be committed: git stores a symlink as a mode-120000 blob, and on a
+Windows rig without the symlink privilege that checks out as a text file
+containing the path, which is worse than nothing. Each clone makes its own.
+
+```bash
+# Linux (any of the four hosts)
+ln -sfn /mnt/nas/lidkelab/Projects/lab_instruments manuals
+```
+```bat
+REM Windows rig, from the repo root. Needs an elevated prompt, OR Developer
+REM Mode enabled once (Settings > Privacy & security > For developers).
+mklink /D manuals \\192.168.1.21\lidke-lrs\Projects\lab_instruments
+```
+
+`[limitation]` The junction form, `mklink /J`, does **not** work here: junctions
+resolve only to local volumes, so a UNC target fails. `/D` is required, and it
+is the one step in this arrangement that needs a privilege — once per rig, not
+once per clone. This has not been run on either rig yet; if `/D` is refused,
+say so rather than reaching for a mapped drive letter, which differs between
+user sessions and services.
+
+Nothing else is required — no environment variable and no shell profile edit.
+If `manuals/` is absent, make it with the line above.
+
+Layout is manufacturer first, then model: `manuals/Thorlabs/TLD001/`,
+`manuals/Hamamatsu/C11440-22CU/`, with shared vendor SDKs under
+`manuals/<Manufacturer>/SDK/<sdk-id>/`. Start at `manuals/INDEX.md`; the rules
+for adding anything are in `manuals/README.md`.
+
+Within a model directory, `source/` is the vendor original, verbatim and never
+renamed, and `docs/` is the working copy with a predictable name. A
+`BINDING.md`, where one exists, is the distillate a driver author actually
+needs — for example `manuals/Thorlabs/TLD001/BINDING.md` records that a Kinesis
+C++ boolean must be *passed* as a 4-byte `Cuint` but *read back* as a 1-byte
+`Bool`, which this package got wrong twice in opposite directions.
+
+`[policy]` When a driver's behaviour turns on a vendor fact -- a struct layout,
+an ABI width, a scaling constant, a status bit -- record it in that model's
+`BINDING.md` and cite the document in `source/` it came from. Three of the four
+defects in v0.2.3 were found by a rig holding hardware rather than by review,
+because the vendor fact was not written down anywhere a reviewer could check.

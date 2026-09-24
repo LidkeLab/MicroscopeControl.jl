@@ -8,6 +8,32 @@ const __int64 = Clonglong
 
 const __int32 = Cint
 
+"""
+    BOOL
+
+Four bytes. **Retained for `TLI_DeviceInfo`'s fields only**, which nothing in
+this package calls — see that struct's docstring. Do not use it for a new
+binding: use [`KBOOL_ARG`](@ref) for an argument and [`KBOOL_RET`](@ref) for a
+return.
+
+`[limitation]` The vendor headers do **not** declare `BOOL` for these fields.
+Two rigs have now read their own vendor-installed
+`Thorlabs.MotionControl.TCube.LaserDiode.h` — Kinesis 1.14.10 on the seq-sr rig
+and 1.14.47.22504 on quickbeam — and **both declare lowercase C++ `bool` with
+`#pragma pack(1)` active**. This `Cuint` is therefore wrong for
+`TLI_DeviceInfo`, and is left in place only because no single layout fits both
+versions anyway (they disagree on `serialNo`'s length), so there is nothing to
+change it *to*.
+
+**History, because this was got wrong twice in opposite directions.** v0.2.3
+retyped both boolean roles to a one-byte `Bool`. A copy of the header on the lab
+NAS appeared to contradict that, carrying `typedef unsigned int BOOL` and no
+lowercase `bool` at all, and on its strength the change was reverted — but that
+file is a Clang.jl generation input, hand-edited to parse without the Windows
+SDK, and its typedefs are artefacts of the editing rather than the vendor's ABI.
+Splitting the two roles is the correct answer, and the vendor-installed headers
+since read off both rigs confirm it.
+"""
 const BOOL = Cuint
 
 """
@@ -47,29 +73,6 @@ of that editing, not the vendor's ABI. The installed header has 32 lowercase
 is what is actually correct, and is safe under either reading.
 """
 const KBOOL_RET = Bool
-
-"""
-    BOOL
-
-Retained for `TLI_DeviceInfo`'s fields only. Note the Kinesis headers
-`typedef unsigned int BOOL` (verified at line 37 of
-`Thorlabs.MotionControl.TCube.LaserDiode.h`), so this is four bytes, and every
-`BOOL` argument and return in `functions_Tlaser.jl` is that width.
-
-**History, because this was got wrong once.** v0.2.3 changed these to a
-one-byte `Bool` on a report that the header declared C++ `bool`. It does not:
-that header contains no lowercase `bool` at all. The change was reverted
-because it is wrong in the dangerous direction for ARGUMENTS — passing one
-byte where the callee reads four leaves the upper three undefined, so a
-`false` can arrive as true. `LD_EnableMaxCurrentAdjust(serial, true, false)`
-is the call that matters: its second flag enables the laser diode during a
-max-current adjustment.
-
-If a future Kinesis version really does declare `bool`, check the header for
-that version before changing this, and change arguments and returns
-separately — four bytes is safe for an argument under either ABI, one byte is
-not.
-"""
 
 struct tagSAFEARRAYBOUND
     cElements::Culong
@@ -118,7 +121,7 @@ layout that would match both.**
 
 Two rigs read their installed headers and reported different declarations:
 
-| | Kinesis 1.14.10 (405 rig) | the 642 rig's install |
+| | Kinesis 1.14.10 (seq-sr rig) | Kinesis 1.14.47.22504 (quickbeam) |
 |---|---|---|
 | `serialNo` | `char serialNo[9]` | `char serialNo[16]` |
 | flags | 1-byte C++ `bool` | 1-byte C++ `bool` |

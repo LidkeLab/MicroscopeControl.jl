@@ -5,3 +5,5 @@
 /docs/Manifest.toml
 /docs/build/
 .DS_Store
+# local-only symlink to the lab instrument archive on the NAS (see CLAUDE.md)
+/manuals
