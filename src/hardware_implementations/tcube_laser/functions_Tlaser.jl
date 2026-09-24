@@ -55,7 +55,7 @@ function LD_Close(serialNo)
 end
 
 function LD_CheckConnection(serialNo)
-    ccall((:LD_CheckConnection, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar},), serialNo)
+    ccall((:LD_CheckConnection, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar},), serialNo)
 end
 
 function LD_Identify(serialNo)
@@ -79,15 +79,15 @@ function LD_GetSoftwareVersion(serialNo)
 end
 
 function LD_LoadSettings(serialNo)
-    ccall((:LD_LoadSettings, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar},), serialNo)
+    ccall((:LD_LoadSettings, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar},), serialNo)
 end
 
 function LD_LoadNamedSettings(serialNo, settingsName)
-    ccall((:LD_LoadNamedSettings, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar}, Ptr{Cchar}), serialNo, settingsName)
+    ccall((:LD_LoadNamedSettings, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar}, Ptr{Cchar}), serialNo, settingsName)
 end
 
 function LD_PersistSettings(serialNo)
-    ccall((:LD_PersistSettings, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar},), serialNo)
+    ccall((:LD_PersistSettings, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar},), serialNo)
 end
 
 function LD_Disable(serialNo)
@@ -111,11 +111,11 @@ function LD_MessageQueueSize(serialNo)
 end
 
 function LD_GetNextMessage(serialNo, messageType, messageID, messageData)
-    ccall((:LD_GetNextMessage, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar}, Ptr{WORD}, Ptr{WORD}, Ptr{DWORD}), serialNo, messageType, messageID, messageData)
+    ccall((:LD_GetNextMessage, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar}, Ptr{WORD}, Ptr{WORD}, Ptr{DWORD}), serialNo, messageType, messageID, messageData)
 end
 
 function LD_WaitForMessage(serialNo, messageType, messageID, messageData)
-    ccall((:LD_WaitForMessage, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar}, Ptr{WORD}, Ptr{WORD}, Ptr{DWORD}), serialNo, messageType, messageID, messageData)
+    ccall((:LD_WaitForMessage, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar}, Ptr{WORD}, Ptr{WORD}, Ptr{DWORD}), serialNo, messageType, messageID, messageData)
 end
 
 function LD_SetOpenLoopMode(serialNo)
@@ -127,7 +127,7 @@ function LD_SetClosedLoopMode(serialNo)
 end
 
 function LD_EnableMaxCurrentAdjust(serialNo, enableAdjust, enableDiode)
-    ccall((:LD_EnableMaxCurrentAdjust, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar}, CPPBOOL, CPPBOOL), serialNo, enableAdjust, enableDiode)
+    ccall((:LD_EnableMaxCurrentAdjust, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar}, BOOL, BOOL), serialNo, enableAdjust, enableDiode)
 end
 
 function LD_RequestMaxCurrentDigPot(serialNo)
@@ -147,7 +147,7 @@ function LD_FindTIAGain(serialNo)
 end
 
 function LD_EnableTIAGainAdjust(serialNo, enable)
-    ccall((:LD_EnableTIAGainAdjust, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar}, CPPBOOL), serialNo, enable)
+    ccall((:LD_EnableTIAGainAdjust, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar}, BOOL), serialNo, enable)
 end
 
 function LD_DisableOutput(serialNo)
@@ -267,7 +267,7 @@ function LD_GetStatusBits(serialNo)
 end
 
 function LD_StartPolling(serialNo, milliseconds)
-    ccall((:LD_StartPolling, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar}, Cint), serialNo, milliseconds)
+    ccall((:LD_StartPolling, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar}, Cint), serialNo, milliseconds)
 end
 
 function LD_PollingDuration(serialNo)
@@ -279,15 +279,15 @@ function LD_StopPolling(serialNo)
 end
 
 function LD_TimeSinceLastMsgReceived(serialNo, arg2)
-    ccall((:LD_TimeSinceLastMsgReceived, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar}, __int64), serialNo, arg2)
+    ccall((:LD_TimeSinceLastMsgReceived, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar}, __int64), serialNo, arg2)
 end
 
 function LD_EnableLastMsgTimer(serialNo, enable, lastMsgTimeout)
-    ccall((:LD_EnableLastMsgTimer, Thorlabs_Tcube_laser), Cvoid, (Ptr{Cchar}, CPPBOOL, __int32), serialNo, enable, lastMsgTimeout)
+    ccall((:LD_EnableLastMsgTimer, Thorlabs_Tcube_laser), Cvoid, (Ptr{Cchar}, BOOL, __int32), serialNo, enable, lastMsgTimeout)
 end
 
 function LD_HasLastMsgTimerOverrun(serialNo)
-    ccall((:LD_HasLastMsgTimerOverrun, Thorlabs_Tcube_laser), CPPBOOL, (Ptr{Cchar},), serialNo)
+    ccall((:LD_HasLastMsgTimerOverrun, Thorlabs_Tcube_laser), BOOL, (Ptr{Cchar},), serialNo)
 end
 
 function LD_RequestSettings(serialNo)

@@ -11,20 +11,26 @@ const __int32 = Cint
 const BOOL = Cuint
 
 """
-    CPPBOOL
+    BOOL
 
-Julia's `Bool`, i.e. one byte, for the Kinesis entry points the header declares
-as C++ `bool` rather than as a Windows `BOOL`. The distinction is not cosmetic:
-a `bool` return sets only the low byte of the return register, so reading it as
-a 4-byte `BOOL` reads three bytes of whatever happened to be there, and
-`LD_CheckConnection(...) != 0` can then report a disconnected controller as
-connected. Reported by the 642 nm rig from the Kinesis header, 2026-09-23; the
-same file's `tcubeapi.jl` already used `::Bool` for `LD_StartPolling` and
-`LD_StopPolling`, so the package disagreed with itself. Not hardware-verified.
+The Kinesis headers `typedef unsigned int BOOL` (verified at line 37 of
+`Thorlabs.MotionControl.TCube.LaserDiode.h`), so this is four bytes, and every
+`BOOL` argument and return in `functions_Tlaser.jl` is that width.
 
-`BOOL` above stays `Cuint` for the genuine Windows `BOOL` uses.
+**History, because this was got wrong once.** v0.2.3 changed these to a
+one-byte `Bool` on a report that the header declared C++ `bool`. It does not:
+that header contains no lowercase `bool` at all. The change was reverted
+because it is wrong in the dangerous direction for ARGUMENTS — passing one
+byte where the callee reads four leaves the upper three undefined, so a
+`false` can arrive as true. `LD_EnableMaxCurrentAdjust(serial, true, false)`
+is the call that matters: its second flag enables the laser diode during a
+max-current adjustment.
+
+If a future Kinesis version really does declare `bool`, check the header for
+that version before changing this, and change arguments and returns
+separately — four bytes is safe for an argument under either ABI, one byte is
+not.
 """
-const CPPBOOL = Bool
 
 struct tagSAFEARRAYBOUND
     cElements::Culong
@@ -67,22 +73,19 @@ end
 """
     TLI_DeviceInfo
 
-**[limitation] This layout is suspect and unverified.** The Kinesis header
-declares the `is*` fields as C++ `bool` (one byte), and they are typed here as
-`BOOL` = `Cuint` (four). If that is right, every field from `isKnownType`
-onward is misaligned and `TLI_GetDeviceInfo` returns nonsense. Nothing in this
-package calls `TLI_GetDeviceInfo`, so the defect is latent rather than active,
-and it is left alone as deferred ABI repair rather than corrected in passing.
+Mirrors the `TLI_DeviceInfo` struct in the Kinesis headers. `BOOL` is four
+bytes there (`typedef unsigned int BOOL`, line 37), the fields are in this
+order, and the struct is NOT packed -- the header's `#pragma pack(1)` is
+commented out, so default alignment applies and both declarations come to 120
+bytes with `PID` at offset 88.
 
-Correcting it is more than retyping the five fields, and does NOT need a
-controller -- it needs the vendor header, which this repo does not carry. The
-header declares the structure `#pragma pack(1)` at 100 bytes; this declaration
-is 120, and the divergence starts at `PID`, *before* the first `bool`. So
-retyping the booleans alone would leave it wrong. Repair it against the header,
-with the size asserted, or do not call it. The function signatures in
-`functions_Tlaser.jl` had a related discrepancy and WERE corrected -- see
-`CPPBOOL` -- because there the fix moves no field and the ABI rule is
-unambiguous.
+**This declaration carried a `[limitation]` warning in v0.2.3 saying it was
+suspect and wrong from `PID` onward. That warning was itself wrong** and is
+removed. It came from a second-hand report that the header packs to one byte
+and declares the flags as C++ `bool`; the header on the lab NAS does neither.
+Nothing in this package calls `TLI_GetDeviceInfo`, so nothing depended on
+either claim -- but a false warning costs the next reader a hunt for a defect
+that is not there, which is why it is deleted rather than softened.
 """
 struct TLI_DeviceInfo
     typeID::DWORD
