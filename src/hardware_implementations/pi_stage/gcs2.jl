@@ -1,0 +1,19 @@
+# One wrapper per PI GCS2 DLL function: the seam test/pi_stage_fake_sdk.jl replaces.
+PI_EnumerateUSB(buffer, bufsize, filter) = @ccall gcs2path.PI_EnumerateUSB(buffer::Ptr{UInt8}, bufsize::Cint, filter::Ptr{UInt8})::Cint
+PI_ConnectUSB(description) = @ccall gcs2path.PI_ConnectUSB(description::Ptr{UInt8})::Cint
+PI_IsConnected(ID) = @ccall gcs2path.PI_IsConnected(ID::Cint)::Cint
+PI_CloseConnection(ID) = @ccall gcs2path.PI_CloseConnection(ID::Cint)::Cvoid
+PI_GetError(ID) = @ccall gcs2path.PI_GetError(ID::Cint)::Cint
+PI_IsControllerReady(ID, piControllerReady) = @ccall gcs2path.PI_IsControllerReady(ID::Cint, piControllerReady::Ptr{Cint})::Cint
+PI_FRF(ID, axes) = @ccall gcs2path.PI_FRF(ID::Cint, axes::Ptr{UInt8})::Cint
+PI_qFRF(ID, axes, referenced) = @ccall gcs2path.PI_qFRF(ID::Cint, axes::Ptr{UInt8}, referenced::Ptr{Cint})::Cint
+PI_SVO(ID, axes, values) = @ccall gcs2path.PI_SVO(ID::Cint, axes::Ptr{UInt8}, values::Ptr{Cint})::Cint
+PI_VEL(ID, axes, values) = @ccall gcs2path.PI_VEL(ID::Cint, axes::Ptr{UInt8}, values::Ptr{Cdouble})::Cint
+PI_qVEL(ID, axes, values) = @ccall gcs2path.PI_qVEL(ID::Cint, axes::Ptr{UInt8}, values::Ptr{Cdouble})::Cint
+PI_MOV(ID, axes, values) = @ccall gcs2path.PI_MOV(ID::Cint, axes::Ptr{UInt8}, values::Ptr{Cdouble})::Cint
+PI_HLT(ID, axes) = @ccall gcs2path.PI_HLT(ID::Cint, axes::Ptr{UInt8})::Cint
+PI_STP(ID) = @ccall gcs2path.PI_STP(ID::Cint)::Cint
+PI_qPOS(ID, axes, values) = @ccall gcs2path.PI_qPOS(ID::Cint, axes::Ptr{UInt8}, values::Ptr{Cdouble})::Cint
+PI_IsMoving(ID, axes, values) = @ccall gcs2path.PI_IsMoving(ID::Cint, axes::Ptr{UInt8}, values::Ptr{UInt32})::Cint
+PI_qTMN(ID, axes, values) = @ccall gcs2path.PI_qTMN(ID::Cint, axes::Ptr{UInt8}, values::Ptr{Cdouble})::Cint
+PI_qTMX(ID, axes, values) = @ccall gcs2path.PI_qTMX(ID::Cint, axes::Ptr{UInt8}, values::Ptr{Cdouble})::Cint

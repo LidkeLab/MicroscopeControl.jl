@@ -11,7 +11,7 @@ function initialize_original(stage::PIStage) #TODO: Error handling
     bufferstring = Vector{UInt8}(undef, 1024)
 
     #Find number of connected USB devices, specifically the PI C-867 controller
-    numconnected = @ccall gcs2path.PI_EnumerateUSB(bufferstring::Ptr{UInt8}, 1024::Cint, "PI C-867"::Ptr{UInt8})::Cint
+    numconnected = PI_EnumerateUSB(bufferstring, 1024, "PI C-867")
 
     @info "Number of connected devices: " * string(numconnected)
 
@@ -27,7 +27,7 @@ function initialize_original(stage::PIStage) #TODO: Error handling
         return
     end
     #Connect to usb device
-    stage.id = @ccall gcs2path.PI_ConnectUSB(bufferstring::Ptr{UInt8})::Cint
+    stage.id = PI_ConnectUSB(bufferstring)
 
     @info "Device ID: " * string(stage.id)
 
@@ -78,12 +78,12 @@ Possibly must use PiMikroMove to calibrate, but this is not ideal, however there
 
 """
 function referencemove(stage::PIStage)
-    ismoved = @ccall gcs2path.PI_FRF(stage.id::Cint, "1 2"::Ptr{UInt8})::Cint
+    ismoved = PI_FRF(stage.id, "1 2")
     return ismoved
 end
 
 # PI_GetError returns and clears the controller's last GCS error code (0 = none).
-_pi_geterror(stage::PIStage) = @ccall gcs2path.PI_GetError(stage.id::Cint)::Cint
+_pi_geterror(stage::PIStage) = PI_GetError(stage.id)
 
 """
 Poll `PI_qFRF` until both axes report referenced; throw if that has not happened within
@@ -94,7 +94,7 @@ function _waitforreference(stage::PIStage; timeout::Real = 60.0)
     referenced = zeros(Cint, 2)
     deadline = time() + timeout
     while true
-        ok = @ccall gcs2path.PI_qFRF(stage.id::Cint, "1 2"::Ptr{UInt8}, referenced::Ptr{Cint})::Cint
+        ok = PI_qFRF(stage.id, "1 2", referenced)
         ok == 1 || error("PI_qFRF failed (GCS error $(_pi_geterror(stage)))")
         all(!=(0), referenced) && return nothing
         time() > deadline && error("PI stage not referenced after $(timeout) s: " *
@@ -108,11 +108,11 @@ end
 Function to disconnect PI Stage
 """
 function shutdown_original(stage::PIStage)
-    isconnected = @ccall gcs2path.PI_IsConnected(stage.id::Cint)::Cint
+    isconnected = PI_IsConnected(stage.id)
 
     if isconnected == 1
-        @ccall gcs2path.PI_CloseConnection(stage.id::Cint)::Cvoid
-        isconnected = @ccall gcs2path.PI_IsConnected(stage.id::Cint)::Cint
+        PI_CloseConnection(stage.id)
+        isconnected = PI_IsConnected(stage.id)
 
         if isconnected == 1
             @error "Stage failed to disconnect"
@@ -133,7 +133,7 @@ function servo(stage::PIStage, xtoggle::Bool, ytoggle::Bool)
     # PI_SVO takes `const BOOL*` = 32-bit ints, one per axis. Passing two UInt8 made the DLL
     # read axis 2's flag from whatever byte followed the array: servo silently OFF on Y,
     # every PI_MOV refused with GCS error 5 (worked by luck on Julia 1.10, failed on 1.13).
-    istoggled = @ccall gcs2path.PI_SVO(stage.id::Cint, "1 2"::Ptr{UInt8}, Cint[xtoggle, ytoggle]::Ptr{Cint})::Cint
+    istoggled = PI_SVO(stage.id, "1 2", Cint[xtoggle, ytoggle])
     stage.servostatus = (xtoggle, ytoggle)
 
     if istoggled == 1
@@ -147,7 +147,7 @@ end
 Sets the servo state of the x axis
 """
 function servox(stage::PIStage, xtoggle::Bool)
-    @ccall gcs2path.PI_SVO(stage.id::Cint, "1"::Ptr{UInt8}, Cint[xtoggle]::Ptr{Cint})::Cint
+    PI_SVO(stage.id, "1", Cint[xtoggle])
     stage.servostatus = (xtoggle, stage.servostatus[2])
 end
 
@@ -156,20 +156,20 @@ end
 Sets the servo state of the y axis
 """
 function servoy(stage::PIStage, ytoggle::Bool)
-    @ccall gcs2path.PI_SVO(stage.id::Cint, "2"::Ptr{UInt8}, Cint[ytoggle]::Ptr{Cint})::Cint
+    PI_SVO(stage.id, "2", Cint[ytoggle])
     stage.servostatus = (stage.servostatus[1], ytoggle)
 end
 
 
 function setvel(stage::PIStage,vel::Vector{Float64})
 
-    success = @ccall gcs2path.PI_VEL(stage.id::Cint, "1 2"::Ptr{UInt8}, vel::Ptr{Cdouble})::Cint
+    success = PI_VEL(stage.id, "1 2", vel)
 
     if success == 0
         @error "Failed to set velocity"
     end
     velocity = Vector{Cdouble}(undef, 2)
-    success = @ccall gcs2path.PI_qVEL(stage.id::Cint, "1 2"::Ptr{UInt8}, velocity::Ptr{Cdouble})::Cint
+    success = PI_qVEL(stage.id, "1 2", velocity)
     
     if success == 0
         @error "Failed to query velocity"
