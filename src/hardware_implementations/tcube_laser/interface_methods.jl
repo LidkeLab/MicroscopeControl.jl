@@ -245,6 +245,23 @@ function record_controller_limit!(light::TCubeLaser, raw)
     return light.controller_max_current
 end
 
+"""
+    lower_open_loop_clamp!(light::TCubeLaser)
+
+Open loop only, run by `initialize` after the controller's limit is recorded: if
+`light.controller_max_current > light.max_current`, lower the potentiometer with
+[`program_clamp!`](@ref) and store the limit it returns in
+`light.controller_max_current`. If the controller's limit is at or below
+`max_current` the potentiometer is not touched: a rig that lowered it by hand
+keeps it. Closed loop programs its clamp in `enter_mode!` and this does nothing.
+"""
+function lower_open_loop_clamp!(light::TCubeLaser{ConstantCurrent})
+    light.controller_max_current > light.max_current || return nothing
+    light.controller_max_current = program_clamp!(light)
+    return nothing
+end
+lower_open_loop_clamp!(light::TCubeLaser{ConstantPhotocurrent}) = nothing
+
 # ---------------------------------------------------------------------------
 # Closed-loop (ConstantPhotocurrent) arithmetic
 # ---------------------------------------------------------------------------
@@ -339,7 +356,7 @@ function set_digpot!(light::TCubeLaser, position::Int)
 end
 
 """
-    program_clamp!(light::TCubeLaser{ConstantPhotocurrent})
+    program_clamp!(light::TCubeLaser)
 
 Leave the controller's diode current limit at the highest potentiometer position
 whose limit, **as the controller reports it**, does not exceed
@@ -351,8 +368,18 @@ on the rig's controller, so moves fall short and approach the ceiling from one
 side. It never needs more than a few settings, and none if the present position
 already qualifies. Throws if even the lowest position is above the ceiling, or if
 it cannot settle. Output must be off (it is, in `initialize`).
+
+In `ConstantPhotocurrent` mode `initialize` calls it to program the clamp. In
+`ConstantCurrent` mode `initialize` calls it through
+[`lower_open_loop_clamp!`](@ref) only when the controller's limit is above
+`max_current`: the search then starts at a position whose limit is over the
+ceiling, so every move stays below that position and it can only LOWER the
+clamp. It never raises the potentiometer.
+
+`[limitation]` lowering the open-loop potentiometer is not validated on hardware
+beyond the 642 nm rig's closed-loop sequence; not yet run on hardware in open loop.
 """
-function program_clamp!(light::TCubeLaser{ConstantPhotocurrent})
+function program_clamp!(light::TCubeLaser)
     ceiling = light.max_current
     pos = read_digpot(light.serialNo)
     limit = read_limit_mA(light)
@@ -597,11 +624,20 @@ has_request(light::TCubeLaser{ConstantPhotocurrent}) = !isnan(light.pd.output_po
 Open the controller, start background polling ([`POLL_INTERVAL_MS`](@ref)),
 put it in the laser's [`RegulationMode`](@ref), and record the controller's own
 diode current limit in `light.controller_max_current`. It never enables the
-output. Polling starts first because the setpoint read-back that every verified
+output, and it leaves it OFF: in both modes, right after polling starts and
+before the mode command is sent, it zeroes the setpoint and disables the output
+([`zero_then_disable`](@ref)), so the mode command is never sent while the diode
+is lit and `properties.is_on` is false afterwards. Polling starts first because the setpoint read-back that every verified
 write depends on only refreshes through it (see
 [`SETPOINT_CONFIRM_TIMEOUT_S`](@ref)).
 
-`ConstantCurrent`: `LD_SetOpenLoopMode`, then the limit read.
+`ConstantCurrent`: `LD_SetOpenLoopMode`, then the limit read. If the controller's
+limit is above `max_current`, the potentiometer is then lowered until it is not
+([`lower_open_loop_clamp!`](@ref)) and `controller_max_current` is the limit
+that results; if it is at or below `max_current` the potentiometer is never
+touched, so a limit a rig set lower by hand stays. `[limitation]` the open-loop
+potentiometer lowering is unvalidated on hardware beyond the 642 nm rig's
+closed-loop sequence; not yet run on hardware in open loop.
 
 `ConstantPhotocurrent` -- the closed-loop entry sequence. Every step is a
 refusal that cannot be retrofitted after a diode is damaged, so none may be
@@ -613,12 +649,7 @@ simplified away:
    throw; and throw if it disagrees with `pd.tia_range`, naming both and the
    rear-panel switch. A range moved between sessions is a silent factor-of-ten
    error in every commanded power.
-3. Disable the output. (The setpoint is not zeroed here: the controller
-   ignores setpoints while the output is off, see
-   [`SETPOINT_NEEDS_OUTPUT`](@ref). `light_on` sends the intended photocurrent
-   setpoint immediately after enabling, and the clamp bounds the moment in
-   between.)
-4. Program the clamp, **the only real protection in power mode**, because the
+3. Program the clamp, **the only real protection in power mode**, because the
    loop raises current by itself to hold its setpoint (and a blocked photodiode
    drives it straight to the clamp): [`program_clamp!`](@ref) leaves the
    max-current potentiometer at the highest position whose limit, as the
@@ -626,8 +657,8 @@ simplified away:
    `pd.max_current_clamp` records that reported limit, never a request or a
    value computed from a position (the header's position scale is wrong on the
    rig's controller; see [`DIGPOT_STEP_ESTIMATE_mA`](@ref)).
-5. `LD_SetClosedLoopMode`, then re-read the bits and require `0x4`.
-6. `LD_SetWACalibFactor(pd.wa_calibration)` and read it back within `Cfloat`
+4. `LD_SetClosedLoopMode`, then re-read the bits and require `0x4`.
+5. `LD_SetWACalibFactor(pd.wa_calibration)` and read it back within `Cfloat`
    tolerance, so the front panel and this driver display the same number. The
    factor scales the controller's display only; the driver does its own
    conversion.
@@ -635,7 +666,8 @@ simplified away:
 If any step after `LD_Open` fails, the handle is closed before the error
 propagates -- a half-open controller refuses the next `LD_Open` and so blocks
 the retry -- and the original error is the one raised. A power-mode failure
-after step 3 leaves the output off.
+leaves the output off. It sets `pd.max_current_clamp` to `NaN` first, so a failed
+re-initialize cannot leave a stale clamp.
 
 It deliberately does **not** touch `light.max_current`: that field is the
 caller's ceiling for this diode, and overwriting it with the controller's
@@ -659,6 +691,9 @@ function initialize(light::TCubeLaser)
         # A success FLAG, not a status code: `false` is the failure.
         check_flag(LD_StartPolling(serialNo, POLL_INTERVAL_MS), "LD_StartPolling", serialNo)
         sleep(REQUEST_WAIT_S[])
+        # Whatever else left the output on, it is off before the mode command
+        # is sent, and `is_on` is false afterwards.
+        zero_then_disable(light)
         enter_mode!(regulation_mode(light), light)
         check_err(LD_RequestReadings(serialNo), "LD_RequestReadings", serialNo)
         # The diode current limit has its OWN request in the Kinesis API, and
@@ -673,6 +708,7 @@ function initialize(light::TCubeLaser)
         sleep(REQUEST_WAIT_S[])
         out = LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         record_controller_limit!(light, out)
+        lower_open_loop_clamp!(light)
     catch
         # The open succeeded, so this handle is ours to close; a controller
         # left open refuses the next `LD_Open` and so blocks the retry. The
@@ -697,6 +733,7 @@ enter_mode!(::ConstantCurrent, light::TCubeLaser) =
 function enter_mode!(::ConstantPhotocurrent, light::TCubeLaser)
     serialNo, pd = light.serialNo, light.pd
     name = "TCubeLaser $serialNo"
+    pd.max_current_clamp = NaN   # a failed re-initialize must not leave a stale clamp
 
     # 1. key switch and interlock
     bits = read_status_fresh(serialNo)
@@ -711,21 +748,16 @@ function enter_mode!(::ConstantPhotocurrent, light::TCubeLaser)
         "$name: refusing closed loop: the controller's photodiode range is $(reported) A but tia_range states $(pd.tia_range) A. " *
         "Check the rear-panel DIP switch; the calibration is only valid on the range it was measured on.")
 
-    # 3. output off. The setpoint cannot be zeroed here: the controller ignores
-    # setpoints with the output off (SETPOINT_NEEDS_OUTPUT); light_on sends the
-    # real one right after enabling.
-    check_err(LD_DisableOutput(serialNo), "LD_DisableOutput", serialNo)
-    light.properties.is_on = false
-
-    # 4. the clamp, as the controller itself reports it
+    # 3. the clamp, as the controller itself reports it (the output is off:
+    # `initialize` zeroed and disabled it before this)
     pd.max_current_clamp = program_clamp!(light)
 
-    # 5. closed loop, verified
+    # 4. closed loop, verified
     check_err(LD_SetClosedLoopMode(serialNo), "LD_SetClosedLoopMode", serialNo)
     read_status_fresh(serialNo) & STATUS_BITS.closed_loop != 0 ||
         error("$name: LD_SetClosedLoopMode returned success but the status word does not report closed loop (0x4)")
 
-    # 6. the display calibration, verified
+    # 5. the display calibration, verified
     check_err(LD_SetWACalibFactor(serialNo, Cfloat(pd.wa_calibration)), "LD_SetWACalibFactor", serialNo)
     check_err(LD_RequestWACalibFactor(serialNo), "LD_RequestWACalibFactor", serialNo)
     sleep(REQUEST_WAIT_S[])

@@ -343,17 +343,20 @@ lab_summary("Core") do
             # `initialize`, so this runs the real `initialize` against the fake
             # Kinesis SDK. Restoring the old `light.max_current = ...`
             # assignment must fail this testset.
-            FakeKinesis.reset!() # controller reports a 160 mA limit
+            # The controller reports a 160 mA limit and the pot follows the rig's
+            # scale, so initialize lowers it under the 80 mA ceiling.
+            FakeKinesis.reset!()
+            FakeKinesis.limit_follows_pot[] = true
             laser = cc(; max_current=80.0)
             initialize(laser)
 
-            @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
-                "LD_Open", "LD_StartPolling", "LD_SetOpenLoopMode", "LD_RequestReadings",
-                "LD_RequestLaserDiodeMaxCurrentLimit",
-                "LD_GetLaserDiodeMaxCurrentLimit"]
+            # The output is zeroed and disabled BEFORE the mode command.
+            @test FakeKinesis.calls[1:7] == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
+                "LD_Open", "LD_StartPolling", "LD_SetLaserSetPoint", "LD_DisableOutput", "LD_SetOpenLoopMode"]
+            @test FakeKinesis.calls[8:9] == ["LD_RequestReadings", "LD_RequestLaserDiodeMaxCurrentLimit"]
             @test laser.max_current == 80.0 # survived initialize
-            @test laser.controller_max_current ≈ 160.0 rtol = 1e-3
-            @test TCube.effective_max_current(laser) == 80.0
+            @test laser.controller_max_current <= 80.0 # lowered, never above the caller's ceiling
+            @test TCube.effective_max_current(laser) == laser.controller_max_current # the lowered limit is now the tighter one
 
             # A post-initialize request between the caller's ceiling and the
             # controller's is refused, and nothing reaches the SDK.
@@ -405,13 +408,47 @@ lab_summary("Core") do
             @test weak.max_current == 80.0 # still the caller's
             @test TCube.effective_max_current(weak) == weak.controller_max_current
             @test_throws ArgumentError setcurrent!(weak, 70.0) # between the two ceilings
-            @test isempty(FakeKinesis.setpoints)
+            @test FakeKinesis.setpoints == [UInt16(0)] # initialize's own zero, nothing from the refused request
 
             # Polling is a success FLAG, not a status code: `false` fails.
             FakeKinesis.reset!()
             FakeKinesis.polling_ok[] = false
             @test_throws "LD_StartPolling" initialize(cc())
             @test FakeKinesis.calls[end] == "LD_Close" # and the handle is released
+        end
+
+        @testset "initialize leaves the output off; the open-loop clamp only lowers (fake SDK)" begin
+            # (a) Output left on by other software: zeroed and disabled BEFORE the mode command.
+            FakeKinesis.reset!()
+            FakeKinesis.bits[] |= FakeKinesis.ENABLED
+            FakeKinesis.setpoint_held[] = UInt16(32767)
+            laser = cc()
+            laser.properties.is_on = true
+            initialize(laser)
+            @test FakeKinesis.bits[] & FakeKinesis.ENABLED == 0
+            @test FakeKinesis.setpoint_held[] == 0
+            @test laser.properties.is_on == false
+            @test findfirst(==("LD_DisableOutput"), FakeKinesis.calls) <
+                  findfirst(==("LD_SetOpenLoopMode"), FakeKinesis.calls)
+
+            # (b) The controller's limit is above the ceiling: the pot is lowered.
+            FakeKinesis.reset!()
+            FakeKinesis.limit_follows_pot[] = true
+            low = cc(; max_current=100.0)
+            initialize(low)
+            @test low.controller_max_current <= 100.0
+            @test FakeKinesis.digpot[] < 204
+            @test !isempty(FakeKinesis.digpot_sets)
+            @test all(<(204), FakeKinesis.digpot_sets)
+
+            # (c) The limit is at or below the ceiling: the pot is never raised.
+            FakeKinesis.reset!()
+            FakeKinesis.limit_follows_pot[] = true
+            high = cc(; max_current=200.0)
+            initialize(high)
+            @test isempty(FakeKinesis.digpot_sets)
+            @test FakeKinesis.digpot[] == 204
+            @test high.controller_max_current ≈ 160.74 atol = 0.05
         end
 
         @testset "a failed initialize closes the connection (fake SDK)" begin
@@ -431,7 +468,8 @@ lab_summary("Core") do
             @test occursin("LD_SetOpenLoopMode", err.msg)
             @test occursin("3", err.msg) # the Thorlabs code, not a cleanup error
             @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
-                "LD_Open", "LD_StartPolling", "LD_SetOpenLoopMode", "LD_StopPolling", "LD_Close"]
+                "LD_Open", "LD_StartPolling", "LD_SetLaserSetPoint", "LD_DisableOutput",
+                "LD_SetOpenLoopMode", "LD_StopPolling", "LD_Close"]
             @test isnan(laser.controller_max_current) # nothing recorded
 
             # A failure at the open itself has no handle to close.
@@ -458,7 +496,8 @@ lab_summary("Core") do
             @test occursin("3", bothErr.msg)
             @test !occursin("fake close explosion", bothErr.msg) # ... not the cleanup's
             @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
-                "LD_Open", "LD_StartPolling", "LD_SetOpenLoopMode", "LD_StopPolling", "LD_Close"]
+                "LD_Open", "LD_StartPolling", "LD_SetLaserSetPoint", "LD_DisableOutput",
+                "LD_SetOpenLoopMode", "LD_StopPolling", "LD_Close"]
             @test isnan(both.controller_max_current)
         end
 
@@ -476,28 +515,27 @@ lab_summary("Core") do
             @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize", "LD_Open",
                 # polling first: the setpoint read-back only refreshes through it
                 "LD_StartPolling",
+                # the output left on is zeroed, then disabled, before any mode command
+                "LD_SetLaserSetPoint", "LD_DisableOutput",
                 # 1-2: key, interlock and the amplifier range, from a fresh read
                 "LD_RequestStatusBits", "LD_GetStatusBits",
-                # 3: output off (no setpoint: the controller ignores one with the output off)
-                "LD_DisableOutput",
-                # 4: the clamp. At position 204 the controller reports 160.74 mA,
+                # 3: the clamp. At position 204 the controller reports 160.74 mA,
                 # over the 160 mA ceiling, so it steps to 203 (159.91 mA) and stops.
                 clamp_read..., limit_read...,
                 "LD_EnableMaxCurrentAdjust", "LD_SetMaxCurrentDigPot", clamp_read..., "LD_EnableMaxCurrentAdjust",
                 limit_read...,
-                # 5: closed loop, confirmed from the status word
+                # 4: closed loop, confirmed from the status word
                 "LD_SetClosedLoopMode", "LD_RequestStatusBits", "LD_GetStatusBits",
-                # 6: the display calibration, confirmed
+                # 5: the display calibration, confirmed
                 "LD_SetWACalibFactor", "LD_RequestWACalibFactor", "LD_GetWACalibFactor",
                 # shared tail: the controller's limit
                 "LD_RequestReadings", limit_read...]
             @test "LD_EnableOutput" ∉ FakeKinesis.calls  # initialize never emits
             @test FakeKinesis.bits[] & FakeKinesis.ENABLED == 0
             @test laser.properties.is_on == false
-            # No setpoint is sent with the output off (the controller would ignore
-            # it); the stale word stays on the controller until light_on replaces it.
-            @test isempty(FakeKinesis.setpoints)
-            @test FakeKinesis.setpoint_held[] == 11915
+            # The stale setpoint the output was left on is zeroed before the disable.
+            @test FakeKinesis.setpoints == [UInt16(0)]
+            @test FakeKinesis.setpoint_held[] == 0
             # The diode flag is never raised: passed as false both times.
             @test FakeKinesis.adjust_calls == [(true, false), (false, false)]
             @test FakeKinesis.digpot_sets == [203]
@@ -706,6 +744,7 @@ lab_summary("Core") do
             FakeKinesis.setpoint_held[] = FakeKinesis.STALE_SETPOINT # a controller left near full scale
             laser = cc()
             initialize(laser)
+            empty!(FakeKinesis.setpoints) # initialize zeroed the output it found
             # Nothing requested yet: light_on replaces the stale word with 0.
             light_on(laser)
             @test FakeKinesis.setpoints == [UInt16(0)]
@@ -804,15 +843,15 @@ lab_summary("Core") do
         end
 
         @testset "setlevel! maps onto each mode's declared range (fake SDK)" begin
-            FakeKinesis.reset!()
+            FakeKinesis.reset!(limit_raw=22341) # 149.99 mA: under the 150 ceiling, so the pot is left alone
             laser = cc(; min_current=70.0, max_current=150.0)
-            initialize(laser) # the controller's 160 mA limit does not narrow 150
+            initialize(laser)
             setlevel!(laser, 0.0)
             @test laser.drive_current == 70.0 # the floor, which still emits: not off
             setlevel!(laser, 1.0)
-            @test laser.drive_current == 150.0
+            @test laser.drive_current ≈ 150.0 atol = 0.02
             setlevel!(laser, 0.25)
-            @test laser.drive_current ≈ 90.0
+            @test laser.drive_current ≈ 90.0 atol = 0.02
             @test_throws ArgumentError setlevel!(laser, 1.5)
             @test_throws ArgumentError setlevel!(laser, -0.1)
 
