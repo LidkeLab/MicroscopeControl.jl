@@ -8,7 +8,24 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
-## [Unreleased]
+## [0.2.5] - 2026-09-29
+
+A non-breaking release. It brings the TCube laser's closed-loop (power) mode and
+the `DiodeLaser` interface (#66), the PI N-472 and PI stage fixes (#67, #64), and
+the Kinesis boolean binding split (#70). Every 0.2.4 line keeps working and means
+what it meant. An open-loop TCube rig does see new controller calls, listed
+under Changed, and none of them has yet run on hardware.
+
+**UPGRADE WARNING, as for 0.2.4.** Before repinning a rig to 0.2.5:
+- check every `setpower`/`setcurrent!` value that precedes a `light_on`;
+- set `max_current` to the diode's rating;
+- set the current limit stored in the controller (with its front-panel encoder
+  or by software) at or below that rating;
+- run a hardware check of the new sequence.
+
+**Hardware verification.** Closed loop was run on the 642 nm rig on #66's
+original head. The review changes on top of it, the open-loop changes and the PI
+changes are exercised only against fake controllers.
 
 ### Fixed
 - **TCube laser: Kinesis boolean arguments are passed as four bytes.** Every
