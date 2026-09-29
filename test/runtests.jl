@@ -879,6 +879,48 @@ lab_summary("Core") do
             FakeKinesis.reset!()
         end
 
+        @testset "cleanup after a failure while the output may be lit (fake SDK)" begin
+            FK = FakeKinesis
+            enabled() = FK.bits[] & FK.ENABLED != 0
+            ready_cc() = (FK.reset!(); l = cc(); initialize(l); setcurrent!(l, 10.0); l)
+            ready_cp() = (FK.reset!(); FK.limit_follows_pot[] = true; l = cp(); initialize(l);
+                          setoutputpower!(l, 10.0); light_on(l); l)
+            # light_on: the setpoint after the enable is not confirmed. It is zeroed before the disable.
+            laser = ready_cc()
+            FK.setpoint_readback[] = UInt16(3)
+            @test_logs (:error, r"output disabled") match_mode = :any @test_throws ErrorException light_on(laser)
+            last_off = findlast(==("LD_DisableOutput"), FK.calls)
+            @test FK.calls[last_off-1] == "LD_SetLaserSetPoint"
+            @test FK.setpoints[end] == 0 && FK.setpoints[end-1] != 0
+            @test laser.properties.is_on == false && !enabled()
+            FK.reset!()
+            # setoutputpower! with the output on and the setpoint not confirmed.
+            laser = ready_cp()
+            FK.setpoint_readback[] = UInt16(3)
+            @test_throws ErrorException setoutputpower!(laser, 20.0)
+            @test !FK.output_on[] && !enabled()
+            last_off = findlast(==("LD_DisableOutput"), FK.calls)
+            @test FK.calls[last_off-1] == "LD_SetLaserSetPoint" && FK.setpoints[end] == 0
+            @test laser.properties.is_on == false
+            @test laser.pd.output_power_requested == 10.0
+            FK.reset!()
+            # ... and when the disable fails too, the output may still be on.
+            laser = ready_cp()
+            FK.setpoint_readback[] = UInt16(3)
+            FK.fail!("LD_DisableOutput")
+            @test_logs (:error, r"may still be ON") match_mode = :any @test_throws ErrorException setoutputpower!(laser, 20.0)
+            @test laser.properties.is_on == true
+            @test laser.pd.output_power_requested == 10.0
+            FK.reset!()
+            # initialize: a disable that fails throws, records the output as possibly on, and closes.
+            laser = cc()
+            FK.fail!("LD_DisableOutput")
+            @test_logs (:error, r"may still be ON") match_mode = :any @test_throws ErrorException initialize(laser)
+            @test laser.properties.is_on == true
+            @test FK.calls[end] == "LD_Close"
+            FK.reset!()
+        end
+
         @testset "readbacks (fake SDK)" begin
             FakeKinesis.reset!()
             laser = cc(; threshold_current=65.0)

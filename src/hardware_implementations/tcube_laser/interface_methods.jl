@@ -664,7 +664,9 @@ simplified away:
 
 If any step after `LD_Open` fails, the handle is closed before the error
 propagates -- a half-open controller refuses the next `LD_Open` and so blocks
-the retry -- and the original error is the one raised. A power-mode failure
+the retry -- and the original error is the one raised. If the
+initial disable itself fails, `properties.is_on` is set `true`, since the diode may
+still be lit, and the same cleanup stops polling and closes. A power-mode failure
 leaves the output off. It sets `pd.max_current_clamp` to `NaN` first, so a failed
 re-initialize cannot leave a stale clamp.
 
@@ -692,7 +694,13 @@ function initialize(light::TCubeLaser)
         sleep(REQUEST_WAIT_S[])
         # Whatever else left the output on, it is off before the mode command
         # is sent, and `is_on` is false afterwards.
-        zero_then_disable(light)
+        try
+            zero_then_disable(light)
+        catch
+            light.properties.is_on = true
+            @error "TCubeLaser $serialNo: initialize could not disable the output; it may still be ON at the controller's stored setpoint"
+            rethrow()
+        end
         enter_mode!(regulation_mode(light), light)
         check_err(LD_RequestReadings(serialNo), "LD_RequestReadings", serialNo)
         # The diode current limit has its OWN request in the Kinesis API, and
@@ -781,8 +789,9 @@ been requested yet, setpoint 0 is sent, with a warning. In `ConstantCurrent`
 mode `drive_current` is checked against the current ceiling before the enable,
 so nothing is sent if that throws.
 
-If the setpoint cannot be sent or confirmed after the enable, the output is
-disabled again and the original error rethrown. `properties.is_on` is then what
+If the setpoint cannot be sent or confirmed after the enable, the setpoint is
+zeroed, the output is disabled again and the original error rethrown
+([`disable_after_failure`](@ref)). `properties.is_on` is then what
 the cleanup left: `false` if the disable succeeded, `true` if it failed too
 (both failures are logged), so a failed `light_on` never records a lit diode as
 off. In `ConstantPhotocurrent` mode the setpoint is ramped from 0 when the laser
@@ -793,6 +802,12 @@ is disabled and the error rethrown.
 `[limitation]` Between the enable and the setpoint the controller runs on its
 stored setpoint, bounded in hardware only by its current-limit potentiometer;
 see [`TCubeLaser`](@ref).
+
+`[limitation]` Called while the output is already on with a finite
+`ramp_step_mW`, the ramp starts from 0 again, so the output dips to one step
+and ramps back up. That is deliberate: the ramp starts only from what the driver
+knows the controller holds, and a value set from the front panel would make any
+other starting point a jump.
 
 A `ConstantPhotocurrent` laser refuses until `initialize` has programmed and
 verified its clamp (`pd.max_current_clamp` is not `NaN`), and re-checks the
@@ -811,24 +826,10 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     code = intended_code(light)
     check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
     try
-        send_setpoint_ramped(light, code, 0)   # the driver zeroes before every disable
+        send_setpoint_ramped(light, code, 0)   # the ramp starts from 0: every disable in this driver zeroes first
         check_lock(light, code)
     catch
-        disabled, offerr = false, nothing
-        try
-            status = LD_DisableOutput(serialNo)
-            disabled = status == 0
-            disabled || (offerr = "status $status")
-        catch err
-            offerr = err
-        end
-        if disabled
-            light.properties.is_on = false
-            @error "TCubeLaser $(serialNo): setpoint after enable failed; output disabled"
-        else
-            light.properties.is_on = true
-            @error "TCubeLaser $(serialNo): setpoint after enable failed and the disable failed ($offerr); the output may still be ON at the controller's stored setpoint"
-        end
+        disable_after_failure(light, "setpoint after enable")
         rethrow()
     end
     light.properties.is_on = true
@@ -884,6 +885,10 @@ is the rule this driver will not break -- but `drive_current` records the
 On success, `light.drive_current` holds the accepted current, in mA, and the
 deprecated `properties.power` holds [`legacy_power`](@ref)'s figure, as it did
 in 0.2.4.
+
+`[limitation]` With the output on, a setpoint the controller does not confirm
+throws and leaves the output on, at a setpoint that may be the new or the old
+one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 """
 function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
@@ -919,9 +924,10 @@ Command the optical power at the laser output, in mW -- the plane where
    ([`send_setpoint_ramped`](@ref), ramping from the code of the previous
    request, `0` if none); with it off, leave it for `light_on`
    ([`send_setpoint`](@ref)).
-6. With the output on, [`check_lock`](@ref) after sending. If the loop looks
-   locked, zero and disable the output (a failure of that is logged and does
-   not mask the lock error), then throw; the request is not recorded.
+6. With the output on, [`check_lock`](@ref) after sending. A send or confirm
+   failure, or a suspected lock, zeroes and disables the output, logs, and
+   rethrows ([`disable_after_failure`](@ref)); `properties.is_on` is `true`
+   afterwards only if the disable failed. The request is not recorded.
 7. Record `pd.output_power_requested` and the DECODED `pd.photocurrent_requested`.
 
 `[limitation]` the lock check's threshold and wait are unvalidated on hardware
@@ -951,15 +957,11 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
     if on
         # What the controller holds is the previous request (read BEFORE `pd` is updated).
         from = isnan(pd.photocurrent_requested) ? 0 : Int(photocurrent_code(light, pd.photocurrent_requested))
-        send_setpoint_ramped(light, code, from)
         try
+            send_setpoint_ramped(light, code, from)
             check_lock(light, code)
         catch
-            try
-                zero_then_disable(light)
-            catch offerr
-                @error "TCubeLaser $serialNo: loop lock suspected and the disable failed; the output may still be ON" exception = offerr
-            end
+            disable_after_failure(light, "setoutputpower! (setpoint or lock check)")
             rethrow()
         end
     end
@@ -990,6 +992,37 @@ function zero_then_disable(light::TCubeLaser)
     check_err(LD_DisableOutput(serialNo), "LD_DisableOutput", serialNo)
     light.properties.is_on = false
     return nothing
+end
+
+"""
+    disable_after_failure(light::TCubeLaser, what)
+
+Cleanup after `what` failed while the output may be lit: zero the setpoint, then
+disable the output, never throwing. `properties.is_on` becomes `false` if the
+disable succeeded and `true` if it failed, since the diode may still be lit. One
+`@error` names `what` and every cleanup failure. The caller rethrows its own
+error. The zero comes first for the reason [`zero_then_disable`](@ref) gives:
+the next enable must start dark, not on a stale setpoint.
+"""
+function disable_after_failure(light::TCubeLaser, what::AbstractString)
+    serialNo = light.serialNo
+    zeroed = zero_setpoint(light)
+    disabled, offerr = false, nothing
+    try
+        status = LD_DisableOutput(serialNo)
+        disabled = status == 0
+        disabled || (offerr = "status $status")
+    catch err
+        offerr = err
+    end
+    light.properties.is_on = !disabled
+    zeronote = isnothing(zeroed) ? "" : "; zeroing the setpoint failed ($zeroed)"
+    if disabled
+        @error "TCubeLaser $serialNo: $what failed; output disabled$zeronote"
+    else
+        @error "TCubeLaser $serialNo: $what failed and the disable failed ($offerr)$zeronote; the output may still be ON at the controller's stored setpoint"
+    end
+    return disabled
 end
 
 """
