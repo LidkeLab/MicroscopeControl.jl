@@ -61,7 +61,9 @@ exercised against a fake controller that models it
   merged commit or its pull request's head; otherwise it fails and says why.
 - `test/test_groups.toml` (the whole suite as group Core), `test/lab_summary.jl`
   and an ignored `dev/output/`, so admiral's `record_tests.jl` can record this
-  package.
+  package. `DAQmx`'s `[sources]` entry is committed in the form `Pkg.test()`
+  rewrites it to (`rev = "main"`), so a test run leaves the tree clean;
+  `[sources]` is read only in the root project, so no dependent sees it.
 
 ### Fixed (documentation)
 - **Depending on this package needs more than pinning the tag, and the docs did
