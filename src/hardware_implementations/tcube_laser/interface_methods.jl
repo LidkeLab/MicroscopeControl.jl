@@ -256,8 +256,9 @@ Open loop only, run by `initialize` after the controller's limit is recorded: if
 keeps it. Closed loop programs its clamp in `enter_mode!` and this does nothing.
 
 If `max_current` is below the potentiometer's floor ([`DIGPOT_MIN_mA`](@ref),
-about 17.25 mA) no position can clamp to it: it warns, leaves the potentiometer
-alone, and `max_current` is enforced in software only, as in 0.2.4. The search
+about 17.25 mA) no position can clamp to it: it warns and leaves the
+potentiometer alone, and `light_on` then refuses while the current limit stored in
+the controller is above `max_current` (see [`light_on`](@ref)). The search
 runs with `raise = false`, so no position above the starting one is ever set.
 
 If the search fails -- adjust mode refused, a position that does not read back,
@@ -667,9 +668,9 @@ limit is above `max_current`, the potentiometer is then lowered until it is not
 that results; if it is at or below `max_current` the potentiometer is never
 touched, so a limit a rig set lower by hand stays. If `max_current` is below the
 potentiometer's floor ([`DIGPOT_MIN_mA`](@ref)) it warns and leaves the
-potentiometer alone; the ceiling is then enforced in software only. If lowering
-fails, it warns the same way and goes on, so open loop never fails here where
-0.2.4 did not. `[limitation]` the open-loop
+potentiometer alone. If lowering fails, it warns the same way and goes on, so
+`initialize` never fails here where 0.2.4 did not; `light_on` then refuses while
+the current limit stored in the controller is above `max_current`. `[limitation]` the open-loop
 potentiometer lowering is unvalidated on hardware beyond the 642 nm rig's
 closed-loop sequence; not yet run on hardware in open loop.
 
@@ -872,7 +873,6 @@ function LightSourceInterface.light_on(light::TCubeLaser)
         disable_after_failure(light, "enable or setpoint after enable")
         rethrow()
     end
-    light.properties.is_on = true
     println("$(light.laser_color)" * "_laser is on")
     return nothing
 end

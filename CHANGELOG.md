@@ -12,9 +12,12 @@ the next version with `-DEV`).
 
 A non-breaking release. It brings the TCube laser's closed-loop (power) mode and
 the `DiodeLaser` interface (#66), the PI N-472 and PI stage fixes (#67, #64), and
-the Kinesis boolean binding split (#70). Every 0.2.4 line keeps working and means
-what it meant. An open-loop TCube rig does see new controller calls, listed
-under Changed, and none of them has yet run on hardware.
+the Kinesis boolean binding split (#70). Every 0.2.4 line keeps its meaning,
+with one deliberate exception. An open-loop rig whose stored current limit is
+above `max_current` is now refused at `light_on`: that includes a `max_current`
+below about 17.25 mA, and a limit that could not be lowered (see below). An
+open-loop TCube rig also sees new controller calls, listed under Changed, and
+none of them has yet run on hardware.
 
 **UPGRADE WARNING, as for 0.2.4.** Before repinning a rig to 0.2.5:
 - check every `setpower`/`setcurrent!` value that precedes a `light_on`;
