@@ -826,8 +826,9 @@ other starting point a jump.
 A `ConstantPhotocurrent` laser refuses until `initialize` has programmed and
 verified its clamp (`pd.max_current_clamp` is not `NaN`), and re-checks the
 controller before it emits: a fresh status read must report closed loop, and a
-fresh read of the controller's limit must not exceed the programmed clamp by
-more than 1 mA (a controller power cycle can restore the pot).
+fresh read of the controller's limit must not exceed `max_current`, or the
+programmed clamp by more than 0.5 mA, about half a potentiometer step (a
+controller power cycle can restore the pot).
 
 `[limitation]` those two checks add two request/read round trips (about 2 x
 `REQUEST_WAIT_S`) to every closed-loop `light_on` and `setoutputpower!`;
@@ -880,8 +881,10 @@ Set the diode drive current, in **mA**.
 Validates through [`check_current`](@ref), so an out-of-range request throws
 before anything reaches the controller, and encodes through
 [`setpoint_code`](@ref), whose guarantee is that the *decoded* current never
-exceeds the requested one. With the output **on**, the setpoint is sent and
-confirmed from the controller's read-back. With the output **off**, it is
+exceeds the requested one. With the output **on** -- the driver recorded it on, or the polled status word
+reports it -- the setpoint is sent and confirmed from the controller's
+read-back. A stale status bit can no longer drop a request silently: the send is
+attempted and confirmed, or it throws. With the output **off**, it is
 recorded and `light_on` applies it right after enabling -- the controller would
 ignore it now ([`send_setpoint`](@ref)).
 
@@ -907,7 +910,7 @@ one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
     code = setpoint_code(light, current)
-    on = output_enabled(light.serialNo)
+    on = light.properties.is_on || output_enabled(light.serialNo)
     on && send_setpoint(light, code)
     light.drive_current = current
     light.properties.power = legacy_power(light, current) # deprecated; see legacy_power
@@ -923,7 +926,8 @@ Command the optical power at the laser output, in mW -- the plane where
 
 1. Refuse unless `initialize` programmed the clamp, and re-check the controller:
    a fresh status read must report closed loop and a fresh limit read must not
-   exceed the programmed clamp by more than 1 mA. `[limitation]` this adds two
+   exceed `max_current`, or the programmed clamp by more than 0.5 mA, about half
+   a potentiometer step. `[limitation]` this adds two
    request/read round trips (about 2 x `REQUEST_WAIT_S`) to every call;
    unvalidated on hardware.
 2. [`check_power`](@ref) against `properties.min_power..max_power`.
@@ -934,7 +938,9 @@ Command the optical power at the laser output, in mW -- the plane where
 4. Convert: photocurrent `= power_mW / 1000 / wa_calibration` A, encoded by
    [`photocurrent_code`](@ref), rounding DOWN; above full scale it throws
    naming the DIP switch.
-5. With the output on, send and confirm the setpoint
+5. With the output on (the driver recorded it on, or the polled status word
+   reports it; a stale status bit cannot drop the send silently, it is attempted
+   and confirmed or it throws), send and confirm the setpoint
    ([`send_setpoint_ramped`](@ref), ramping from the code of the previous
    request, `0` if none); with it off, leave it for `light_on`
    ([`send_setpoint`](@ref)).
@@ -956,7 +962,7 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
     check_power(light, power_mW)
     pd, serialNo = light.pd, light.serialNo
     bits = UInt32(LD_GetStatusBits(serialNo))
-    on = bits & STATUS_BITS.output_enabled != 0
+    on = light.properties.is_on || bits & STATUS_BITS.output_enabled != 0
     bits & STATUS_BITS.closed_loop != 0 || error(
         "TCubeLaser $serialNo: setoutputpower! refused: the controller is not in closed loop (status 0x$(string(bits; base=16))); " *
         "was the mode changed on the front panel? Call initialize again.")

@@ -383,7 +383,8 @@ lab_summary("Core") do
             # With the output on, a new current is sent and confirmed at once.
             empty!(FakeKinesis.calls)
             setcurrent!(laser, 30.0)
-            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            # The driver recorded the output on, so it does not read the status word first.
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
             @test FakeKinesis.setpoint_held[] == TCube.setpoint_code(laser, 30.0)
 
             # A setpoint the controller does not confirm is an error, and is
@@ -938,6 +939,22 @@ lab_summary("Core") do
             initialize(laser)
             @test all(<=(204), FK.digpot_sets) && FK.digpot[] == 204
             @test isempty(FK.limit_raw_queue)
+            FK.reset!()
+        end
+
+        @testset "a stale status bit cannot drop a setcurrent! (fake SDK)" begin
+            FK = FakeKinesis
+            FK.reset!()
+            laser = cc()
+            initialize(laser)
+            setcurrent!(laser, 10.0)
+            light_on(laser)
+            FK.setbits!(FK.ENABLED; on=false)   # the polled status word no longer reports the output on
+            n = length(FK.setpoints)
+            r = try; setcurrent!(laser, 20.0); nothing; catch e; e; end
+            @test length(FK.setpoints) == n + 1   # the send was attempted, not dropped
+            @test FK.setpoints[end] == TCube.setpoint_code(laser, 20.0)
+            @test r === nothing || r isa ErrorException   # confirmed or thrown, never silent
             FK.reset!()
         end
 
