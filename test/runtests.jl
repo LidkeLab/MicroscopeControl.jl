@@ -630,6 +630,8 @@ lab_summary("Core") do
             @test_logs export_state(laser, nothing)
             @test TCube.EXPORT_STATE_2ARG_WARNED[]
         end
+
+        include("tcube_output_order.jl")
     end
 
     @testset "NIdaq digital output" begin
