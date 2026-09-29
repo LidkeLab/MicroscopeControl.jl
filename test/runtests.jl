@@ -631,17 +631,20 @@ lab_summary("Core") do
         end
 
         @testset "power mode re-checks the controller before emitting (fake SDK)" begin
-            # A 100 mA ceiling, so a pot restored to 204 (160.74 mA) is far above the
-            # clamp: the check allows 1 mA of slack, which is more than one pot step
-            # (0.83 mA), so a one-step drift at a 160 mA ceiling is not caught.
-            ready() = (FakeKinesis.reset!(); FakeKinesis.limit_follows_pot[] = true;
-                       l = cp(; max_current=100.0); initialize(l); empty!(FakeKinesis.calls); l)
+            ready(mA=100.0) = (FakeKinesis.reset!(); FakeKinesis.limit_follows_pot[] = true;
+                       l = cp(; max_current=mA); initialize(l); empty!(FakeKinesis.calls); l)
             # (a) A power cycle restored the pot: the limit is back above the clamp.
             laser = ready()
             FakeKinesis.digpot[] = 204
             @test_throws "clamp" light_on(laser)
             @test "LD_EnableOutput" ∉ FakeKinesis.calls
             @test_throws "clamp" setoutputpower!(laser, 10.0)
+            # ... and one pot step at a 160 mA ceiling: the clamp is 159.91 mA at
+            # position 203, and 204 reads 160.74 mA, above max_current.
+            laser = ready(160.0)
+            FakeKinesis.digpot[] = 204
+            @test_throws "clamp" light_on(laser)
+            @test "LD_EnableOutput" ∉ FakeKinesis.calls
             # (b) The closed-loop bit is gone.
             laser = ready()
             FakeKinesis.setbits!(FakeKinesis.CLOSED; on=false)
@@ -655,6 +658,11 @@ lab_summary("Core") do
             @test !isnan(laser.pd.max_current_clamp)
             FakeKinesis.setbits!(FakeKinesis.KEY; on=false)
             @test_throws "key switch" initialize(laser)
+            @test isnan(laser.pd.max_current_clamp)
+            # ... and one that fails after programming the pot, entering closed loop.
+            laser = ready()
+            FakeKinesis.fail!("LD_SetClosedLoopMode")
+            @test_throws "LD_SetClosedLoopMode" initialize(laser)
             @test isnan(laser.pd.max_current_clamp)
         end
 
@@ -1146,13 +1154,15 @@ lab_summary("Core") do
     @testset "Simulated Diode Laser" begin
         SimDL = MicroscopeControl.HardwareImplementations.SimulatedDiodeLaser
         sim_cc(; kw...) = SimDiodeLaser(; mode=ConstantCurrent(), kw...)
-        sim_cp(; kw...) = SimDiodeLaser(; mode=ConstantPhotocurrent(), wa_calibration=224.2, tia_range=1e-3,
+        sim_cp(; kw...) = SimDiodeLaser(; mode=ConstantPhotocurrent(), max_current=160.0, wa_calibration=224.2, tia_range=1e-3,
                                         tec_stabilised=missing,
                                         properties=LightSourceProperties("mW", 0.0, false, 1.0, 70.0), kw...)
 
         @test sim_cc() isa DiodeLaser
-        @test_throws ArgumentError SimDiodeLaser()
+        @test SimDiodeLaser() isa SimDiodeLaser{ConstantCurrent}   # the default, as on TCubeLaser
         @test_throws ArgumentError SimDiodeLaser(; mode=ConstantPhotocurrent())
+        @test_throws "max_current" SimDiodeLaser(; mode=ConstantPhotocurrent(), wa_calibration=224.2, tia_range=1e-3,
+            tec_stabilised=missing, properties=LightSourceProperties("mW", 0.0, false, 1.0, 70.0))
 
         @testset "1. the loop converges on the requested power" begin
             sim = sim_cp()

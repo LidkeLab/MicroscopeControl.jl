@@ -126,7 +126,7 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
     @testset "Diode laser panels issue nothing on open" begin
         cp_props() = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)
         sims = (SimDiodeLaser(; mode=ConstantCurrent(), min_current=70.0, max_current=150.0),
-                SimDiodeLaser(; mode=ConstantPhotocurrent(), wa_calibration=224.2, tia_range=1e-3,
+                SimDiodeLaser(; mode=ConstantPhotocurrent(), max_current=160.0, wa_calibration=224.2, tia_range=1e-3,
                               tec_stabilised=missing, properties=cp_props()))
         for sim in sims
             initialize(sim)
