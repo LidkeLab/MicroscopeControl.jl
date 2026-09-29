@@ -259,6 +259,14 @@ If `max_current` is below the potentiometer's floor ([`DIGPOT_MIN_mA`](@ref),
 about 17.25 mA) no position can clamp to it: it warns, leaves the potentiometer
 alone, and `max_current` is enforced in software only, as in 0.2.4. The search
 runs with `raise = false`, so no position above the starting one is ever set.
+
+If the search fails -- adjust mode refused, a position that does not read back,
+or even the lowest position reading above `max_current` -- it warns the same
+way and records the limit the controller then reports, and `initialize` goes
+on: the search has only ever lowered the potentiometer, so the controller is no
+less safe than before it ran, and no configuration that initialized in 0.2.4
+fails here. If that re-read fails too, the limit read before the search is
+kept, which is an upper bound for the same reason.
 """
 function lower_open_loop_clamp!(light::TCubeLaser{ConstantCurrent})
     light.controller_max_current > light.max_current || return nothing
@@ -266,7 +274,18 @@ function lower_open_loop_clamp!(light::TCubeLaser{ConstantCurrent})
         @warn "TCubeLaser $(light.serialNo): max_current = $(light.max_current) mA is below the lowest limit the controller's potentiometer can be set to (about $(round(DIGPOT_MIN_mA; digits=2)) mA). The potentiometer is left alone: the controller's own limit stays $(light.controller_max_current) mA and max_current is enforced in software only (setcurrent! refuses above it), as in 0.2.4. Anything outside this driver can still drive the diode to the controller's limit."
         return nothing
     end
-    light.controller_max_current = program_clamp!(light; raise = false)
+    try
+        light.controller_max_current = program_clamp!(light; raise = false)
+    catch err
+        err isa InterruptException && rethrow()
+        limit = try
+            read_limit_mA(light)
+        catch
+            light.controller_max_current   # the pot was only lowered: the earlier reading is an upper bound
+        end
+        light.controller_max_current = limit
+        @warn "TCubeLaser $(light.serialNo): lowering the potentiometer to max_current = $(light.max_current) mA failed; the controller's limit now reads $(limit) mA and max_current is enforced in software only (setcurrent! refuses above it), as in 0.2.4. Anything outside this driver can still drive the diode to the controller's limit." exception = err
+    end
     return nothing
 end
 lower_open_loop_clamp!(light::TCubeLaser{ConstantPhotocurrent}) = nothing
@@ -648,7 +667,9 @@ limit is above `max_current`, the potentiometer is then lowered until it is not
 that results; if it is at or below `max_current` the potentiometer is never
 touched, so a limit a rig set lower by hand stays. If `max_current` is below the
 potentiometer's floor ([`DIGPOT_MIN_mA`](@ref)) it warns and leaves the
-potentiometer alone; the ceiling is then enforced in software only. `[limitation]` the open-loop
+potentiometer alone; the ceiling is then enforced in software only. If lowering
+fails, it warns the same way and goes on, so open loop never fails here where
+0.2.4 did not. `[limitation]` the open-loop
 potentiometer lowering is unvalidated on hardware beyond the 642 nm rig's
 closed-loop sequence; not yet run on hardware in open loop.
 
@@ -881,8 +902,8 @@ Set the diode drive current, in **mA**.
 Validates through [`check_current`](@ref), so an out-of-range request throws
 before anything reaches the controller, and encodes through
 [`setpoint_code`](@ref), whose guarantee is that the *decoded* current never
-exceeds the requested one. With the output **on** -- the driver recorded it on, or the polled status word
-reports it -- the setpoint is sent and confirmed from the controller's
+exceeds the requested one. With the output **on** -- the driver recorded it on, or a fresh status read
+reports it (not the polled word, which can lag a `light_off` by one poll) -- the setpoint is sent and confirmed from the controller's
 read-back. A stale status bit can no longer drop a request silently: the send is
 attempted and confirmed, or it throws. With the output **off**, it is
 recorded and `light_on` applies it right after enabling -- the controller would
@@ -910,7 +931,9 @@ one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
     code = setpoint_code(light, current)
-    on = light.properties.is_on || output_enabled(light.serialNo)
+    # Fresh when the driver recorded the output off: the polled word can still
+    # say on just after a light_off, and a send then would wait out its confirm.
+    on = light.properties.is_on || read_status_fresh(light.serialNo) & STATUS_BITS.output_enabled != 0
     on && send_setpoint(light, code)
     light.drive_current = current
     light.properties.power = legacy_power(light, current) # deprecated; see legacy_power

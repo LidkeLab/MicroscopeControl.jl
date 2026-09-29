@@ -210,14 +210,19 @@ setlevel!(laser, 0.4)
   on hardware; needs the 642 nm rig check.
 - **Open loop: a `max_current` below the potentiometer's floor** (about
   17.25 mA) warns that the ceiling is enforced in software only and leaves the
-  potentiometer alone, as in 0.2.4. Not yet run on hardware; needs the 642 nm
-  rig check.
+  potentiometer alone, as in 0.2.4. If lowering the potentiometer fails (adjust
+  mode refused, or even the lowest position above `max_current`), `initialize`
+  warns the same way, records the limit the controller then reports, and goes
+  on: no configuration that initialized in 0.2.4 fails here. Not yet run on
+  hardware; needs the 642 nm rig check.
 - **`light_on` and `setcurrent!` wait for the controller's setpoint read-back**
   (up to `SETPOINT_CONFIRM_TIMEOUT_S`, 1 s) and throw if it does not confirm;
   `light_on` then zeroes and disables the output. Not yet run on hardware; needs
   the 642 nm rig check.
 - **`setcurrent!` with the output off sends nothing** (0.2.4 sent a setpoint the
-  controller ignored); `light_on` applies it after the enable. Not yet run on
+  controller ignored); `light_on` applies it after the enable. When the driver
+  recorded the output off, "off" is a fresh status read (one request/read round
+  trip), since the polled word can lag a `light_off`. Not yet run on
   hardware; needs the 642 nm rig check.
 - **`gui(laser)` on an open-loop `TCubeLaser` opens the diode-laser current
   panel** (mA). Not yet run on hardware; needs the 642 nm rig check.

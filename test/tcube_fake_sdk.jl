@@ -94,6 +94,9 @@ const diode_limit_raw = Ref{Int}(23830)
 "Raw limit values the next `LD_GetLaserDiodeMaxCurrentLimit` reads return, first in first out, before `diode_limit_raw` applies again."
 const limit_raw_queue = Int[]
 
+"A stale polled status word: while set, `LD_GetStatusBits` returns it instead of `bits`, until an `LD_RequestStatusBits` refreshes it (sets it back to `nothing`)."
+const stale_bits = Ref{Union{Nothing,UInt32}}(nothing)
+
 "Raw diode-current reading; `nothing` returns `diode_limit_raw`, as before 0.2.5."
 const current_raw = Ref{Union{Nothing,Int}}(nothing)
 
@@ -169,6 +172,7 @@ function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     empty!(enable_log)
     diode_limit_raw[] = limit_raw
     empty!(limit_raw_queue)
+    stale_bits[] = nothing
     current_raw[] = nothing
     photocurrent_raw[] = 0
     bits[] = KEY | INTERLOCK | PSU_OK | TIA_1mA
@@ -267,10 +271,13 @@ end
         Main.FakeKinesis.record!("LD_GetPhotoCurrentReading")
         return Main.FakeKinesis.photocurrent_raw[]
     end
-    LD_RequestStatusBits(serialNo) = Main.FakeKinesis.record!("LD_RequestStatusBits")
+    function LD_RequestStatusBits(serialNo)
+        Main.FakeKinesis.stale_bits[] = nothing
+        return Main.FakeKinesis.record!("LD_RequestStatusBits")
+    end
     function LD_GetStatusBits(serialNo)
         Main.FakeKinesis.record!("LD_GetStatusBits")
-        return Main.FakeKinesis.bits[]
+        return something(Main.FakeKinesis.stale_bits[], Main.FakeKinesis.bits[])
     end
     function LD_EnableMaxCurrentAdjust(serialNo, enableAdjust, enableDiode)
         push!(Main.FakeKinesis.adjust_calls, (enableAdjust, enableDiode))

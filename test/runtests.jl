@@ -371,7 +371,7 @@ lab_summary("Core") do
             empty!(FakeKinesis.calls)
             setcurrent!(laser, 40.0)
             @test isempty(FakeKinesis.setpoints)
-            @test FakeKinesis.calls == ["LD_GetStatusBits"]
+            @test FakeKinesis.calls == ["LD_RequestStatusBits", "LD_GetStatusBits"] # a fresh read: the output was recorded off
             @test laser.drive_current == 40.0 # the accepted current, in mA
             # light_on enables, THEN sends it, and confirms it.
             empty!(FakeKinesis.calls)
@@ -939,6 +939,24 @@ lab_summary("Core") do
             initialize(laser)
             @test all(<=(204), FK.digpot_sets) && FK.digpot[] == 204
             @test isempty(FK.limit_raw_queue)
+            # Even the lowest position reads above the ceiling (220 mA at every position): the
+            # search walks the pot down and fails; initialize warns and goes on, the pot lowered.
+            FK.reset!()
+            FK.diode_limit_raw[] = 32767
+            laser = cc(; max_current=100.0)
+            @test_logs (:warn, r"lowering the potentiometer.*software only") match_mode = :any initialize(laser)
+            @test FK.digpot[] == TCube.DIGPOT_MIN_POS && all(<=(204), FK.digpot_sets)
+            @test laser.controller_max_current ≈ 220.0 rtol = 1e-3
+            @test TCube.effective_max_current(laser) == 100.0
+            @test !laser.properties.is_on && !FK.output_on[]
+            @test_throws ArgumentError setcurrent!(laser, 150.0)   # the ceiling holds in software
+            # Adjust mode refused: nothing moves, initialize warns and goes on.
+            FK.reset!()
+            FK.fail!("LD_EnableMaxCurrentAdjust")
+            laser = cc(; max_current=100.0)
+            @test_logs (:warn, r"lowering the potentiometer.*software only") match_mode = :any initialize(laser)
+            @test FK.digpot[] == 204 && isempty(FK.digpot_sets)
+            @test TCube.effective_max_current(laser) == 100.0
             FK.reset!()
         end
 
@@ -949,12 +967,24 @@ lab_summary("Core") do
             initialize(laser)
             setcurrent!(laser, 10.0)
             light_on(laser)
-            FK.setbits!(FK.ENABLED; on=false)   # the polled status word no longer reports the output on
+            # The output is on, but the polled status word does not say so yet.
+            FK.stale_bits[] = FK.bits[] & ~FK.ENABLED
             n = length(FK.setpoints)
-            r = try; setcurrent!(laser, 20.0); nothing; catch e; e; end
-            @test length(FK.setpoints) == n + 1   # the send was attempted, not dropped
-            @test FK.setpoints[end] == TCube.setpoint_code(laser, 20.0)
-            @test r === nothing || r isa ErrorException   # confirmed or thrown, never silent
+            setcurrent!(laser, 20.0)                  # sent and confirmed, not dropped
+            @test length(FK.setpoints) == n + 1
+            @test FK.setpoints[end] == TCube.setpoint_code(laser, 20.0) == FK.setpoint_held[]
+            @test laser.drive_current == 20.0
+            # The reverse, just after light_off: the output is off, but the polled word still
+            # says on. A fresh read decides, so nothing is sent and nothing waits or throws.
+            light_off(laser)
+            FK.stale_bits[] = FK.bits[] | FK.ENABLED
+            n, k = length(FK.setpoints), length(FK.calls)
+            setcurrent!(laser, 30.0)
+            @test length(FK.setpoints) == n
+            @test "LD_RequestStatusBits" in FK.calls[k+1:end]
+            @test laser.drive_current == 30.0
+            light_on(laser)                           # applied after the enable
+            @test FK.setpoint_held[] == TCube.setpoint_code(laser, 30.0)
             FK.reset!()
         end
 
