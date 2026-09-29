@@ -195,12 +195,30 @@ setlevel!(laser, 0.4)
   range, measured before the fibre, with its closed-loop verification table).
 
 ### Changed
+- **`TCubeLaser.initialize` starts background polling** (`LD_StartPolling`,
+  every `POLL_INTERVAL_MS`); `shutdown` and a failed `initialize` stop it
+  (`LD_StopPolling`). Not yet run on hardware; needs the 642 nm rig check.
 - **`TCubeLaser.initialize` now zeroes and disables the output** in both modes,
   before the mode command, so it never sends a mode command with the diode lit
-  and `properties.is_on` is false afterwards. Not yet run on hardware.
-- **Open loop: `initialize` lowers the controller's max-current potentiometer
-  when its limit is above `max_current`**, and never raises it. Not yet run on
-  hardware in open loop.
+  and `properties.is_on` is false afterwards. Not yet run on hardware; needs the
+  642 nm rig check.
+- **Open loop: `initialize` may lower the controller's max-current
+  potentiometer** when its limit is above `max_current`, and never raises it, by
+  construction (the search's upper bound is the starting position). Not yet run
+  on hardware; needs the 642 nm rig check.
+- **Open loop: a `max_current` below the potentiometer's floor** (about
+  17.25 mA) warns that the ceiling is enforced in software only and leaves the
+  potentiometer alone, as in 0.2.4. Not yet run on hardware; needs the 642 nm
+  rig check.
+- **`light_on` and `setcurrent!` wait for the controller's setpoint read-back**
+  (up to `SETPOINT_CONFIRM_TIMEOUT_S`, 1 s) and throw if it does not confirm;
+  `light_on` then zeroes and disables the output. Not yet run on hardware; needs
+  the 642 nm rig check.
+- **`setcurrent!` with the output off sends nothing** (0.2.4 sent a setpoint the
+  controller ignored); `light_on` applies it after the enable. Not yet run on
+  hardware; needs the 642 nm rig check.
+- **`gui(laser)` on an open-loop `TCubeLaser` opens the diode-laser current
+  panel** (mA). Not yet run on hardware; needs the 642 nm rig check.
 - **Power mode re-checks the controller before emitting**: closed-loop
   `light_on` and `setoutputpower!` read the status word and the current limit
   afresh and refuse if the loop bit is gone or the limit is above `max_current`

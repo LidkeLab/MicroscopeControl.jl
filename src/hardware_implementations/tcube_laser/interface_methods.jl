@@ -254,10 +254,19 @@ Open loop only, run by `initialize` after the controller's limit is recorded: if
 `light.controller_max_current`. If the controller's limit is at or below
 `max_current` the potentiometer is not touched: a rig that lowered it by hand
 keeps it. Closed loop programs its clamp in `enter_mode!` and this does nothing.
+
+If `max_current` is below the potentiometer's floor ([`DIGPOT_MIN_mA`](@ref),
+about 17.25 mA) no position can clamp to it: it warns, leaves the potentiometer
+alone, and `max_current` is enforced in software only, as in 0.2.4. The search
+runs with `raise = false`, so no position above the starting one is ever set.
 """
 function lower_open_loop_clamp!(light::TCubeLaser{ConstantCurrent})
     light.controller_max_current > light.max_current || return nothing
-    light.controller_max_current = program_clamp!(light)
+    if light.max_current < DIGPOT_MIN_mA
+        @warn "TCubeLaser $(light.serialNo): max_current = $(light.max_current) mA is below the lowest limit the controller's potentiometer can be set to (about $(round(DIGPOT_MIN_mA; digits=2)) mA). The potentiometer is left alone: the controller's own limit stays $(light.controller_max_current) mA and max_current is enforced in software only (setcurrent! refuses above it), as in 0.2.4. Anything outside this driver can still drive the diode to the controller's limit."
+        return nothing
+    end
+    light.controller_max_current = program_clamp!(light; raise = false)
     return nothing
 end
 lower_open_loop_clamp!(light::TCubeLaser{ConstantPhotocurrent}) = nothing
@@ -298,7 +307,8 @@ const DIGPOT_STEP_ESTIMATE_mA = 220.0 / 255
 
 The lowest clamp the header's scale allows, `20 * 220 / 255` = 17.25 mA. A
 diode whose ceiling is below it cannot be clamped, so it cannot be built in
-power mode. (In adjust mode the rig's controller reported 16.74 mA at position
+power mode; in open loop `initialize` only warns
+([`lower_open_loop_clamp!`](@ref)). (In adjust mode the rig's controller reported 16.74 mA at position
 20, so this is a conservative floor.)
 """
 const DIGPOT_MIN_mA = DIGPOT_MIN_POS * 220.0 / 255
@@ -356,7 +366,7 @@ function set_digpot!(light::TCubeLaser, position::Int)
 end
 
 """
-    program_clamp!(light::TCubeLaser)
+    program_clamp!(light::TCubeLaser; raise::Bool=true)
 
 Leave the controller's diode current limit at the highest potentiometer position
 whose limit, **as the controller reports it**, does not exceed
@@ -372,16 +382,18 @@ it cannot settle. Output must be off (it is, in `initialize`).
 In `ConstantPhotocurrent` mode `initialize` calls it to program the clamp. In
 `ConstantCurrent` mode `initialize` calls it through
 [`lower_open_loop_clamp!`](@ref) only when the controller's limit is above
-`max_current`: the search then starts at a position whose limit is over the
-ceiling, so every move stays below that position and it can only LOWER the
-clamp. It never raises the potentiometer.
+`max_current`, and with `raise = false`: the upper bound of the search is the
+starting position, so no position above it is ever set, whatever the reads
+return. It never raises the potentiometer in that mode. The default,
+`raise = true`, is closed loop's search, which may move up toward the ceiling.
 
 `[limitation]` lowering the open-loop potentiometer is not validated on hardware
 beyond the 642 nm rig's closed-loop sequence; not yet run on hardware in open loop.
 """
-function program_clamp!(light::TCubeLaser)
+function program_clamp!(light::TCubeLaser; raise::Bool=true)
     ceiling = light.max_current
     pos = read_digpot(light.serialNo)
+    upper = raise ? DIGPOT_MAX_POS : pos
     limit = read_limit_mA(light)
     below = nothing     # (position, limit) of the best setting found at or under the ceiling
     above = nothing     # lowest position found over the ceiling
@@ -401,7 +413,7 @@ function program_clamp!(light::TCubeLaser)
             below = (pos, limit)
             # Up only by whole estimated steps; none fits -> this is it.
             steps = floor(Int, (ceiling - limit) / DIGPOT_STEP_ESTIMATE_mA)
-            next = min(pos + steps, DIGPOT_MAX_POS)
+            next = min(pos + steps, upper)
             above !== nothing && (next = min(next, above - 1))
             next <= pos && return settle()
         else
@@ -634,7 +646,9 @@ write depends on only refreshes through it (see
 limit is above `max_current`, the potentiometer is then lowered until it is not
 ([`lower_open_loop_clamp!`](@ref)) and `controller_max_current` is the limit
 that results; if it is at or below `max_current` the potentiometer is never
-touched, so a limit a rig set lower by hand stays. `[limitation]` the open-loop
+touched, so a limit a rig set lower by hand stays. If `max_current` is below the
+potentiometer's floor ([`DIGPOT_MIN_mA`](@ref)) it warns and leaves the
+potentiometer alone; the ceiling is then enforced in software only. `[limitation]` the open-loop
 potentiometer lowering is unvalidated on hardware beyond the 642 nm rig's
 closed-loop sequence; not yet run on hardware in open loop.
 

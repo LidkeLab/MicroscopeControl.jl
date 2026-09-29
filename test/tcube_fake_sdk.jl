@@ -91,6 +91,9 @@ driver's default scale.
 """
 const diode_limit_raw = Ref{Int}(23830)
 
+"Raw limit values the next `LD_GetLaserDiodeMaxCurrentLimit` reads return, first in first out, before `diode_limit_raw` applies again."
+const limit_raw_queue = Int[]
+
 "Raw diode-current reading; `nothing` returns `diode_limit_raw`, as before 0.2.5."
 const current_raw = Ref{Union{Nothing,Int}}(nothing)
 
@@ -165,6 +168,7 @@ function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     empty!(throws)
     empty!(enable_log)
     diode_limit_raw[] = limit_raw
+    empty!(limit_raw_queue)
     current_raw[] = nothing
     photocurrent_raw[] = 0
     bits[] = KEY | INTERLOCK | PSU_OK | TIA_1mA
@@ -251,6 +255,7 @@ end
     end
     function LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         Main.FakeKinesis.record!("LD_GetLaserDiodeMaxCurrentLimit")
+        isempty(Main.FakeKinesis.limit_raw_queue) || return popfirst!(Main.FakeKinesis.limit_raw_queue)
         Main.FakeKinesis.limit_follows_pot[] || return Main.FakeKinesis.diode_limit_raw[]
         return floor(Int, Main.FakeKinesis.limit_mA_for(Main.FakeKinesis.digpot[]) / 220 * 32767)
     end

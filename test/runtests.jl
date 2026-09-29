@@ -922,6 +922,25 @@ lab_summary("Core") do
             FK.reset!()
         end
 
+        @testset "open loop never newly fails and never raises the pot (fake SDK)" begin
+            FK = FakeKinesis
+            # A ceiling below the potentiometer's floor: warns, leaves the pot alone.
+            FK.reset!()
+            laser = cc(; max_current=15.0)
+            @test_logs (:warn, r"software only") match_mode = :any initialize(laser)
+            @test !("LD_EnableMaxCurrentAdjust" in FK.calls) && !("LD_SetMaxCurrentDigPot" in FK.calls)
+            @test laser.controller_max_current > 15.0
+            # The search's first read differs from initialize's: it reads a limit under the ceiling
+            # and would raise the pot to 215 if raising were allowed; it may not.
+            FK.reset!()
+            laser = cc(; max_current=100.0)
+            append!(FK.limit_raw_queue, [23830, floor(Int, 90 / 220 * 32767)])
+            initialize(laser)
+            @test all(<=(204), FK.digpot_sets) && FK.digpot[] == 204
+            @test isempty(FK.limit_raw_queue)
+            FK.reset!()
+        end
+
         @testset "readbacks (fake SDK)" begin
             FakeKinesis.reset!()
             laser = cc(; threshold_current=65.0)
