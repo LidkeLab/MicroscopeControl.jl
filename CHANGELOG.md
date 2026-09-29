@@ -11,6 +11,16 @@ the next version with `-DEV`).
 ## [Unreleased]
 
 ### Fixed
+- **TCube laser: Kinesis boolean arguments are passed as four bytes.** Every
+  Kinesis boolean was bound as a one-byte `Bool`. That is right for return
+  values, but the headers declare arguments as a four-byte type, so the
+  controller could read three bytes of whatever the register held. Arguments
+  (`LD_EnableMaxCurrentAdjust`, `LD_EnableTIAGainAdjust`,
+  `LD_EnableLastMsgTimer`) are now a zero-extended `Cuint` (`KBOOL_ARG`), and
+  returns stay one byte (`KBOOL_RET`); the vendor facts are in
+  `manuals/Thorlabs/TLD001/BINDING.md` (see CLAUDE.md, "Instrument
+  documentation archive"). No driver method calls those three functions yet,
+  so no current behaviour changes; not yet run on hardware.
 - **PI stage: `initialize` no longer finishes on an unreferenced stage.** It
   ignored the return of the reference move (`PI_FRF`), so when the controller
   rejected it (GCS error 5, e.g. one axis's servo off) the later move to the
