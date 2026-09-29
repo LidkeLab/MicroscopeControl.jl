@@ -57,14 +57,14 @@ Constructing the laser with it:
 ```julia
 using MicroscopeControl
 
-laser = TCubeLaser("64849775";
+laser = TCubeLaser("00000000";
     mode              = ConstantPhotocurrent(),
     wa_calibration    = 224.2,     # W/A, this document
     tia_range         = 1e-3,      # A, the rear-panel DIP switch
     tec_stabilised    = missing,   # true / false once known; `missing` is honest until then
     threshold_current = 65.0,      # mA
-    max_current       = 150.0,     # mA: programmed into the controller as the loop's clamp (see "The 642 nm rig's ceiling")
-    properties        = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))  # [1 mW, 70 mW]
+    max_current       = 150.0,     # mA, your diode's rating: programmed into the controller as the loop's clamp
+    properties        = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))  # [1 mW, 70 mW]: the 70 is max_power, your diode's rating
 
 initialize(laser)            # checks key, interlock and the DIP switch; programs the clamp; never emits
 setoutputpower!(laser, 20.0) # mW at the laser output
@@ -72,97 +72,23 @@ light_on(laser)
 loop_status(laser)           # photocurrent, drive current, saturated / TIA flags
 ```
 
-## Hardware check, 2026-09-28 (642 nm rig, this driver)
+## Controller facts (TLD001)
 
-Power meter before the fibre, read by Ali Kazemi Nasaban Shotorban; 30 s (open
-loop) or 20 s (closed loop) per point.
+Kept from the session diary cut from this file (2026-09-28/29, the 642 nm
+rig's TLD001, serial `64849775`). Facts the driver's docstrings already state
+are marked with where.
 
-Open loop (`ConstantCurrent`), setpoint sent after the output is enabled:
+- A plain `LD_SetMaxCurrentDigPot` is ignored: adjust mode (`LD_EnableMaxCurrentAdjust`) and a pause before leaving it are needed, 2026-09-28 (driver: `set_digpot!`, `CLAMP_WAIT_S`).
+- The header's potentiometer scale (`position * 220 / 255` mA) is wrong for this unit: position 204 gave 160.74 mA and 194 gave 152.43 mA, 2026-09-28 (driver: `DIGPOT_STEP_ESTIMATE_mA`).
+- The potentiometer position does not survive a controller power cycle, 2026-09-29; `initialize` re-programs it every time and power-mode `light_on` re-checks it.
+- The controller ignores a setpoint sent while its output is off and then runs on a stale stored setpoint (on this rig the diode went to its ~160 mA limit); the setpoint read-back is stale with the output off (65530), 2026-09-28 (driver: `send_setpoint`).
+- The photodiode UNDER-range flag was set at 1 mW (4.5 uA on the 1 mA range) while the loop regulated correctly, 2026-09-29; the driver warns and does not refuse.
+- The photocurrent reading is signed and `0x8000` means over range (seen at 110 mA open loop on the 1 mA range), 2026-09-28 (driver: `measured_photocurrent`).
+- A setpoint jumped up from 0 can lock the loop at ~90 mA / ~21 mW / ~98 uA whatever is requested: 3 of 3 at 10 mW, then 4 of 4 without the lock after a Kinesis CONST P session; stepped setpoints never failed (10 of 10), 2026-09-28/29 (driver: `PhotodiodeLoop`'s `ramp_step_mW` field, `check_lock`).
+- One USB write takes about 15 ms, so ramp pauses below ~10 ms do not go faster, 2026-09-29.
+- The controller must be power-cycled when switching between the Kinesis application and this driver, in either direction (`LD_Open` error 2, or "load device failed" in Kinesis, until then), 2026-09-29. Recorded only here.
+- How the Kinesis application reaches a power setpoint was not determined (the C API has only `LD_SetLaserSetPoint`); a USB trace (Wireshark + USBPcap while it sets 10 mW) would show whether a single write can work.
 
-| setpoint | front display | measured | photodiode x 224.2 W/A |
-|---:|---:|---:|---:|
-| 70 mA | 70.0 | 1.687 mW | 2.2 mW |
-| 90 mA | 90.0 | 20.67 mW | 21.4 mW |
-| 110 mA | 110.0 | 39.42 mW | over range (`0x8000`) |
-
-Threshold about 68 mA, slope about 0.94 mW/mA.
-
-Closed loop (`ConstantPhotocurrent`, 224.2 W/A, 1 mA range):
-
-| requested | measured | photodiode held at | drive current |
-|---:|---:|---:|---:|
-| 1 mW | 0.561 mW | 4.46 µA (= setpoint) | 68.5 mA |
-| 2 mW | 1.554 mW | 8.91 µA (= setpoint) | 69.8 mA |
-| 3 mW | 2.543 mW | 13.37 µA (= setpoint) | 70.7 mA |
-| 5 mW | 4.517 mW | 22.28 µA (= setpoint) | 72.8 mA |
-| 5 mW (first attempt) | 21.43 mW | 98.09 µA (stuck) | 90.8 mA |
-| 10 mW | 21.42 mW | 98.09 µA (stuck) | 90.8 mA |
-
-Where the loop regulated, measured = requested - 0.46 mW with a slope of 0.99:
-**the 224.2 W/A calibration still holds.** The 5 and 10 mW failures were
-diagnosed the next day (below): not the photodiode channel, but a **jump of
-the setpoint from 0**, which locks the loop at ~21 mW (~90 mA, photocurrent
-pinned near 98 µA) whatever the request. The Kinesis application at 10 mW
-gave 9.30 mW / 77.9 mA / 44.56 µA, i.e. exactly the driver's setpoint; the
-difference was only how the setpoint is reached.
-
-### 2026-09-29: the ramp, and closed loop verified to 40 mW
-
-Re-checked after the manual's PD range / gain procedure (1 mA range confirmed
-"In Range"; 386 µA at the 160 mA limit in Kinesis; gain re-optimised). The
-driver now **ramps** upward closed-loop steps ([`RAMP_STEP_mW`] = 3 mW every
-[`RAMP_STEP_S`] = 10 ms, i.e. 40 mW in about 0.2 s):
-
-| requested | reached by | measured | drive current |
-|---:|---|---:|---:|
-| 10 mW | jump from 0 (before the fix) | 21.38 mW | 90.4 mA |
-| 10 mW | 1 mW steps, 2 s apart | 9.31 mW | 77 mA |
-| 10 mW | 1 mW steps, 50 / 20 / 10 / 5 ms apart | 9.29 / 9.31 / 9.30 / 9.31 mW | 77.7 mA |
-| 20 mW | 1 mW steps, 50 ms | 19.04 mW | 88.2 mA |
-| 40 mW | 1 mW steps, 50 ms | 38.79 mW | 109.1 mA |
-| 40 mW | **3 mW steps, 10 ms (shipped default)** | **38.74 mW** | 109.3 mA |
-| 70 mW | 3 mW steps, 10 ms (0.38 s) | 68.59 mW | 141.4 mA |
-| 10 mW | jump from 0, later the same night, 4 runs | 9.30 / 9.31 / 9.30 / 9.31 mW | 77.6-78.0 mA |
-
-Open loop the same day: 110 mA -> 39.43 mW, 130 mA -> 57.71 mW.
-
-How the Kinesis application reaches a power setpoint was not determined (the C
-API has only `LD_SetLaserSetPoint`; the APT protocol document could not be
-fetched and the application was not traced with a USB capture). The ramp's
-time is almost all USB round trips, about 15 ms per write, so 5 ms pauses were
-no faster than 10 ms; a USB trace of Kinesis (Wireshark + USBPcap while it
-sets 10 mW) is the way to find out whether a single write can work.
-
-Two practical notes from the session: the controller must be **power-cycled
-when switching between the Kinesis application and this driver**, in either
-direction (`LD_Open` error 2, or "load device failed" in Kinesis, until then);
-and the max-current potentiometer position does not survive a power cycle
-(`initialize` re-programs it every time).
-
-Measured power is requested x 0.97 - ~0.3 mW over 1-70 mW (the loop holds the
-photocurrent exactly; the meter reads a little under 224.2 W/A's prediction).
-Closed loop is therefore verified over the rig's range, and
-`properties.max_power = 70.0` is supported. Note that 70 mW needs ~141 mA,
-above the 132 mA the rig had used as its working ceiling; the clamp at
-`max_current` is the hard limit (150 mA on the rig, see "The 642 nm rig's ceiling" below).
-
-**The lock is intermittent, and its cause is not known.** The jump from 0 to
-10 mW failed 3 times out of 3 on 09-28/29 (before and after the gain
-re-optimisation, before and after a power cycle), then, later on 09-29 after a
-Kinesis CONST P session at 10 mW with the W/A factor persisted, worked 4 times
-out of 4, and then also at 40 mW (controller readings identical to the ramped
-run) and 70 mW (68.5 mW measured). Ramped runs have never failed (10 of 10,
-10-70 mW). **The jump is the shipped default** (one write, ~10 ms) because it
-is the fastest and was reliable when last tested; the ramp is kept in the
-driver as a recorded, verified fallback: set `RAMP_STEP_mW[] = 3.0` and
-`RAMP_STEP_S[] = 0.01` (40 mW in 0.22 s, 70 mW in 0.38 s). If the lock recurs
-the symptom is unmistakable, ~90 mA and ~21 mW whatever the request; switch
-the ramp on and report the run.
-
-Found on the same day, and fixed in the driver: the controller ignores a
-setpoint sent while its output is off (it then runs on a stale stored setpoint,
-which on this rig drove the diode to its ~160 mA limit, 85-88 mW), so the
-driver only sends setpoints with the output on.
 
 ## The photodiode range (DIP switch) and the TIA gain
 
@@ -224,49 +150,7 @@ Done on the 642 nm rig on 2026-09-28: the 1 mA range showed "In Range" with
 386 µA at the 160 mA limit (10 mA showed 383 µA, i.e. under range), and the
 gain was re-optimised and persisted. It did not change the light (110 mA gave
 39.43 mW before and after); the ~98 µA "ceiling" seen that day turned out to
-be the setpoint-jump lock described above, not the photodiode channel.
-
-## The 642 nm rig's ceiling: the diode's rating and the measurement plane
-
-The diode is an **Ushio HL6366DG** (642 nm): absolute maximum optical output
-90 mW, rated 80 mW CW, threshold 80 mA typical / 95 max, operating current
-155 mA typical at 80 mW, monitor current 0.1-0.3 mA at 80 mW (data sheet
-HL6366DG/67DG Rev 0, 2014-10-28). This diode: threshold ~68 mA, 88 mW at the
-160 mA limit at the usual meter position.
-
-All powers in this document and in the driver are **at the usual meter
-position, before the fibre coupler but after a filter, two mirrors and two
-dichroics**. Measured 2026-09-29 at 90 mA: 22.23 mW at the laser head (before
-the filter) vs 20.67 mW at the usual position, so the path passes
-**T = 0.93**, and power at the diode = reading / 0.93:
-
-| usual position | at the diode |
-|---:|---:|
-| 60 mW | 64.5 mW |
-| 68.5 mW (the 70 mW run) | 73.7 mW |
-| 74.4 mW | 80 mW, the rating |
-| 83.7 mW | 90 mW, the absolute maximum |
-
-For the record: on 2026-09-29 the diode also ran for about 13 s at the 160 mA
-limit (a test script that sent its setpoint before enabling the output, which
-the controller ignores), roughly 93 mW at the diode, just over the absolute
-maximum; and for about 100 s in total at 141 mA (74 mW at the diode) during
-the 70 mW tests.
-
-Measured directly at the head in closed loop the same day: 70 mW requested ->
-73.5 mW at the diode (141.6 mA), 72 mW requested -> 75.9 mW at the diode
-(143.9 mA), consistent with T = 0.93.
-
-Rig settings chosen from this (the construction example above uses them):
-`properties.max_power = 70.0` mW at the usual position, which is 73.5 mW
-measured at the head and about 75 mW at the facet behind the collimating lens
-(an AR-coated lens loses ~1-2 %; this one is not measurable), about 94 % of
-the rating; and `max_current = 150.0` mA. The clamp is the loop's protection,
-not its operating point: 70 mW needs ~142 mA, the extra ~8 mA is headroom for
-the loop as the diode warms, and it stays under the 155 mA typical operating
-current. A runaway with a blocked photodiode stops at the clamp, ~92 mW at the
-diode, instead of the ~96 mW the previous 160 mA clamp allowed. Redo the head
-measurement if anything in the path before the usual meter position changes.
+be the setpoint-jump lock (see "Controller facts" above), not the photodiode channel.
 
 ## When to recalibrate
 

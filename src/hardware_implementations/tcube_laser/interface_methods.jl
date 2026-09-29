@@ -62,8 +62,8 @@ current scaled linearly onto `properties.max_power`. **Deprecated, and
 scheduled for removal at the next breaking release** -- read `light.drive_current` instead.
 
 It is a guess, not a measurement. The controller reports no optical power in
-the open-loop mode this driver uses, and the bench table preserved in
-`TCubeLaserControl.jl` shows the real curve is not this line. It is reproduced
+the open-loop mode this driver uses, and the bench table in `CALIBRATION.md`
+shows the real curve is not this line. It is reproduced
 here only so that a rig reading `properties.power` across an upgrade reads the
 same number it read before.
 
@@ -476,6 +476,25 @@ function read_status_fresh(serialNo::AbstractString)
 end
 
 """
+    SETPOINT_CONFIRM_TIMEOUT_S, SETPOINT_READBACK_TOLERANCE
+
+How long [`send_setpoint`](@ref) waits for the polled setpoint to show the code
+it sent, in seconds (a `Ref` so the test suite can shorten it), and how many
+codes the read-back may differ by: the rig's TLD001 reported 10424 for 10425.
+"""
+const SETPOINT_CONFIRM_TIMEOUT_S = Ref(1.0)
+const SETPOINT_READBACK_TOLERANCE = 2
+
+"Whether the controller reports its output enabled (polled status word)."
+output_enabled(serialNo::AbstractString) = UInt32(LD_GetStatusBits(serialNo)) & STATUS_BITS.output_enabled != 0
+
+"""
+    send_setpoint(light::TCubeLaser, code::UInt16)
+
+Send a setpoint **with the output on** and wait for the controller to report it
+back within [`SETPOINT_READBACK_TOLERANCE`](@ref) codes, throwing if it does not.
+Only call it with the output enabled. Nothing is recorded by this function.
+
 # The setpoint only takes while the output is ON
 
 Hardware-verified on the 642 nm rig's TLD001 (64849775, 2026-09-28), and the
@@ -503,29 +522,6 @@ at a stale value.
 a `light_off` from this driver that is 0; on a controller last left by other
 software it may be anything up to full scale, bounded only by the current limit
 (the max-current clamp in power mode).
-"""
-const SETPOINT_NEEDS_OUTPUT = true
-
-"""
-    SETPOINT_CONFIRM_TIMEOUT_S, SETPOINT_READBACK_TOLERANCE
-
-How long [`send_setpoint`](@ref) waits for the polled setpoint to show the code
-it sent, in seconds (a `Ref` so the test suite can shorten it), and how many
-codes the read-back may differ by: the rig's TLD001 reported 10424 for 10425.
-"""
-const SETPOINT_CONFIRM_TIMEOUT_S = Ref(1.0)
-const SETPOINT_READBACK_TOLERANCE = 2
-
-"Whether the controller reports its output enabled (polled status word)."
-output_enabled(serialNo::AbstractString) = UInt32(LD_GetStatusBits(serialNo)) & STATUS_BITS.output_enabled != 0
-
-"""
-    send_setpoint(light::TCubeLaser, code::UInt16)
-
-Send a setpoint **with the output on** and wait for the controller to report it
-back within [`SETPOINT_READBACK_TOLERANCE`](@ref) codes, throwing if it does not.
-Only call it with the output enabled: see [`send_setpoint`](@ref).
-Nothing is recorded by this function.
 """
 function send_setpoint(light::TCubeLaser, code::UInt16)
     serialNo = light.serialNo

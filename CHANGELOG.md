@@ -11,6 +11,11 @@ the next version with `-DEV`).
 ## [Unreleased]
 
 ### Fixed
+- **Diode laser panel: the output toggle's label follows the driver, not the
+  click.** After a `light_on`/`light_off` that failed, the label and the toggle
+  showed the requested state while the diode was in the other; both now show
+  `properties.is_on`, and the toggle is put back without re-firing a command.
+  Not yet run on hardware (#66).
 - **PI stage: `initialize` no longer finishes on an unreferenced stage.** It
   ignored the return of the reference move (`PI_FRF`), so when the controller
   rejected it (GCS error 5, e.g. one axis's servo off) the later move to the
@@ -53,8 +58,8 @@ Laser diodes in two regulation modes, and closed loop (photodiode feedback,
   Later the same night the jump worked at 10 mW (4 of 4), 40 and 70 mW, so
   the lock is intermittent and its cause unknown. The single write is the
   default (fastest, ~10 ms); an optional ramp of upward closed-loop steps is
-  kept in the driver as the verified fallback (`RAMP_STEP_mW[] = 3.0`,
-  `RAMP_STEP_S[] = 0.01`: 40 mW in ~0.2 s, 70 mW in ~0.4 s; ramped runs never
+  kept in the driver as the verified fallback (`ramp_step_mW = 3.0`,
+  `ramp_step_s = 0.01`, keywords of `TCubeLaser`: 40 mW in ~0.2 s, 70 mW in ~0.4 s; ramped runs never
   failed, 10 of 10). The photodiode's UNDER-range flag now warns instead of
   refusing (it was set at 1 mW while the loop regulated correctly).
 - **Found on the rig and fixed before release**, none of which the fake SDK
@@ -97,18 +102,19 @@ default):
 
 ```julia
 # 0.2.4 line, still works
-laser = TCubeLaser("64849775"; max_current = 160.0)
+laser = TCubeLaser("00000000"; max_current = 150.0)   # your diode's rating
 setpower(laser, 80.0)                     # mA, deprecated
 
 # open loop, with the unit in the name
-laser = TCubeLaser("64849775"; mode = ConstantCurrent(), max_current = 160.0)   # mode optional
+laser = TCubeLaser("00000000"; mode = ConstantCurrent(), max_current = 150.0)   # mode optional; max_current: your diode's rating
 setcurrent!(laser, 80.0)                  # mA
 
 # closed loop (calibration: src/hardware_implementations/tcube_laser/CALIBRATION.md)
-laser = TCubeLaser("64849775"; mode = ConstantPhotocurrent(),
+laser = TCubeLaser("00000000"; mode = ConstantPhotocurrent(),
     wa_calibration = 224.2, tia_range = 1e-3, tec_stabilised = missing,
-    threshold_current = 65.0, max_current = 160.0,
-    properties = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))
+    threshold_current = 65.0,
+    max_current = 150.0,                                                  # mA, your diode's rating
+    properties = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))     # 70.0 mW: your diode's rating
 setoutputpower!(laser, 20.0)              # mW at the laser output
 
 # either mode, when the unit does not matter: a fraction of the declared range
@@ -116,6 +122,17 @@ setlevel!(laser, 0.4)
 ```
 
 ### Added
+- **`TCubeLaser` closed-loop loop-lock check and per-laser ramp keywords**
+  (#66): `ramp_step_mW` (default `Inf`, one write), `ramp_step_s` (`0.01`),
+  `lock_check_s` (`0.2`) and `lock_ratio` (`1.5`) are keywords of the
+  `ConstantPhotocurrent` `TCubeLaser` constructor and fields of
+  `PhotodiodeLoop`; they replace the `RAMP_STEP_mW` and `RAMP_STEP_S` globals,
+  which were never released. After a setpoint the driver now compares the
+  measured photocurrent with the request and, above `lock_ratio` times it,
+  disables the output and throws "loop lock suspected". The ramp starts from
+  what the driver knows the controller holds (0 in `light_on`, the previous
+  request in `setoutputpower!`), not from the stale `LD_GetLaserSetPoint`.
+  The threshold and wait are not yet run on hardware.
 - **`DiodeLaser <: LightSource`**, for lasers on a controller that regulates
   something, and the mode types **`ConstantCurrent`** (the loop holds drive
   current) and **`ConstantPhotocurrent`** (the loop holds the monitor photodiode
@@ -179,6 +196,17 @@ setlevel!(laser, 0.4)
   range, measured before the fibre, with its closed-loop verification table).
 
 ### Changed
+- **`TCubeLaser.initialize` now zeroes and disables the output** in both modes,
+  before the mode command, so it never sends a mode command with the diode lit
+  and `properties.is_on` is false afterwards. Not yet run on hardware.
+- **Open loop: `initialize` lowers the controller's max-current potentiometer
+  when its limit is above `max_current`**, and never raises it. Not yet run on
+  hardware in open loop.
+- **Power mode re-checks the controller before emitting**: closed-loop
+  `light_on` and `setoutputpower!` read the status word and the current limit
+  afresh and refuse if the loop bit is gone or the limit is above the
+  programmed clamp (a controller power cycle can restore the pot); two more
+  request/read round trips per call. Not yet run on hardware.
 - `setpower(laser, mA)` on a `DiodeLaser`: on a `ConstantCurrent` laser it
   forwards to `setcurrent!` with a deprecation warning; on a
   `ConstantPhotocurrent` laser it throws, naming `setoutputpower!` and

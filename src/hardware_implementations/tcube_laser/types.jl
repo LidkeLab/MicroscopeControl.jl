@@ -160,18 +160,18 @@ with `mode = ConstantPhotocurrent()`. The default will not change.
 
 ```julia
 # 642 nm rig, closed loop. Calibration: see CALIBRATION.md beside this file.
-laser = TCubeLaser("64849775";
+laser = TCubeLaser("00000000";
     mode              = ConstantPhotocurrent(),
     wa_calibration    = 224.2,     # W/A, measured with a power meter before the fibre
     tia_range         = 1e-3,      # A: the rear-panel DIP switch, as set
     tec_stabilised    = missing,   # honest until checked
     threshold_current = 65.0,      # mA, from a bench sweep
-    max_current       = 150.0,     # mA: programmed as the loop's clamp
-    properties        = LightSourceProperties("mW", 0.0, false, 2.0, 80.0))
+    max_current       = 150.0,     # mA, your diode's rating: programmed as the loop's clamp
+    properties        = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)) # max_power 70.0 mW: your diode's rating
 
 # The same diode in open loop.
-laser = TCubeLaser("64849775"; mode = ConstantCurrent(), # mode is optional here: the default
-    min_current = 70.0, max_current = 160.0)
+laser = TCubeLaser("00000000"; mode = ConstantCurrent(), # mode is optional here: the default
+    min_current = 70.0, max_current = 150.0)             # max_current: your diode's rating
 ```
 
 In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
@@ -188,6 +188,10 @@ defaults to `LightSourceProperties("mA", 0.0, false, min_current, max_current)`.
   real protection while the loop raises the current by itself;
   `initialize` records the controller's own limit separately in
   `controller_max_current`, and `setcurrent!` enforces the smaller of the two.
+- `ramp_step_mW`, `ramp_step_s`, `lock_check_s` and `lock_ratio` (closed loop
+  only; passing one in open loop throws) set the fields of the same names on
+  [`PhotodiodeLoop`](@ref), which documents them: an optional ramp of upward
+  setpoint steps and the loop-lock check.
 - `min_current` defaults to `0.0`. A non-zero default would reject safe small
   currents without protecting against large ones.
 """
