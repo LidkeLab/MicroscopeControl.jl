@@ -127,9 +127,20 @@ lab_summary("Core") do
         cc(; kw...) = TCubeLaser("00000000"; mode=ConstantCurrent(), kw...)
         cp_props() = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)
         cp(; kw...) = TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
-                                 tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), kw...)
+                                 tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), max_current=160.0, kw...)
 
         @testset "Constructor defaults" begin
+            # Closed loop has no default clamp: it is the only real protection.
+            cperr = try
+                TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
+                           tia_range=1e-3, tec_stabilised=missing, properties=cp_props())
+                nothing
+            catch e
+                e
+            end
+            @test cperr isa ArgumentError
+            @test occursin("max_current", cperr.msg)
+
             # `mode` is required and has no default, so no construction line
             # changes meaning when a default is eventually chosen.
             err = try
@@ -730,6 +741,18 @@ lab_summary("Core") do
             @test FakeKinesis.bits[] & FakeKinesis.ENABLED == 0
             @test laser.properties.is_on == false
             FakeKinesis.setpoint_readback[] = nothing
+
+            # ... and if the disable fails too, the output may still be on, so
+            # is_on stays true and the error says so.
+            FakeKinesis.reset!()
+            pl = cp()
+            initialize(pl)
+            setoutputpower!(pl, 20.0)
+            FakeKinesis.setpoint_readback[] = UInt16(3)
+            FakeKinesis.fail!("LD_DisableOutput")
+            @test_logs (:error, r"may still be ON") match_mode = :any @test_throws ErrorException light_on(pl)
+            @test pl.properties.is_on == true
+            FakeKinesis.reset!()
         end
 
         @testset "readbacks (fake SDK)" begin

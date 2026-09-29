@@ -168,14 +168,18 @@ laser = TCubeLaser("64849775";
 laser = TCubeLaser("64849775"; mode = ConstantCurrent(), min_current = 70.0, max_current = 160.0)
 ```
 
-In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`
-and `properties` (whose `min_power`/`max_power` become the enforced mW bounds)
+In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
+`max_current` and `properties` (whose `min_power`/`max_power` become the enforced mW bounds)
 are required: a rig cannot reach power mode without a measured calibration, a
-stated amplifier range and an answer to the temperature question. In
+stated amplifier range, an answer to the temperature question and an explicit
+clamp. In
 `ConstantCurrent` mode passing any of the first three throws, and `properties`
 defaults to `LightSourceProperties("mA", 0.0, false, min_current, max_current)`.
 
-- `max_current` is **your** ceiling for this diode and is never overwritten;
+- `max_current` is **your** ceiling for this diode and is never overwritten. In
+  `ConstantCurrent` mode it defaults to `160.0`; in `ConstantPhotocurrent` mode
+  it has no default, because it is the clamp `initialize` programs and the only
+  real protection while the loop raises the current by itself;
   `initialize` records the controller's own limit separately in
   `controller_max_current`, and `setcurrent!` enforces the smaller of the two.
 - `min_current` defaults to `0.0`. A non-zero default would reject safe small
@@ -187,7 +191,7 @@ function TCubeLaser(serialNo::String;
     properties::Union{Nothing,LightSourceProperties}=nothing,
     laser_color::String="red",
     min_current::Float64=0.0,
-    max_current::Float64=160.0, #220.0 is the max of the TCube
+    max_current::Union{Nothing,Float64}=nothing, # ConstantCurrent: 160.0; 220.0 is the max of the TCube
     controller_max_current::Float64=NaN,
     max_setcurrent::Float64=220.0,
     max_setpoint::Float64=32767.0,
@@ -208,11 +212,13 @@ function TCubeLaser(serialNo::String;
         "There is no default, so no construction line changes meaning when one is chosen."))
     pd = if mode isa ConstantPhotocurrent
         absent = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
-                                     :tec_stabilised => tec_stabilised, :properties => properties) if v === nothing]
+                                     :tec_stabilised => tec_stabilised, :properties => properties,
+                                     :max_current => max_current) if v === nothing]
         isempty(absent) || throw(ArgumentError(
             "$name: a ConstantPhotocurrent laser needs these keywords, none of which has a default: $(join(absent, ", ")). " *
             "wa_calibration is W/A measured with a power meter at the laser output; tia_range is the rear-panel DIP switch in A; " *
-            "tec_stabilised is true, false or missing; properties carries the enforced min_power/max_power in mW."))
+            "tec_stabilised is true, false or missing; properties carries the enforced min_power/max_power in mW; " *
+            "max_current is the clamp initialize programs into the controller, the only real protection in closed loop."))
         PhotodiodeLoop(; wa_calibration=wa_calibration, tia_range=tia_range, tec_stabilised=tec_stabilised)
     else
         given = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
@@ -222,6 +228,7 @@ function TCubeLaser(serialNo::String;
             "this one is $(nameof(typeof(mode)))"))
         nothing
     end
+    max_current = something(max_current, 160.0)
     props = something(properties, LightSourceProperties("mA", 0.0, false, min_current, max_current))
     TCubeLaser{typeof(mode)}(unique_id, props, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
