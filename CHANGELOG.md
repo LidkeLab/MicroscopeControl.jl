@@ -21,12 +21,16 @@ Laser diodes in two regulation modes, and closed loop (photodiode feedback,
 
 - **Open loop: verified.** 70 / 90 / 110 mA gave 70.0 / 90.0 / 110.0 mA on the
   front display and 1.69 / 20.67 / 39.42 mW.
-- **Closed loop: verified from 1 to 5 mW only.** Measured = requested - 0.46 mW,
-  slope 0.99, so the 224.2 W/A calibration holds. **Above about 5 mW it failed on
-  this rig**: the photodiode reading clips at about 3213 counts (~21 mW) and
-  reads `0x8000` above it, and the loop held ~21 mW for a 10 mW request. That is
-  the controller's photodiode channel (range DIP switch or TIA gain), not this
-  driver or the calibration; `CALIBRATION.md` says what to check.
+- **Closed loop: verified from 1 to 40 mW** (2026-09-28/29): 1, 2, 3, 5, 10,
+  20 and 40 mW gave 0.56, 1.55, 2.54, 4.52, 9.30, 19.04 and 38.74 mW, so the
+  224.2 W/A calibration holds. One controller behaviour had to be worked
+  around: **a setpoint jumped from 0 locks the loop** at ~21 mW / 90 mA
+  whatever the request (3 of 3 attempts at 10 mW), while the same target
+  reached in steps regulates exactly, as the Kinesis application does. The
+  driver therefore **ramps** upward closed-loop steps, 3 mW every 10 ms (40 mW
+  in ~0.2 s; `RAMP_STEP_mW`, `RAMP_STEP_S`). The mechanism is not known; the
+  ramp is empirical. The photodiode's UNDER-range flag now warns instead of
+  refusing (it was set at 1 mW while the loop regulated correctly).
 - **Found on the rig and fixed before release**, none of which the fake SDK
   could have shown: the TLD001 **ignores setpoints sent while its output is
   off** (so the driver sends them right after enabling, and zeroes the setpoint

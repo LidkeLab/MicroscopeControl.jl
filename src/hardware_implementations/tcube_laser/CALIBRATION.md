@@ -64,9 +64,7 @@ laser = TCubeLaser("64849775";
     tec_stabilised    = missing,   # true / false once known; `missing` is honest until then
     threshold_current = 65.0,      # mA
     max_current       = 160.0,     # mA: programmed into the controller as the loop's clamp
-    properties        = LightSourceProperties("mW", 0.0, false, 1.0, 5.0))   # [1 mW, 5 mW]
-# 5 mW, not 70: until the photodiode channel is fixed (see "Hardware check,
-# 2026-09-28"), closed loop on this rig only regulated up to about 5 mW.
+    properties        = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))  # [1 mW, 70 mW]
 
 initialize(laser)            # checks key, interlock and the DIP switch; programs the clamp; never emits
 setoutputpower!(laser, 20.0) # mW at the laser output
@@ -101,14 +99,37 @@ Closed loop (`ConstantPhotocurrent`, 224.2 W/A, 1 mA range):
 | 10 mW | 21.42 mW | 98.09 µA (stuck) | 90.8 mA |
 
 Where the loop regulated, measured = requested - 0.46 mW with a slope of 0.99:
-**the 224.2 W/A calibration still holds.** But the photodiode channel **clips
-at about 3213 counts (98 µA, ~21 mW at this W/A) and reads `0x8000` above it**,
-and above roughly 5 mW the loop held that clip level (~21 mW) instead of the
-setpoint. 98 µA is almost exactly the full scale of the **100 µA** range, while
-the status bits report the 1 mA range, and in 2024 the same calibration was
-verified in closed loop up to 80 mW. So the photodiode channel's set-up has
-changed: see "The photodiode range and the TIA gain" below. **Until it is
-fixed, closed loop is only usable up to about 5 mW** (`properties.max_power`).
+**the 224.2 W/A calibration still holds.** The 5 and 10 mW failures were
+diagnosed the next day (below): not the photodiode channel, but a **jump of
+the setpoint from 0**, which locks the loop at ~21 mW (~90 mA, photocurrent
+pinned near 98 µA) whatever the request. The Kinesis application at 10 mW
+gave 9.30 mW / 77.9 mA / 44.56 µA, i.e. exactly the driver's setpoint; the
+difference was only how the setpoint is reached.
+
+### 2026-09-29: the ramp, and closed loop verified to 40 mW
+
+Re-checked after the manual's PD range / gain procedure (1 mA range confirmed
+"In Range"; 386 µA at the 160 mA limit in Kinesis; gain re-optimised). The
+driver now **ramps** upward closed-loop steps ([`RAMP_STEP_mW`] = 3 mW every
+[`RAMP_STEP_S`] = 10 ms, i.e. 40 mW in about 0.2 s):
+
+| requested | reached by | measured | drive current |
+|---:|---|---:|---:|
+| 10 mW | jump from 0 (before the fix) | 21.38 mW | 90.4 mA |
+| 10 mW | 1 mW steps, 2 s apart | 9.31 mW | 77 mA |
+| 10 mW | 1 mW steps, 50 / 20 / 10 / 5 ms apart | 9.29 / 9.31 / 9.30 / 9.31 mW | 77.7 mA |
+| 20 mW | 1 mW steps, 50 ms | 19.04 mW | 88.2 mA |
+| 40 mW | 1 mW steps, 50 ms | 38.79 mW | 109.1 mA |
+| 40 mW | **3 mW steps, 10 ms (shipped default)** | **38.74 mW** | 109.3 mA |
+
+Open loop the same day: 110 mA -> 39.43 mW, 130 mA -> 57.71 mW.
+
+Measured power is requested x 0.97 - ~0.3 mW over 1-40 mW (the loop holds the
+photocurrent exactly; the meter reads a little under 224.2 W/A's prediction).
+Closed loop is therefore usable over the rig's range; `properties.max_power`
+can be set to what the rig needs (70 mW has not been re-verified since 2024,
+but nothing changed between 20 and 40 mW). Why a jump locks the loop is not
+known; the ramp is empirical, verified at 10, 20 and 40 mW.
 
 Found on the same day, and fixed in the driver: the controller ignores a
 setpoint sent while its output is off (it then runs on a stale stored setpoint,
@@ -171,10 +192,11 @@ matched. The manuals are on the lab share: `Z:\Computers and Software\isos and
 Install Files\ThorLabs\TLD001 Laser Diode Driver\` (17874-d03.pdf = Kinesis,
 17874-d01.pdf = APT).
 
-What to check first on the 642 nm rig: which range the DIP switch is physically
-on, and whether the reading ceiling moves when it is changed. The 98 µA ceiling
-with the status bits saying 1 mA suggests the switch position and the reported
-range disagree, or that the TIA gain is set for the wrong range.
+Done on the 642 nm rig on 2026-09-28: the 1 mA range showed "In Range" with
+386 µA at the 160 mA limit (10 mA showed 383 µA, i.e. under range), and the
+gain was re-optimised and persisted. It did not change the light (110 mA gave
+39.43 mW before and after); the ~98 µA "ceiling" seen that day turned out to
+be the setpoint-jump lock described above, not the photodiode channel.
 
 ## When to recalibrate
 

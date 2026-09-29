@@ -607,15 +607,29 @@ include("tcube_fake_sdk.jl")
             @test laser.pd.output_power_requested == 50.0
             empty!(FakeKinesis.calls)
             light_on(laser)
-            @test FakeKinesis.calls == ["LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            # From 0 to 50 mW the setpoint is RAMPED in ~3 mW steps (the rig's loop
+            # locks on a big jump): enable, read the held setpoint, ~16 intermediate
+            # sends, then the final one, confirmed.
+            @test FakeKinesis.calls[1:2] == ["LD_EnableOutput", "LD_GetLaserSetPoint"]
+            @test FakeKinesis.calls[end] == "LD_GetLaserSetPoint"
+            @test all(==("LD_SetLaserSetPoint"), FakeKinesis.calls[3:end-1])
             code = FakeKinesis.setpoints[end]
             @test code == UInt16(floor(i_pd / 1e-3 * 32767))
             @test FakeKinesis.setpoint_held[] == code
+            step = round(Int, TCube.RAMP_STEP_mW[] / 1000 / 224.2 / 1e-3 * 32767)  # 3 mW steps
+            @test 15 <= length(FakeKinesis.setpoints) <= 18
+            @test issorted(FakeKinesis.setpoints)
+            @test all(d -> 0 < d <= step, diff(Int.(FakeKinesis.setpoints)))
             # With the output on, a new power is sent and confirmed at once (after
             # checking the photodiode is not reading 0x8000, over range).
             empty!(FakeKinesis.calls)
             setoutputpower!(laser, 50.0)
-            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_GetPhotoCurrentReading", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_GetPhotoCurrentReading", "LD_GetLaserSetPoint", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            # Downward steps are sent directly, no ramp.
+            empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
+            setoutputpower!(laser, 10.0)
+            @test length(FakeKinesis.setpoints) == 1
+            setoutputpower!(laser, 50.0)
             # 0x8000 is the rig controller's over-range reading: refuse, and report it.
             FakeKinesis.photocurrent_raw[] = -32768
             @test_throws "OVER" setoutputpower!(laser, 20.0)
@@ -645,8 +659,10 @@ include("tcube_fake_sdk.jl")
             setoutputpower!(laser, 20.0)
             @test laser.pd.output_power_requested == 20.0
             light_on(laser)
-            @test_throws "UNDER" setoutputpower!(laser, 30.0)
-            @test laser.pd.output_power_requested == 20.0 # unchanged by a refusal
+            # UNDER range (small signal for the range) warns but is not a refusal:
+            # the rig regulated correctly with it set at 1 mW.
+            @test_logs (:warn,) match_mode = :any setoutputpower!(laser, 30.0)
+            @test laser.pd.output_power_requested == 30.0
             FakeKinesis.setbits!(FakeKinesis.TIA_UNDER; on=false)
             # ... and a controller that left closed loop behind the driver's back.
             FakeKinesis.setbits!(FakeKinesis.CLOSED; on=false)
@@ -655,7 +671,7 @@ include("tcube_fake_sdk.jl")
             # A setpoint the controller does not confirm is not recorded.
             FakeKinesis.setpoint_readback[] = UInt16(3)
             @test_throws ErrorException setoutputpower!(laser, 30.0)
-            @test laser.pd.output_power_requested == 20.0
+            @test laser.pd.output_power_requested == 30.0 # the last confirmed request
         end
 
         @testset "light_on / light_off around the setpoint (fake SDK)" begin

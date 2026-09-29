@@ -483,6 +483,56 @@ function send_setpoint(light::TCubeLaser, code::UInt16)
 end
 
 """
+    RAMP_STEP_mW, RAMP_STEP_S
+
+In closed loop a large upward setpoint step from a low level locks the loop:
+hardware-verified on the 642 nm rig's TLD001 (2026-09-29), a jump from 0 to
+10 mW settled at ~90 mA / 21 mW (the photodiode reading pinned at 98 µA)
+whatever the request, while the same target reached in steps settled at
+78 mA / 9.3 mW, exactly as the Kinesis application does. So
+[`send_setpoint_ramped`](@ref) walks any upward closed-loop step in
+`RAMP_STEP_mW` increments `RAMP_STEP_S` apart. Downward steps and open loop
+are sent directly.
+
+The defaults, 3 mW every 10 ms, were chosen on the rig: 1 mW steps worked at
+2 s, 50 ms, 20 ms, 10 ms and 5 ms spacing (9.29-9.31 mW measured for 10 mW
+each time); below ~10 ms the USB round trip per write (~15 ms) sets the pace,
+so 5 ms was no faster than 10 ms; and 3 mW steps at 10 ms reached 40 mW in
+0.22 s at 38.74 mW measured, the same as 1 mW steps. 0 -> 5 mW in one jump
+worked once and failed once, so the step is kept at 3 mW. Both are `Ref`s so
+the test suite can zero the pause and a rig can tune the step. Whether the
+mechanism is a loop transient or something in the controller's firmware is
+not known; the ramp is an empirical fix, verified at 10, 20 and 40 mW against
+three failures out of three for the jump.
+"""
+const RAMP_STEP_mW = Ref(3.0)
+
+"See [`RAMP_STEP_mW`](@ref)."
+const RAMP_STEP_S = Ref(0.01)
+
+"""
+    send_setpoint_ramped(light::TCubeLaser, code::UInt16)
+
+Send a setpoint with the output on. In `ConstantPhotocurrent` mode an upward
+step larger than [`RAMP_STEP_mW`](@ref) is walked up from the setpoint the
+controller currently holds, one step every `RAMP_STEP_S`; the final code is
+confirmed by [`send_setpoint`](@ref).
+"""
+send_setpoint_ramped(light::TCubeLaser{ConstantCurrent}, code::UInt16) = send_setpoint(light, code)
+function send_setpoint_ramped(light::TCubeLaser{ConstantPhotocurrent}, code::UInt16)
+    serialNo, pd = light.serialNo, light.pd
+    start = Int(LD_GetLaserSetPoint(serialNo))
+    step = max(1, round(Int, RAMP_STEP_mW[] / 1000 / pd.wa_calibration / pd.tia_range * light.max_setpoint))
+    if 0 <= start && Int(code) - start > step
+        for c in (start + step):step:(Int(code) - 1)
+            check_err(LD_SetLaserSetPoint(serialNo, UInt16(c)), "LD_SetLaserSetPoint", serialNo)
+            sleep(RAMP_STEP_S[])
+        end
+    end
+    send_setpoint(light, code)
+end
+
+"""
     intended_code(light::TCubeLaser)
 
 The setpoint the driver's recorded request asks for: `setpoint_code(drive_current)`
@@ -664,7 +714,7 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     code = intended_code(light)
     check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
     try
-        send_setpoint(light, code)
+        send_setpoint_ramped(light, code)
     catch
         try
             LD_DisableOutput(serialNo)
@@ -755,10 +805,13 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
         "was the mode changed on the front panel? Call initialize again.")
     (bits & STATUS_BITS.tia_over != 0 || (on && Int(LD_GetPhotoCurrentReading(serialNo)) == PHOTOCURRENT_OVER_RANGE)) && error(
         "TCubeLaser $serialNo: setoutputpower! refused: the photodiode amplifier reports OVER range, so the loop's feedback is invalid")
-    (bits & STATUS_BITS.tia_under != 0 && on) && error(
-        "TCubeLaser $serialNo: setoutputpower! refused: the photodiode amplifier reports UNDER range with the output on, so the loop's feedback is invalid")
+    # UNDER range means the photocurrent is small for the selected range, not
+    # that it is invalid: on the 642 nm rig the flag was set at 1 mW (4.5 µA on
+    # the 1 mA range, 2026-09-29) while the loop regulated correctly. Warn only.
+    (bits & STATUS_BITS.tia_under != 0 && on) && @warn(
+        "TCubeLaser $serialNo: the photodiode amplifier reports UNDER range with the output on; the photocurrent is small for the selected range and its resolution is reduced")
     code = photocurrent_code(light, power_mW / 1000 / pd.wa_calibration)
-    on && send_setpoint(light, code)
+    on && send_setpoint_ramped(light, code)
     pd.output_power_requested = power_mW
     pd.photocurrent_requested = photocurrent_from_code(light, code, pd.tia_range)
     println("Laser output power set to $power_mW mW (photocurrent setpoint $(pd.photocurrent_requested) A)",
