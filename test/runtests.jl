@@ -8,6 +8,10 @@ const HDF5 = MicroscopeControl.HDF5
 # be included at top level, before the testsets. See the file for the seam.
 include("tcube_fake_sdk.jl")
 
+# Writes the lab test record summary when LAB_TEST_SUMMARY is set; see the file.
+include("lab_summary.jl")
+
+lab_summary("Core") do
 @testset "MicroscopeControl.jl" begin
     @testset "Simulated Camera" begin
         cam = SimCamera(exposure_time=0.01)
@@ -706,3 +710,4 @@ include("tcube_fake_sdk.jl")
     include("skills.jl")
     include("gui.jl")
 end
+end  # lab_summary
