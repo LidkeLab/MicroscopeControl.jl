@@ -34,7 +34,7 @@ MicroscopeControl and Pkg writes both entries for you:
 
 ```julia
 Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
 ```
 
 Writing the TOML by hand needs **both** a `[deps]` and a `[sources]` entry —

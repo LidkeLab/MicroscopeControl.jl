@@ -120,19 +120,20 @@ Hardware implementations use `ccall` for vendor SDKs:
 - Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
 
 Rules at the `ccall` boundary, each learned from a bug that "usually worked"
-(C-867 servo, v0.1.1; N-472 initialize, v0.2.4):
+(C-867 servo, v0.1.1; N-472 stopmotion):
 - A `Ptr{Cchar}` argument (GCS2 axes lists, USB descriptions) gets a Julia
   `String`, which is always NUL-terminated. Never a `Vector{UInt8}` with the
   zeros filtered out, and never a `Vector{String}`; join axes with a space first.
-- A `BOOL*` argument is 32-bit (`Cuint`/`Cint`), one element per axis, never `UInt8`.
+- A GCS2 `BOOL*` argument is 32-bit (`Cuint`/`Cint`), one element per axis,
+  never `UInt8`.
 - Set a driver's `connectionstatus` only after the connect call's return value
-  is checked, and clear it in `shutdown`, so a failed or closed object can be
-  initialized again.
+  is checked, and clear it and the device id in `shutdown`, so a failed or
+  closed object can be initialized again and a stale id cannot close another
+  object's connection.
 
-The test suite must never command attached hardware. Driver tests that touch a
-vendor DLL run only its failure paths, and skip when the device enumerates
-(see the "PI N472 (no hardware)" testset: on the rig, the C-885 is plugged in
-and `initialize` would turn its servos on).
+The test suite must never command attached hardware. Driver tests replace the
+vendor wrappers with a recorder (`test/tcube_fake_sdk.jl`,
+`test/pi_n472_fake_sdk.jl`), so they run on every machine and never reach a DLL.
 
 ### Camera Image Data Convention
 
