@@ -381,7 +381,7 @@ lab_summary("Core") do
             laser = TCubeLaser("00000000")
             laser.properties.is_on = true
             shutdown(laser)
-            @test FakeKinesis.calls == ["LD_DisableOutput", "LD_Close"]
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput", "LD_Close"]
             @test laser.properties.is_on == false
 
             # A failed disable throws -- and the handle is closed anyway,
@@ -399,7 +399,7 @@ lab_summary("Core") do
             end
             @test err isa ErrorException
             @test occursin("LD_DisableOutput", err.msg)
-            @test FakeKinesis.calls == ["LD_DisableOutput", "LD_Close"] # closed regardless
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput", "LD_Close"] # closed regardless
             # The disable failed, so the output is not recorded as off: the
             # field follows the call, not the request.
             @test stuck.properties.is_on == true
