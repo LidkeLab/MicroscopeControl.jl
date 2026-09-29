@@ -82,6 +82,8 @@ jobs:
   version-bumped:
     name: Version bumped
     runs-on: ubuntu-latest
+    # Every pull request: ordinary work on a -DEV base keeps the version, and
+    # a release-branch backport on a released base must raise it (versions.py).
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
