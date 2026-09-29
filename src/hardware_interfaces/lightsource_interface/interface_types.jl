@@ -112,8 +112,32 @@ delivered power drifts while photocurrent is held steady. That is why
 - `photocurrent_requested::Float64`: A. The DECODED setpoint the loop was
   actually given, which the downward-rounding encoding makes differ from
   `output_power_requested / wa_calibration`. `NaN` before the first command.
+- `ramp_step_mW::Float64`: `Inf` (the default) sends every setpoint as one
+  write, ~10 ms. A finite value in mW makes the driver walk any larger upward
+  step in increments of that size, `ramp_step_s` apart; downward steps are
+  always one write. History (642 nm rig's TLD001, 2026-09-28/29): on one night
+  a setpoint jumped from 0 to 10 mW locked the loop at ~90 mA / ~21 mW whatever
+  the request, 3 times out of 3, while the same target reached in steps settled
+  at 78 mA / 9.3 mW, as the Kinesis application does. Later the same night,
+  after a Kinesis CONST P session, the jump worked 4 times out of 4 (9.30-9.31
+  mW). Ramped runs never failed (10 of 10, 10-70 mW). The cause is not known.
+  The jump is the default because it is the fastest and was reliable when last
+  tested; if the lock recurs (the symptom: ~90 mA and ~21 mW whatever is
+  requested) construct the laser with `ramp_step_mW = 3.0, ramp_step_s = 0.01`,
+  which were verified on the rig: 1 mW steps worked at 2 s, 50, 20, 10 and 5 ms
+  spacing; below ~10 ms the USB round trip per write (~15 ms) sets the pace; 3
+  mW steps at 10 ms reached 40 mW in 0.22 s (38.74 mW) and 70 mW in 0.38 s
+  (68.59 mW).
+- `ramp_step_s::Float64`: seconds between ramp steps. Default `0.01`.
+- `lock_check_s::Float64`: seconds the driver waits after sending a setpoint
+  before it compares the measured photocurrent with the request. Default `0.2`.
+- `lock_ratio::Float64`: the measured photocurrent may exceed the request by
+  this factor before the driver reports a suspected loop lock. Default `1.5`.
+  `[limitation]` this threshold and wait are unvalidated on hardware: the one
+  lock observed measured about 98 uA for 44.6 uA requested (2.2x). A false trip
+  refuses, which is the safe direction.
 
-Construct it with the keyword form, which fills the last three fields.
+Construct it with the keyword form, which fills the last seven fields.
 """
 mutable struct PhotodiodeLoop
     wa_calibration::Float64
@@ -122,20 +146,33 @@ mutable struct PhotodiodeLoop
     max_current_clamp::Float64
     output_power_requested::Float64
     photocurrent_requested::Float64
+    ramp_step_mW::Float64
+    ramp_step_s::Float64
+    lock_check_s::Float64
+    lock_ratio::Float64
 end
 
 """
-    PhotodiodeLoop(; wa_calibration, tia_range, tec_stabilised)
+    PhotodiodeLoop(; wa_calibration, tia_range, tec_stabilised,
+                   ramp_step_mW=Inf, ramp_step_s=0.01, lock_check_s=0.2, lock_ratio=1.5)
 
-All three are required, and none has a default: a power-mode laser cannot be
-built without a measured calibration, a stated amplifier range and an answer
-(possibly `missing`) to whether the diode's temperature is stabilised.
+The first three are required, and none has a default: a power-mode laser cannot
+be built without a measured calibration, a stated amplifier range and an answer
+(possibly `missing`) to whether the diode's temperature is stabilised. The last
+four are documented on [`PhotodiodeLoop`](@ref).
 """
-function PhotodiodeLoop(; wa_calibration::Real, tia_range::Real, tec_stabilised::Union{Bool,Missing})
+function PhotodiodeLoop(; wa_calibration::Real, tia_range::Real, tec_stabilised::Union{Bool,Missing},
+                        ramp_step_mW::Real=Inf, ramp_step_s::Real=0.01,
+                        lock_check_s::Real=0.2, lock_ratio::Real=1.5)
     (isfinite(wa_calibration) && wa_calibration > 0) || throw(ArgumentError(
         "PhotodiodeLoop: wa_calibration is W/A measured at the laser output and must be finite and positive, got $(wa_calibration)"))
     (isfinite(tia_range) && tia_range > 0) || throw(ArgumentError(
         "PhotodiodeLoop: tia_range is the photodiode amplifier's full scale in A and must be finite and positive, got $(tia_range)"))
-    return PhotodiodeLoop(Float64(wa_calibration), Float64(tia_range), tec_stabilised, NaN, NaN, NaN)
+    ramp_step_mW > 0 || throw(ArgumentError("PhotodiodeLoop: ramp_step_mW must be positive (Inf for no ramp), got $(ramp_step_mW)"))
+    (isfinite(ramp_step_s) && ramp_step_s >= 0) || throw(ArgumentError("PhotodiodeLoop: ramp_step_s must be finite and non-negative, got $(ramp_step_s)"))
+    (isfinite(lock_check_s) && lock_check_s >= 0) || throw(ArgumentError("PhotodiodeLoop: lock_check_s must be finite and non-negative, got $(lock_check_s)"))
+    (isfinite(lock_ratio) && lock_ratio > 1) || throw(ArgumentError("PhotodiodeLoop: lock_ratio must be finite and above 1, got $(lock_ratio)"))
+    return PhotodiodeLoop(Float64(wa_calibration), Float64(tia_range), tec_stabilised, NaN, NaN, NaN,
+                          Float64(ramp_step_mW), Float64(ramp_step_s), Float64(lock_check_s), Float64(lock_ratio))
 end
 

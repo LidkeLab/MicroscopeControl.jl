@@ -210,6 +210,10 @@ function TCubeLaser(serialNo::String;
     wa_calibration::Union{Nothing,Real}=nothing,
     tia_range::Union{Nothing,Real}=nothing,
     tec_stabilised::Union{Nothing,Bool,Missing}=nothing,
+    ramp_step_mW::Union{Nothing,Real}=nothing,
+    ramp_step_s::Union{Nothing,Real}=nothing,
+    lock_check_s::Union{Nothing,Real}=nothing,
+    lock_ratio::Union{Nothing,Real}=nothing,
 )
     name = "TCubeLaser $serialNo"
     pd = if mode isa ConstantPhotocurrent
@@ -221,10 +225,14 @@ function TCubeLaser(serialNo::String;
             "wa_calibration is W/A measured with a power meter at the laser output; tia_range is the rear-panel DIP switch in A; " *
             "tec_stabilised is true, false or missing; properties carries the enforced min_power/max_power in mW; " *
             "max_current is the clamp initialize programs into the controller, the only real protection in closed loop."))
-        PhotodiodeLoop(; wa_calibration=wa_calibration, tia_range=tia_range, tec_stabilised=tec_stabilised)
+        loop_kw = (; (kw => v for (kw, v) in (:ramp_step_mW => ramp_step_mW, :ramp_step_s => ramp_step_s,
+                                              :lock_check_s => lock_check_s, :lock_ratio => lock_ratio) if v !== nothing)...)
+        PhotodiodeLoop(; wa_calibration=wa_calibration, tia_range=tia_range, tec_stabilised=tec_stabilised, loop_kw...)
     else
         given = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
-                                    :tec_stabilised => tec_stabilised) if v !== nothing]
+                                    :tec_stabilised => tec_stabilised, :ramp_step_mW => ramp_step_mW,
+                                    :ramp_step_s => ramp_step_s, :lock_check_s => lock_check_s,
+                                    :lock_ratio => lock_ratio) if v !== nothing]
         isempty(given) || throw(ArgumentError(
             "$name: $(join(given, ", ")) describe a photodiode loop, which only a ConstantPhotocurrent laser has; " *
             "this one is $(nameof(typeof(mode)))"))

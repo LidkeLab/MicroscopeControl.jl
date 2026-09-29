@@ -524,7 +524,7 @@ output_enabled(serialNo::AbstractString) = UInt32(LD_GetStatusBits(serialNo)) & 
 
 Send a setpoint **with the output on** and wait for the controller to report it
 back within [`SETPOINT_READBACK_TOLERANCE`](@ref) codes, throwing if it does not.
-Only call it with the output enabled: see [`SETPOINT_NEEDS_OUTPUT`](@ref).
+Only call it with the output enabled: see [`send_setpoint`](@ref).
 Nothing is recorded by this function.
 """
 function send_setpoint(light::TCubeLaser, code::UInt16)
@@ -543,54 +543,57 @@ function send_setpoint(light::TCubeLaser, code::UInt16)
 end
 
 """
-    RAMP_STEP_mW, RAMP_STEP_S
+    send_setpoint_ramped(light::TCubeLaser, code::UInt16, from::Integer)
 
-An optional ramp for upward closed-loop setpoint steps, **off by default**
-(`RAMP_STEP_mW[] = Inf`: every setpoint is a single write, ~10 ms). Set
-`RAMP_STEP_mW[]` to a finite value in mW and [`send_setpoint_ramped`](@ref)
-walks any larger upward step in increments of that size, `RAMP_STEP_S[]`
-apart. Downward steps and open loop are always sent directly.
-
-Why it exists, for the record (642 nm rig's TLD001, 2026-09-28/29): on one
-night a setpoint jumped from 0 to 10 mW locked the loop at ~90 mA / ~21 mW
-whatever the request, 3 times out of 3, while the same target reached in steps
-settled at 78 mA / 9.3 mW, as the Kinesis application does. Later the same
-night, after a Kinesis CONST P session, the jump worked 4 times out of 4
-(9.30-9.31 mW). Ramped runs never failed (10 of 10, 10-70 mW). The cause is
-not known. The jump is the default because it is the fastest and was reliable
-when last tested; if the lock recurs (the symptom: ~90 mA and ~21 mW whatever
-is requested) set `RAMP_STEP_mW[] = 3.0` and `RAMP_STEP_S[] = 0.01`, which
-were verified on the rig: 1 mW steps worked at 2 s, 50, 20, 10 and 5 ms
-spacing; below ~10 ms the USB round trip per write (~15 ms) sets the pace;
-3 mW steps at 10 ms reached 40 mW in 0.22 s (38.74 mW) and 70 mW in 0.38 s
-(68.59 mW).
+Send a setpoint with the output on. In `ConstantPhotocurrent` mode, if
+`pd.ramp_step_mW` is finite (see [`PhotodiodeLoop`](@ref), which also records
+why the ramp exists) an upward step of more than that many mW is walked up from
+`from`, one step every `pd.ramp_step_s`; the final code is confirmed by
+[`send_setpoint`](@ref). `from` is what the DRIVER knows the controller holds
+(`light_on` passes 0; `setoutputpower!` passes the code of its previous request),
+never `LD_GetLaserSetPoint`, which returns a stale word right after an enable
+(65530 on the rig). Downward steps, `ramp_step_mW = Inf` and open loop are one
+write, and open loop ignores `from`.
 """
-const RAMP_STEP_mW = Ref(Inf)
-
-"See [`RAMP_STEP_mW`](@ref)."
-const RAMP_STEP_S = Ref(0.01)
-
-"""
-    send_setpoint_ramped(light::TCubeLaser, code::UInt16)
-
-Send a setpoint with the output on. In `ConstantPhotocurrent` mode an upward
-step larger than [`RAMP_STEP_mW`](@ref) is walked up from the setpoint the
-controller currently holds, one step every `RAMP_STEP_S`; the final code is
-confirmed by [`send_setpoint`](@ref).
-"""
-send_setpoint_ramped(light::TCubeLaser{ConstantCurrent}, code::UInt16) = send_setpoint(light, code)
-function send_setpoint_ramped(light::TCubeLaser{ConstantPhotocurrent}, code::UInt16)
+send_setpoint_ramped(light::TCubeLaser{ConstantCurrent}, code::UInt16, from::Integer) = send_setpoint(light, code)
+function send_setpoint_ramped(light::TCubeLaser{ConstantPhotocurrent}, code::UInt16, from::Integer)
     serialNo, pd = light.serialNo, light.pd
-    isfinite(RAMP_STEP_mW[]) || return send_setpoint(light, code)   # ramp off: one write
-    start = Int(LD_GetLaserSetPoint(serialNo))
-    step = max(1, round(Int, RAMP_STEP_mW[] / 1000 / pd.wa_calibration / pd.tia_range * light.max_setpoint))
-    if 0 <= start && Int(code) - start > step
-        for c in (start + step):step:(Int(code) - 1)
+    isfinite(pd.ramp_step_mW) || return send_setpoint(light, code)   # ramp off: one write
+    step = max(1, round(Int, pd.ramp_step_mW / 1000 / pd.wa_calibration / pd.tia_range * light.max_setpoint))
+    if 0 <= from && Int(code) - from > step
+        for c in (from + step):step:(Int(code) - 1)
             check_err(LD_SetLaserSetPoint(serialNo, UInt16(c)), "LD_SetLaserSetPoint", serialNo)
-            sleep(RAMP_STEP_S[])
+            sleep(pd.ramp_step_s)
         end
     end
     send_setpoint(light, code)
+end
+
+"""
+    check_lock(light::TCubeLaser{ConstantPhotocurrent}, code)
+
+After a setpoint, wait `pd.lock_check_s` and compare the measured photocurrent
+([`measured_photocurrent`](@ref)) with the one `code` requests. If `code > 0`
+and the measurement exceeds `pd.lock_ratio` times the request, throw: the loop
+has probably locked at a high current whatever is requested (the failure the
+ramp works around; see [`PhotodiodeLoop`](@ref)). It never disables the output
+by itself; its callers do. A no-op in open loop.
+
+`[limitation]` the threshold and the wait are unvalidated on hardware (one
+night's lock measured about 98 uA for 44.6 uA requested, 2.2x) and need the
+642 nm rig check. A false trip refuses, which is the safe direction.
+"""
+check_lock(light::TCubeLaser{ConstantCurrent}, code) = nothing
+function check_lock(light::TCubeLaser{ConstantPhotocurrent}, code)
+    pd = light.pd
+    sleep(pd.lock_check_s)
+    measured = measured_photocurrent(light)
+    requested = photocurrent_from_code(light, code, pd.tia_range)
+    (code > 0 && measured > pd.lock_ratio * requested) && error(
+        "TCubeLaser $(light.serialNo): loop lock suspected: the photodiode reads $(measured) A for a request of $(requested) A " *
+        "(ratio $(measured / requested), limit $(pd.lock_ratio)). The output should be treated as running away from its setpoint. " *
+        "Construct the laser with the ramp (ramp_step_mW = 3.0) and try again.")
+    return nothing
 end
 
 """
@@ -773,7 +776,7 @@ end
 Enable the controller's output, then immediately send the setpoint the driver's
 recorded request asks for ([`intended_code`](@ref)) and confirm it, then record
 `properties.is_on`. The setpoint has to follow the enable: the controller
-ignores setpoints while its output is off ([`SETPOINT_NEEDS_OUTPUT`](@ref)).
+ignores setpoints while its output is off ([`send_setpoint`](@ref)).
 Called while the output is already on, this re-sends the recorded request,
 replacing any lower value set from Kinesis or the front panel. If nothing has
 been requested yet, setpoint 0 is sent, with a warning. In `ConstantCurrent`
@@ -784,7 +787,10 @@ If the setpoint cannot be sent or confirmed after the enable, the output is
 disabled again and the original error rethrown. `properties.is_on` is then what
 the cleanup left: `false` if the disable succeeded, `true` if it failed too
 (both failures are logged), so a failed `light_on` never records a lit diode as
-off.
+off. In `ConstantPhotocurrent` mode the setpoint is ramped from 0 when the laser
+was built with a finite `ramp_step_mW`, and [`check_lock`](@ref) then runs; a
+suspected loop lock is a failure after the enable like any other, so the output
+is disabled and the error rethrown.
 
 `[limitation]` Between the enable and the setpoint the controller runs on its
 stored setpoint, bounded in hardware only by its current-limit potentiometer;
@@ -807,7 +813,8 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     code = intended_code(light)
     check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
     try
-        send_setpoint_ramped(light, code)
+        send_setpoint_ramped(light, code, 0)   # the driver zeroes before every disable
+        check_lock(light, code)
     catch
         disabled, offerr = false, nothing
         try
@@ -860,7 +867,7 @@ before anything reaches the controller, and encodes through
 exceeds the requested one. With the output **on**, the setpoint is sent and
 confirmed from the controller's read-back. With the output **off**, it is
 recorded and `light_on` applies it right after enabling -- the controller would
-ignore it now ([`SETPOINT_NEEDS_OUTPUT`](@ref)).
+ignore it now ([`send_setpoint`](@ref)).
 
 # The bottom of the range commands nothing
 
@@ -906,9 +913,17 @@ Command the optical power at the laser output, in mW -- the plane where
 4. Convert: photocurrent `= power_mW / 1000 / wa_calibration` A, encoded by
    [`photocurrent_code`](@ref), rounding DOWN; above full scale it throws
    naming the DIP switch.
-5. With the output on, send and confirm the setpoint; with it off, leave it for
-   `light_on` ([`SETPOINT_NEEDS_OUTPUT`](@ref)).
-6. Record `pd.output_power_requested` and the DECODED `pd.photocurrent_requested`.
+5. With the output on, send and confirm the setpoint
+   ([`send_setpoint_ramped`](@ref), ramping from the code of the previous
+   request, `0` if none); with it off, leave it for `light_on`
+   ([`send_setpoint`](@ref)).
+6. With the output on, [`check_lock`](@ref) after sending. If the loop looks
+   locked, zero and disable the output (a failure of that is logged and does
+   not mask the lock error), then throw; the request is not recorded.
+7. Record `pd.output_power_requested` and the DECODED `pd.photocurrent_requested`.
+
+`[limitation]` the lock check's threshold and wait are unvalidated on hardware
+(see [`check_lock`](@ref)).
 
 It never touches `drive_current`: the loop owns the current. Whether the light
 at the output matches is a question for a power meter; see
@@ -931,7 +946,21 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
     (bits & STATUS_BITS.tia_under != 0 && on) && @warn(
         "TCubeLaser $serialNo: the photodiode amplifier reports UNDER range with the output on; the photocurrent is small for the selected range and its resolution is reduced")
     code = photocurrent_code(light, power_mW / 1000 / pd.wa_calibration)
-    on && send_setpoint_ramped(light, code)
+    if on
+        # What the controller holds is the previous request (read BEFORE `pd` is updated).
+        from = isnan(pd.photocurrent_requested) ? 0 : Int(photocurrent_code(light, pd.photocurrent_requested))
+        send_setpoint_ramped(light, code, from)
+        try
+            check_lock(light, code)
+        catch
+            try
+                zero_then_disable(light)
+            catch offerr
+                @error "TCubeLaser $serialNo: loop lock suspected and the disable failed; the output may still be ON" exception = offerr
+            end
+            rethrow()
+        end
+    end
     pd.output_power_requested = power_mW
     pd.photocurrent_requested = photocurrent_from_code(light, code, pd.tia_range)
     println("Laser output power set to $power_mW mW (photocurrent setpoint $(pd.photocurrent_requested) A)",

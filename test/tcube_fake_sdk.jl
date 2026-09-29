@@ -304,4 +304,3 @@ end
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.REQUEST_WAIT_S[] = 0.0
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.CLAMP_WAIT_S[] = 0.0
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.SETPOINT_CONFIRM_TIMEOUT_S[] = 0.05
-MicroscopeControl.HardwareImplementations.TCubeLaserControl.RAMP_STEP_S[] = 0.0

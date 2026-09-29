@@ -127,7 +127,8 @@ lab_summary("Core") do
         cc(; kw...) = TCubeLaser("00000000"; mode=ConstantCurrent(), kw...)
         cp_props() = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)
         cp(; kw...) = TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
-                                 tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), max_current=160.0, kw...)
+                                 tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), max_current=160.0,
+                                 lock_check_s=0.0, ramp_step_s=0.0, kw...) # no sleeping in the suite
 
         @testset "Constructor defaults" begin
             # Closed loop has no default clamp: it is the only real protection.
@@ -657,6 +658,49 @@ lab_summary("Core") do
             @test isnan(laser.pd.max_current_clamp)
         end
 
+        @testset "the ramp starts from what the driver knows; lock detection (fake SDK)" begin
+            ready(; kw...) = (FakeKinesis.reset!(); FakeKinesis.limit_follows_pot[] = true;
+                              l = cp(; kw...); initialize(l); l)
+            code_for(l, mW) = Int(TCube.photocurrent_code(l, mW / 1000 / 224.2))
+            enabled() = FakeKinesis.bits[] & FakeKinesis.ENABLED != 0
+            # (a) Measured 2x the request, output on: refused, and the output is turned off.
+            laser = ready()
+            setoutputpower!(laser, 10.0); light_on(laser)
+            FakeKinesis.photocurrent_raw[] = 2 * code_for(laser, 30.0)
+            @test_throws r"loop lock" setoutputpower!(laser, 30.0)
+            @test !enabled()
+            @test laser.properties.is_on == false
+            @test laser.pd.output_power_requested == 10.0   # the refused request is not recorded
+            # (b) The same through light_on.
+            laser = ready()
+            setoutputpower!(laser, 30.0)
+            FakeKinesis.photocurrent_raw[] = 2 * code_for(laser, 30.0)
+            @test_throws r"loop lock" light_on(laser)
+            @test !enabled()
+            @test laser.properties.is_on == false
+            # (d) 1.2x the request does not trip.
+            laser = ready()
+            setoutputpower!(laser, 30.0)
+            FakeKinesis.photocurrent_raw[] = round(Int, 1.2 * code_for(laser, 30.0))
+            light_on(laser)
+            @test enabled() && laser.properties.is_on
+            # (c) With a finite ramp and the output on, a step up walks from the
+            # PREVIOUS request's code: neither 0 nor the stale 65530.
+            laser = ready(; ramp_step_mW=3.0)
+            setoutputpower!(laser, 10.0); light_on(laser)
+            FakeKinesis.photocurrent_raw[] = 0
+            prev = code_for(laser, 10.0)
+            step = round(Int, 3.0 / 1000 / 224.2 / 1e-3 * 32767)
+            empty!(FakeKinesis.setpoints)
+            setoutputpower!(laser, 50.0)
+            @test prev < Int(first(FakeKinesis.setpoints)) <= prev + step
+            @test Int(last(FakeKinesis.setpoints)) == code_for(laser, 50.0)
+            # The ramp keywords are for closed loop only.
+            @test_throws ArgumentError cc(; ramp_step_mW=3.0)
+            @test_throws ArgumentError cc(; lock_ratio=2.0)
+            @test cp().pd.lock_ratio == 1.5 && cp().pd.ramp_step_mW == Inf
+        end
+
         @testset "setoutputpower! (fake SDK)" begin
             # Refused before initialize: the clamp is not programmed, and it is
             # the only real protection in closed loop.
@@ -692,35 +736,38 @@ lab_summary("Core") do
             light_on(laser)
             # The ramp is off by default (jumps were reliable on the rig when last
             # tested): enable, read the held setpoint, one write, confirmed.
-            @test isinf(TCube.RAMP_STEP_mW[])
-            @test FakeKinesis.calls == [guard..., "LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            @test isinf(laser.pd.ramp_step_mW)
+            @test FakeKinesis.calls == [guard..., "LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint",
+                                        "LD_GetPhotoCurrentReading"] # the last is check_lock's
             code = FakeKinesis.setpoints[end]
             @test code == UInt16(floor(i_pd / 1e-3 * 32767))
             @test FakeKinesis.setpoint_held[] == code
             # With the ramp enabled (the safeguard verified on the rig), the same
             # 0 -> 50 mW is walked in ~3 mW steps: ~16 intermediate sends, then
-            # the final one, confirmed.
+            # the final one, confirmed. It starts from 0, not from a read-back.
             light_off(laser)
-            TCube.RAMP_STEP_mW[] = 3.0
+            laser.pd.ramp_step_mW = 3.0
             try
                 empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
                 light_on(laser)
-                @test FakeKinesis.calls[1:6] == [guard..., "LD_EnableOutput", "LD_GetLaserSetPoint"]
-                @test FakeKinesis.calls[end] == "LD_GetLaserSetPoint"
-                @test all(==("LD_SetLaserSetPoint"), FakeKinesis.calls[7:end-1])
+                @test FakeKinesis.calls[1:5] == [guard..., "LD_EnableOutput"]
+                @test FakeKinesis.calls[end] == "LD_GetPhotoCurrentReading"
+                @test FakeKinesis.calls[end-1] == "LD_GetLaserSetPoint"
+                @test all(==("LD_SetLaserSetPoint"), FakeKinesis.calls[6:end-2])
                 @test FakeKinesis.setpoints[end] == code
                 step = round(Int, 3.0 / 1000 / 224.2 / 1e-3 * 32767)
                 @test 15 <= length(FakeKinesis.setpoints) <= 18
                 @test issorted(FakeKinesis.setpoints)
                 @test all(d -> 0 < d <= step, diff(Int.(FakeKinesis.setpoints)))
             finally
-                TCube.RAMP_STEP_mW[] = Inf
+                laser.pd.ramp_step_mW = Inf
             end
             # With the output on, a new power is sent and confirmed at once (after
             # checking the photodiode is not reading 0x8000, over range).
             empty!(FakeKinesis.calls)
             setoutputpower!(laser, 50.0)
-            @test FakeKinesis.calls == [guard..., "LD_GetStatusBits", "LD_GetPhotoCurrentReading", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            @test FakeKinesis.calls == [guard..., "LD_GetStatusBits", "LD_GetPhotoCurrentReading", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint",
+                                        "LD_GetPhotoCurrentReading"]
             # Downward steps are sent directly, no ramp.
             empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
             setoutputpower!(laser, 10.0)
