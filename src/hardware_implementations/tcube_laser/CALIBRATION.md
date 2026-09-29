@@ -8,6 +8,7 @@ your mW into a photocurrent setpoint through two numbers you must supply:
 | Number | Keyword | What it is | Where it comes from |
 |---|---|---|---|
 | W/A factor | `wa_calibration` | optical power at the laser output per amp of monitor photocurrent | measured with a power meter (this document) |
+| Calibration reference | `ref_current_mA`, `ref_photocurrent_A` | an open-loop current and the photocurrent in A read at it, re-checked at the first `light_on` after every `initialize` | measured with the W/A factor (step 3b) |
 | TIA range | `tia_range` | full scale of the photodiode amplifier, in A: `10e-6`, `100e-6`, `1e-3` or `10e-3` | the rear-panel DIP switch on the TLD001; `initialize` refuses to start if the controller reports a different one |
 
 The conversion both ways is
@@ -31,6 +32,7 @@ and the endpoints of `setlevel!` and the panel slider).
 | Measurement plane | power meter **before the fibre** (coupling efficiency drifts, so the meter is never read after it) |
 | Measured by | Ali Kazemi Nasaban Shotorban, recorded in `helpers.jl`, Oct 2024 |
 | Threshold | ~65 mA |
+| Calibration reference | none recorded yet (see step 3b) |
 
 Verification, in closed loop with those two factors: power commanded through
 the formula above versus power measured before the fibre, in mW. Single
@@ -63,6 +65,7 @@ laser = TCubeLaser("00000000";
     tia_range         = 1e-3,      # A, the rear-panel DIP switch
     tec_stabilised    = missing,   # true / false once known; `missing` is honest until then
     threshold_current = 65.0,      # mA
+    # ref_current_mA = 90.0, ref_photocurrent_A = <measured>,  # step 3b; without it light_on warns
     max_current       = 150.0,     # mA, your diode's rating: programmed into the controller as the loop's clamp
     properties        = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))  # [1 mW, 70 mW]: the 70 is max_power, your diode's rating
 
@@ -79,11 +82,13 @@ rig's TLD001, serial `64849775`). Facts the driver's docstrings already state
 are marked with where.
 
 - A plain `LD_SetMaxCurrentDigPot` is ignored: adjust mode (`LD_EnableMaxCurrentAdjust`) and a pause before leaving it are needed, 2026-09-28 (driver: `set_digpot!`, `CLAMP_WAIT_S`).
-- The header's potentiometer scale (`position * 220 / 255` mA) is wrong for this unit: position 204 gave 160.74 mA and 194 gave 152.43 mA, 2026-09-28 (driver: `DIGPOT_STEP_ESTIMATE_mA`).
+- The header's potentiometer scale (`position * 220 / 255` mA) is wrong for this unit: position 204 gave 160.74 mA and 194 gave 152.43 mA, 2026-09-28; the manual gives about 0.7 mA per step (p.28, p.38); position 203 read 159.9 mA, and the limit readback is stable across fresh reads, 2026-09-29 (driver: `DIGPOT_STEP_ESTIMATE_mA`).
 - The potentiometer position does not survive a controller power cycle, 2026-09-29; `initialize` re-programs it every time and power-mode `light_on` re-checks it.
 - The controller ignores a setpoint sent while its output is off and then runs on a stale stored setpoint (on this rig the diode went to its ~160 mA limit); the setpoint read-back is stale with the output off (65530), 2026-09-28 (driver: `send_setpoint`).
 - The photodiode UNDER-range flag was set at 1 mW (4.5 uA on the 1 mA range) while the loop regulated correctly, 2026-09-29; the driver warns and does not refuse.
 - The photocurrent reading is signed and `0x8000` means over range (seen at 110 mA open loop on the 1 mA range), 2026-09-28 (driver: `measured_photocurrent`).
+- The controller answers one request behind: the first `LD_RequestStatusBits` after an enable returned the pre-enable bits even 0.5 s later; readings behave the same, 2026-09-29 (driver: `request_twice`).
+- With no light the photocurrent reads raw 65532, i.e. -4 signed, 2026-09-29.
 - A setpoint jumped up from 0 can lock the loop at ~90 mA / ~21 mW / ~98 uA whatever is requested: 3 of 3 at 10 mW, then 4 of 4 without the lock after a Kinesis CONST P session; stepped setpoints never failed (10 of 10), 2026-09-28/29 (driver: `PhotodiodeLoop`'s `ramp_step_mW` field, `check_lock`).
 - One USB write takes about 15 ms, so ramp pauses below ~10 ms do not go faster, 2026-09-29.
 - The controller must be power-cycled when switching between the Kinesis application and this driver, in either direction (`LD_Open` error 2, or "load device failed" in Kinesis, until then), 2026-09-29. Recorded only here.
@@ -161,7 +166,8 @@ plane**. Recalibrate when any of these changes:
   measure the W/A factor again on the new range rather than assuming it carries over);
 - the diode, its mount or the photodiode is replaced or realigned;
 - the plane you want to quote power at changes;
-- the verification (step 5) drifts by more than you can accept.
+- the verification (step 5) drifts by more than you can accept;
+- record a new calibration reference whenever the W/A factor is re-measured.
 
 It is also worth re-running step 5 every few months: it takes minutes and tells
 you whether the old factor still holds.
@@ -249,6 +255,31 @@ shutdown(laser)
 
 Check the residuals: if power against photocurrent is not a straight line, the
 range is wrong (step 1) or the photodiode is saturating.
+
+### 3b. Record the calibration reference
+
+Do this in the same session, on the same range and gain as the W/A factor. Pick one
+current from the sweep at least 20 mA above threshold and at most the power-mode
+`max_current`, whose indicated power is at most `max_power` (the constructor refuses
+otherwise). On the 642 nm rig that is 90 mA (about 99 uA, about 22 mW at 224.2 W/A).
+
+```julia
+TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
+setcurrent!(laser, 90.0); sleep(1.0)
+ref_photocurrent_A = TCube.photocurrent_from_raw(laser, TCube.read_photocurrent_word(laser), 1e-3)  # decode with the tia_range the power-mode config will state
+```
+
+Then pass `ref_current_mA = 90.0, ref_photocurrent_A = ref_photocurrent_A` when you build
+the power-mode laser (step 4). The first `light_on` after every `initialize` then drives the
+diode in open loop at `ref_current_mA`, reads the photodiode, and refuses unless the reading
+is within a factor `ref_ratio` (default 1.5) of `ref_photocurrent_A`, in either direction; the
+output is off after the check. A range the reading does not follow, or a `tia_range`
+relabelled with W/A kept, fails that check. Re-measure W/A and the reference whenever the
+switch moves.
+
+`[limitation]` the 642 nm rig's words of 2026-09-29 (375 / 1802 / 6172 at 70 / 80 / 110 mA)
+are **not** a reference for its W/A factor. That factor dates from Oct 2024, and the gain was
+re-optimised on 2026-09-28 (see above). Record the reference at the next W/A verification.
 
 ### 4. Build the laser in closed loop
 

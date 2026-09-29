@@ -10,6 +10,49 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Fixed
+
+- `TCubeLaser`: every fresh read of the controller (the status word, the current limit, the
+  potentiometer position, the W/A read-back, `initialize`'s limit read and `tcube_get_current`)
+  now sends its request twice before reading. The 642 nm rig's TLD001 answers one request behind
+  (2026-09-29), so a single request could let `light_on`'s current-limit gate pass a
+  potentiometer raised since the previous read, and the enable then ran above `max_current`
+  until the setpoint landed.
+- `TCubeLaser` power mode: `check_lock` makes its own readings and status requests and refuses
+  in both directions. Besides a photocurrent above `lock_ratio` times the request, it refuses when
+  the controller reports its current limit reached (status bit `0x400`) or the photocurrent is
+  below the request divided by `lock_ratio`; the output is then zeroed and disabled, as for a
+  suspected lock. It used to read the polled cache and test only the high side, so a loop driven
+  to the clamp -- by a request the clamp cannot reach, or by a photodiode giving fewer counts per
+  mW than at calibration -- went unnoticed.
+- `PhotodiodeLoop` refuses a `lock_check_s` below 0.1 s (`LOCK_CHECK_MIN_S`): 0 was accepted and
+  disabled the lock check. A construction passing a smaller value now throws.
+- `TCubeLaser`: `measured_current` (and so `loop_status`) accepts the raw reading -32768, which
+  the Kinesis header defines as -220 mA, instead of throwing.
+- `TCubeLaser`: the header's potentiometer floor, 17.25 mA, no longer gates anything. Open-loop
+  `initialize` lowers the potentiometer for any `max_current` below the controller's limit, and
+  power-mode construction no longer refuses a `max_current` under 17.25 mA; the limit the
+  controller reports decides (the 642 nm rig's unit reads 16.74 mA at the lowest position).
+
+### Added
+
+- A calibration reference for power mode: `ref_current_mA`, `ref_photocurrent_A` and `ref_ratio`
+  (default 1.5) on `PhotodiodeLoop`, `TCubeLaser` and `SimDiodeLaser` (which stores them and does
+  not check). With a reference, the first power-mode `light_on` after each `initialize` runs the
+  diode in open loop at `ref_current_mA`, reads the photodiode, and refuses unless the photocurrent
+  is within a factor `ref_ratio` of `ref_photocurrent_A`; the output is off after the check either
+  way. Without one, that `light_on` warns once that the check is skipped. See `CALIBRATION.md`.
+  **Every rig that uses power mode should record one** (`ref_current_mA`, `ref_photocurrent_A`),
+  with its next W/A measurement; `CALIBRATION.md` step 3b says how.
+
+### Changed
+
+- `TCubeLaser` power mode: `light_on` and `setoutputpower!` each take about 0.4 s longer (the
+  doubled requests and `check_lock`'s own reads).
+- `TCubeLaser`: the potentiometer search steps by the manual's ~0.7 mA per position instead of the
+  header's 220/255 mA, and may take one more setting to settle. The controller's readback still
+  decides every position.
+
 ## [0.2.5] - 2026-09-29
 
 A non-breaking release. It brings the TCube laser's closed-loop (power) mode and
