@@ -1,0 +1,6 @@
+# Test groups (admiral decision 0008). Minimal form, so record_tests.jl (decision 0009) can
+# record this package: the whole current suite is Core. Adopting the full 0008 layout
+# (group folders, the lab runner) waits for the package-standard pass.
+#   Core      test/*.jl, included from runtests.jl   plain Pkg.test()
+
+[Core]

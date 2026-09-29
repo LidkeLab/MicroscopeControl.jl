@@ -5,3 +5,5 @@
 /docs/Manifest.toml
 /docs/build/
 .DS_Store
+# Local run output: test records, logs, handoffs (lab decision 0028)
+dev/output/
