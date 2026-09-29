@@ -32,6 +32,68 @@ the next version with `-DEV`).
   unchanged. Reported by the MicroscopeAdapt rig; not yet run on hardware
   (#64).
 
+PI N-472 actuator driver (`PI_N472`): initialize, shutdown and stop. The
+lifecycle is covered by fake-GCS2 tests that run on every machine
+(`test/pi_n472_fake_sdk.jl`). Hardware: not verified in this repository. The
+author reports exercising initialize, `stopmotion` with no motion in
+progress, shutdown, re-initialize and a refused second object on a C-885
+(SN 124014300), with no motion commanded; stop during motion and the
+connect-failure branch were not exercised on hardware.
+
+- **A failed connect was silent and poisoned the object.** `connectionstatus`
+  was set before `PI_ConnectUSB` was called and its `-1` return never checked,
+  so every later GCS call failed quietly, "Stage initialized" was still logged,
+  and a retry was refused as "already initialized". The flag is now set only
+  after a successful connect; a failure logs the description and
+  `PI_GetInitError()` and leaves the object retryable. The intermittent
+  initialize seen on the rig is more likely another process holding the
+  controller, made sticky by this bug, than anything in the connect string;
+  that is not established, so do not treat it as fixed until the rig says so.
+- **`shutdown` never cleared `connectionstatus`**, so re-initializing the same
+  object in one session was always refused. It now clears the flag.
+- **`shutdown` could close another object's connection.** `id` defaulted to
+  `0`, a valid GCS ID, and `shutdown` never reset it, so a second `shutdown` on
+  a closed object, or a `shutdown` on one never initialized, closed whichever
+  controller then held ID 0. `id` now defaults to `-1` and `shutdown` resets it.
+- **`stopmotion` could not reach the controller.** It passed `stage.axes`, a
+  `Vector{String}`, where the DLL wants one space-separated `Ptr{Cchar}`
+  string; the pointer handed over pointed at string references, not
+  characters. It now joins the axes like every other call in the driver.
+- **The connect string relied on an implementation detail.** `initialize`
+  filtered every `0x00` out of the enumeration buffer and passed the bare
+  `Vector{UInt8}`. On current Julia that happens to leave a zero just past the
+  shrunk vector, so the DLL did see a terminated string, but by accident of
+  `filter`'s implementation, and carrying the enumeration's trailing newline
+  (and every further description when several controllers are attached). It
+  now passes the first description, whitespace-stripped, as a `String`, which
+  Julia always NUL-terminates at a `Ptr{Cchar}` boundary. The buffer grew from
+  128 to 1024 bytes to match the C-867 driver.
+
+### Changed
+
+Behaviour a rig pinned to an earlier tag will see from the PI N-472 driver,
+each on its own:
+
+- **`initialize(::N472)` now throws when a setup step fails.** After the
+  connect, every step (reference mode, `PI_POS`, servos, travel range,
+  velocity) is checked; a failure closes the connection, clears
+  `connectionstatus` and `id`, and throws with the step and its GCS error
+  code. Before, failures were ignored and "Stage initialized" was logged on a
+  half-initialized stage. Enumeration and connect failures still log `@error`
+  and return, as `initialize(::PIStage)` does. Not a break under this
+  package's versioning rule: it changes behaviour only on a path that was
+  already broken.
+- **Re-initializing after `shutdown` now re-zeroes the frame.** A second
+  `initialize` on the same object was refused and did nothing; it now runs the
+  full sequence: reference mode off, `PI_POS` redefining the current position
+  as `homepos`, servos on. A script that used shutdown-then-initialize as a
+  reconnect now resets its coordinates to wherever the actuator sits.
+- **With several C-885s attached, `initialize` connects to the first
+  enumerated one.** There is no selection by serial number.
+- **`N472()` defaults `id` to `-1`**, not `0`.
+- **`setvel(::N472)` returns `FALSE` when `PI_VEL` fails.** It used to return
+  only the status of the `PI_qVEL` read-back.
+
 ### Changed (release process)
 - **`main` is the development branch**, carrying the next version with
   `-DEV`; every pull request goes into it. The `0.3rc1` release-candidate

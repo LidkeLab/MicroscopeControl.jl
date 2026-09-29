@@ -8,6 +8,10 @@ const HDF5 = MicroscopeControl.HDF5
 # be included at top level, before the testsets. See the file for the seam.
 include("tcube_fake_sdk.jl")
 
+# Likewise for the PI N-472's GCS2 wrappers, so `initialize`/`shutdown` run
+# against a recorder and never a rig's controller. Top level, before the testsets.
+include("pi_n472_fake_sdk.jl")
+
 # Writes the lab test record summary when LAB_TEST_SUMMARY is set; see the file.
 include("lab_summary.jl")
 
@@ -707,6 +711,8 @@ lab_summary("Core") do
             end
         end
     end
+
+    include("pi_n472.jl")
 
     include("contract.jl")
     include("skills.jl")
