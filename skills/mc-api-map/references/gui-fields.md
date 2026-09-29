@@ -75,4 +75,47 @@ panel is observably read-only. The fix is scoped to the shared light panel;
 it is not a guarantee about the others, and `gui(::DAQ)` still calls
 `showdevices`/`showchannels` at construction.
 
+From 0.2.5 this panel serves only the lights that are not a `DiodeLaser`
+(`CrystaLaser`, `VortranLaser`, `DaqTrLight`, `SimLight`); a `DiodeLaser` has its
+own, below.
+
+## `gui(::DiodeLaser)` (0.2.5)
+
+Dispatches on `regulation_mode(laser)` to `current_panel` (`ConstantCurrent`:
+slider in mA over `min_current .. effective_max_current(laser)`, calling
+`setcurrent!`) or `power_panel` (`ConstantPhotocurrent`: slider in mW **at the
+laser output** over `properties.min_power .. max_power`, calling
+`setoutputpower!`, with a basis line naming `wa_calibration`, the TIA range and
+the TEC state; the range is printed as `[lo mW - hi mW]`). Enumerated from
+`lightsource_interface/diode_laser_gui.jl`; `TCubeLaser` and `SimDiodeLaser`
+carry every field.
+
+| Field | Read by | Notes |
+|---|---|---|
+| `unique_id::String` | header label and window title | both panels |
+| `properties.is_on` | initial state of the on/off toggle | both panels; the toggle, not the slider's bottom, is "off" |
+| `properties.min_power`, `max_power` | slider range and textbox bounds | `power_panel` only; mW at the laser output |
+| `min_current` | slider floor | `current_panel` only |
+| `effective_max_current(laser)` (a method) | slider ceiling | `current_panel` only; falls back to `max_current`, `TCubeLaser` takes the smallest of `max_current`, `controller_max_current`, `max_setcurrent` |
+| `threshold_current` | header text (`"unknown"` when `NaN`) | `current_panel`; also `loop_status`'s `below_threshold` |
+| `drive_current` | slider start and "commanded" line | `current_panel` only |
+| `pd.wa_calibration`, `pd.tia_range`, `pd.tec_stabilised` | basis line; `wa_calibration` also for the readout's indicated power | `power_panel` only |
+| `pd.output_power_requested`, `pd.photocurrent_requested` | slider start and "commanded" line | `power_panel` only |
+
+`properties.power` is **not** read by either panel.
+
+Methods called, each only on a user action: `setcurrent!`/`setoutputpower!` (slider
+or textbox), `light_on`/`light_off` (toggle), `loop_status` (the Read button, or
+the Poll toggle at 2 Hz, which stops when turned off or the window closes).
+
+`[guarantee]` Opening either panel issues **no command and no read**: the readout
+shows "not read yet" until Read is pressed or Poll (off at construction) is
+turned on. On a `SimDiodeLaser` this is checkable: `laser.log` gains nothing when
+the panel opens. `[guarantee]` The textbox accepts only a number within the
+slider's range, the same bounds the driver enforces; anything else is not
+applied and the border turns red. An entry moves the slider, so it issues exactly
+one command. The "commanded" line is refreshed from the device's fields only after
+the command returns, and a refusal is shown in the panel as `refused: <message>`,
+not thrown out of the callback.
+
 `gui(::TRIG)` exists for `Triggerscope4`; `MLSLM` has no `gui` at all.

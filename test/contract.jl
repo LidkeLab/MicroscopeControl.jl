@@ -38,7 +38,24 @@ function has_specific_method(f, T, argtypes...)
     sig = Tuple{T, argtypes...}
     hasmethod(f, sig) || return false
     m = which(f, sig)
-    return m.sig.parameters[2] === T
+    # A `where`-method has a `UnionAll` signature, whose `.parameters` throws;
+    # unwrap it so the gate fails rather than errors on one.
+    p = m.sig isa UnionAll ? Base.unwrap_unionall(m.sig).parameters[2] : m.sig.parameters[2]
+    return p === T
+end
+
+# Devices are the non-abstract leaves. `subtypes` is one level deep, so an
+# abstract intermediate (`DiodeLaser`) hides every driver beneath it from any
+# loop over `subtypes(iface)`: `TCubeLaser` would silently stop being tested the
+# moment it moved under one. `isabstracttype`, not `isconcretetype`: a
+# parametric driver such as `TCubeLaser` is a `UnionAll`, not concrete, and
+# must be kept.
+function device_types(T)
+    out = Any[]
+    for S in subtypes(T)
+        isabstracttype(S) ? append!(out, device_types(S)) : push!(out, S)
+    end
+    return out
 end
 
 @testset "Interface Contract" begin
@@ -90,9 +107,8 @@ end
     # 1-arg contract call never reached it and fell through to the
     # (throwing) instrument-level stub. As of 0.2.3 the 1-arg method exists
     # and the exclusion is gone with it, which is what makes the generic
-    # assertion below cover this type. The 2-arg form survives as a
-    # deprecated forwarder, so the assertion below is about which method
-    # answers a 1-arg call, not about the other one being absent.
+    # assertion below cover this type. The 2-arg form was a deprecated
+    # forwarder, kept until the next breaking release.
     no_core_methods = Set([:MLSLM])
     no_initialize = Set([:ThorCamCSCCamera])
     no_shutdown = Set{Symbol}()
@@ -102,7 +118,7 @@ end
 
     @testset "Core AbstractInstrument contract" begin
         for iface in interfaces
-            for T in subtypes(iface)
+            for T in device_types(iface)
                 nameof(T) === :StageFormat && continue # not a device, a config format
                 nameof(T) === :_ContractDummyStage && continue # test fixture, not a device
                 T === _ShadowFixture.S && continue # shadow-guard fixture, not a device
@@ -131,7 +147,9 @@ end
     @testset "No shadowed generics in submodules" begin
         generics = (:gui, :initialize, :shutdown, :export_state, :move, :getposition, :getrange, :stopmotion, :home, :servo,
                     :capture, :getdata, :getlastframe, :abort, :live, :sequence, :setexposuretime!, :setroi!, :settriggermode!,
-                    :setpower, :light_on, :light_off, :setdrivevoltage, :getdrivevoltage, :settransmission, :gettransmission)
+                    :setpower, :light_on, :light_off, :setcurrent!, :setoutputpower!, :setlevel!,
+                    :measured_current, :measured_photocurrent, :indicated_output_power, :loop_status,
+                    :regulation_mode, :supported_modes, :setdrivevoltage, :getdrivevoltage, :settransmission, :gettransmission)
 
         # PI (pi_stage) deliberately names its low-level ccall wrappers
         # `move`, `getposition`, `getrange`, `stopmotion` and `servo` -- the
@@ -207,32 +225,54 @@ end
     end
 
     @testset "LightSource contract" begin
-        for T in subtypes(MC.LightSource)
-            @test has_specific_method(MC.setpower, T, Float64)
-            # `light_on`'s own docstring and every driver implement the 1-arg
-            # `light_on(::T)` form, but the interface stub in
-            # lightsource_interface/interface_functions.jl is declared with a
-            # second `ipower::Float64` argument that no driver actually takes.
-            # `MC.light_on(light, power)` therefore throws for every
-            # LightSource today -- a pre-existing interface/driver arity
-            # mismatch, not something to paper over with a fake 2-arg wrapper.
-            # Tracked as broken rather than skipped so a real fix flips it.
-            @test_broken has_specific_method(MC.light_on, T, Float64)
-            @test has_specific_method(MC.light_on, T) # the arity drivers actually implement
-            @test has_specific_method(MC.light_off, T)
-        end
+        lights = device_types(MC.LightSource)
+        # The regression the hierarchy made possible: `subtypes(LightSource)`
+        # lists `DiodeLaser`, not the drivers beneath it. If the walk ever
+        # loses them again, this fails instead of coverage quietly vanishing.
+        @test :TCubeLaser in nameof.(lights)
+        @test :SimDiodeLaser in nameof.(lights)
+        @test :DiodeLaser ∉ nameof.(lights)
 
-        # `export_state` arity, named for the type it was actually wrong on.
-        # The generic loop above now covers `TCubeLaser` (it is no longer in
-        # `no_export_state`). The bug was that the only method took an unused
-        # second positional argument, so `export_state(laser)` matched nothing
-        # on this type and fell through to the throwing stub; adding the 1-arg
-        # method is the whole fix. The 2-arg form is deliberately still here as
-        # a deprecated forwarder (removal scheduled for 0.3.0), so assert both:
-        # the 1-arg form dispatches to this type, and the 2-arg form is a
-        # method on this type rather than the generic stub it used to shadow.
+        for T in lights
+            # Mode-shared methods are written against the bare (UnionAll) type.
+            # The 2-arg `light_on(light, ipower)` stub was removed in 0.2.5:
+            # "on at a power" has no definable unit across lights.
+            @test has_specific_method(MC.light_on, T)
+            @test has_specific_method(MC.light_off, T)
+            @test !hasmethod(MC.light_on, Tuple{T,Float64})
+            if T <: MC.DiodeLaser
+                modes = MC.supported_modes(T)
+                @test !isempty(modes)
+                for M in modes
+                    TM = T{M}
+                    # Asserted by value: `regulation_mode` is a `where` method.
+                    @test MC.regulation_mode(TM) isa M
+                    # Mode-specific methods are written against the instantiation.
+                    if M === MC.ConstantCurrent
+                        @test has_specific_method(MC.setcurrent!, TM, Float64)
+                        @test !has_specific_method(MC.setoutputpower!, TM, Float64)
+                    else
+                        @test has_specific_method(MC.setoutputpower!, TM, Float64)
+                        @test has_specific_method(MC.indicated_output_power, TM)
+                        @test !has_specific_method(MC.setcurrent!, TM, Float64)
+                    end
+                    # `setlevel!` is the shared DiodeLaser method, never the
+                    # LightSource stub; `setpower` is the DiodeLaser method
+                    # (a deprecated forwarder in open loop, a refusal in closed),
+                    # never a driver method.
+                    @test which(MC.setlevel!, Tuple{TM,Float64}).sig.parameters[2] === MC.DiodeLaser
+                    @test which(MC.setpower, Tuple{TM,Float64}).sig.parameters[2] === MC.DiodeLaser
+                end
+                for f in (MC.measured_current, MC.measured_photocurrent, MC.loop_status)
+                    @test has_specific_method(f, T)
+                end
+            else
+                @test has_specific_method(MC.setpower, T, Float64)
+            end
+        end
         @test has_specific_method(MC.export_state, MC.TCubeLaser)
-        @test has_specific_method(MC.export_state, MC.TCubeLaser, Any)
+        # The 2-arg deprecated forwarder is kept until the next breaking release.
+        @test hasmethod(MC.export_state, Tuple{MC.TCubeLaser,Any})
     end
 
     @testset "Stub throws" begin

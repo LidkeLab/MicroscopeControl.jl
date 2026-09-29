@@ -27,7 +27,7 @@ function N472(;
     dimensions::Int=1,
     axes::Vector{String}=["1", "3", "5"],
     connectionstatus::Bool=false,
-    id::Cint=Cint(0),
+    id::Cint=Cint(-1),
     pos::Vector{Float64}=[0.0, 0.0, 0.0],
     minpos::Vector{Float64}=[0.0, 0.0, 0.0],
     maxpos::Vector{Float64}=[7.0, 7.0, 7.0],

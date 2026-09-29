@@ -8,9 +8,62 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
-## [Unreleased]
+## [0.2.5] - 2026-09-29
+
+A non-breaking release. It brings the TCube laser's closed-loop (power) mode and
+the `DiodeLaser` interface (#66), the PI N-472 and PI stage fixes (#67, #64), and
+the Kinesis boolean binding split (#70). Every 0.2.4 line keeps its meaning,
+with one deliberate exception. An open-loop rig whose stored current limit is
+above `max_current` is now refused at `light_on`: that includes a `max_current`
+below about 17.25 mA, and a limit that could not be lowered (see below). An
+open-loop TCube rig also sees new controller calls, listed under Changed, and
+none of them has yet run on hardware.
+
+**UPGRADE WARNING, as for 0.2.4.** Before repinning a rig to 0.2.5:
+- check every `setpower`/`setcurrent!` value that precedes a `light_on`;
+- set `max_current` to the diode's rating;
+- set the current limit stored in the controller (with its front-panel encoder
+  or by software) at or below that rating;
+- run a hardware check of the new sequence.
+
+**Deliberate safety change a rig may notice: `light_on` on an open-loop
+`TCubeLaser` now REFUSES while the current limit stored in the controller (set
+with its front-panel encoder or by software) is above `max_current`.** It reads
+that limit fresh before every enable (Codex C1 and C4, from the post-merge review
+of 0.2.4). Between an enable and the setpoint that follows it, the diode runs on
+the controller's stored setpoint. The controller ignores setpoints while its
+output is off, so software cannot clear that setpoint in advance, and the stored
+limit is the only bound on that interval. `initialize` lowers the stored limit to
+`max_current` when it can. When it cannot (a `max_current` below about 17.25 mA,
+or a failed lowering), it warns, and `light_on` then refuses until the limit is
+lowered. Closed loop already refused above its programmed clamp. Also from that
+review:
+- a failed enable is rolled back like a failed setpoint, with a zero and then
+  the disable (C2);
+- `properties.is_on` is recorded as true from the moment the enable is sent, so
+  a failure during the setpoint never reports a lit diode as off (C3).
+Not yet run on hardware.
+
+**Hardware verification.** Closed loop was run on the 642 nm rig on #66's
+original head. The review changes on top of it, the open-loop changes and the PI
+changes are exercised only against fake controllers.
 
 ### Fixed
+- **TCube laser: Kinesis boolean arguments are passed as four bytes.** Every
+  Kinesis boolean was bound as a one-byte `Bool`. That is right for return
+  values, but the headers declare arguments as a four-byte type, so the
+  controller could read three bytes of whatever the register held. Arguments
+  (`LD_EnableMaxCurrentAdjust`, `LD_EnableTIAGainAdjust`,
+  `LD_EnableLastMsgTimer`) are now a zero-extended `Cuint` (`KBOOL_ARG`), and
+  returns stay one byte (`KBOOL_RET`); the vendor facts are in
+  `manuals/Thorlabs/TLD001/BINDING.md` (see CLAUDE.md, "Instrument
+  documentation archive"). In this release `LD_EnableMaxCurrentAdjust` is
+  called by the current-limit programming (#66); the other two are not called.
+- **Diode laser panel: the output toggle's label follows the driver, not the
+  click.** After a `light_on`/`light_off` that failed, the label and the toggle
+  showed the requested state while the diode was in the other; both now show
+  `properties.is_on`, and the toggle is put back without re-firing a command.
+  Not yet run on hardware (#66).
 - **PI stage: `initialize` no longer finishes on an unreferenced stage.** It
   ignored the return of the reference move (`PI_FRF`), so when the controller
   rejected it (GCS error 5, e.g. one axis's servo off) the later move to the
@@ -22,12 +75,304 @@ the next version with `-DEV`).
   unchanged. Reported by the MicroscopeAdapt rig; not yet run on hardware
   (#64).
 
+PI N-472 actuator driver (`PI_N472`): initialize, shutdown and stop. The
+lifecycle is covered by fake-GCS2 tests that run on every machine
+(`test/pi_n472_fake_sdk.jl`). Hardware: not verified in this repository. The
+author reports exercising initialize, `stopmotion` with no motion in
+progress, shutdown, re-initialize and a refused second object on a C-885
+(SN 124014300), with no motion commanded; stop during motion and the
+connect-failure branch were not exercised on hardware.
+
+- **A failed connect was silent and poisoned the object.** `connectionstatus`
+  was set before `PI_ConnectUSB` was called and its `-1` return never checked,
+  so every later GCS call failed quietly, "Stage initialized" was still logged,
+  and a retry was refused as "already initialized". The flag is now set only
+  after a successful connect; a failure logs the description and
+  `PI_GetInitError()` and leaves the object retryable. The intermittent
+  initialize seen on the rig is more likely another process holding the
+  controller, made sticky by this bug, than anything in the connect string;
+  that is not established, so do not treat it as fixed until the rig says so.
+- **`shutdown` never cleared `connectionstatus`**, so re-initializing the same
+  object in one session was always refused. It now clears the flag.
+- **`shutdown` could close another object's connection.** `id` defaulted to
+  `0`, a valid GCS ID, and `shutdown` never reset it, so a second `shutdown` on
+  a closed object, or a `shutdown` on one never initialized, closed whichever
+  controller then held ID 0. `id` now defaults to `-1` and `shutdown` resets it.
+- **`stopmotion` could not reach the controller.** It passed `stage.axes`, a
+  `Vector{String}`, where the DLL wants one space-separated `Ptr{Cchar}`
+  string; the pointer handed over pointed at string references, not
+  characters. It now joins the axes like every other call in the driver.
+- **The connect string relied on an implementation detail.** `initialize`
+  filtered every `0x00` out of the enumeration buffer and passed the bare
+  `Vector{UInt8}`. On current Julia that happens to leave a zero just past the
+  shrunk vector, so the DLL did see a terminated string, but by accident of
+  `filter`'s implementation, and carrying the enumeration's trailing newline
+  (and every further description when several controllers are attached). It
+  now passes the first description, whitespace-stripped, as a `String`, which
+  Julia always NUL-terminates at a `Ptr{Cchar}` boundary. The buffer grew from
+  128 to 1024 bytes to match the C-867 driver.
+
+### Changed (PI N-472)
+
+Behaviour a rig pinned to an earlier tag will see from the PI N-472 driver,
+each on its own:
+
+- **`initialize(::N472)` now throws when a setup step fails.** After the
+  connect, every step (reference mode, `PI_POS`, servos, travel range,
+  velocity) is checked; a failure closes the connection, clears
+  `connectionstatus` and `id`, and throws with the step and its GCS error
+  code. Before, failures were ignored and "Stage initialized" was logged on a
+  half-initialized stage. Enumeration and connect failures still log `@error`
+  and return, as `initialize(::PIStage)` does. Not a break under this
+  package's versioning rule: it changes behaviour only on a path that was
+  already broken.
+- **Re-initializing after `shutdown` now re-zeroes the frame.** A second
+  `initialize` on the same object was refused and did nothing; it now runs the
+  full sequence: reference mode off, `PI_POS` redefining the current position
+  as `homepos`, servos on. A script that used shutdown-then-initialize as a
+  reconnect now resets its coordinates to wherever the actuator sits.
+- **With several C-885s attached, `initialize` connects to the first
+  enumerated one.** There is no selection by serial number.
+- **`N472()` defaults `id` to `-1`**, not `0`.
+- **`setvel(::N472)` returns `FALSE` when `PI_VEL` fails.** It used to return
+  only the status of the `PI_qVEL` read-back.
+
 ### Changed (release process)
 - **`main` is the development branch**, carrying the next version with
   `-DEV`; every pull request goes into it. The `0.3rc1` release-candidate
   branch, which never released, is folded into `main` and retired, and CI's
   version check runs on every pull request again. A release branch is cut only
   for a safety backport (CLAUDE.md "Versioning").
+
+### Laser diodes in two regulation modes (#66)
+
+Laser diodes in two regulation modes, and closed loop (photodiode feedback,
+"constant power") for the TCube. Implements the design plan
+`dev/output/plan-laser-modes.md` (revision 3, on branch `fix/revert-cppbool`).
+
+**Hardware verification: PARTIAL**, on the 642 nm rig's TLD001 (64849775),
+2026-09-28, with a power meter before the fibre; the tables are in
+`src/hardware_implementations/tcube_laser/CALIBRATION.md`.
+
+- **Open loop: verified.** 70 / 90 / 110 mA gave 70.0 / 90.0 / 110.0 mA on the
+  front display and 1.69 / 20.67 / 39.42 mW.
+- **Closed loop: verified from 1 to 70 mW** (2026-09-28/29): 1, 2, 3, 5, 10,
+  20, 40 and 70 mW gave 0.56, 1.55, 2.54, 4.52, 9.30, 19.04, 38.74 and
+  68.59 mW, so the 224.2 W/A calibration holds. One controller behaviour had
+  to be guarded against: **a setpoint jumped from 0 locked the loop** at
+  ~21 mW / 90 mA whatever the request, 3 of 3 attempts at 10 mW, while the same
+  target reached in steps regulated exactly, as the Kinesis application does.
+  Later the same night the jump worked at 10 mW (4 of 4), 40 and 70 mW, so
+  the lock is intermittent and its cause unknown. The single write is the
+  default (fastest, ~10 ms); an optional ramp of upward closed-loop steps is
+  kept in the driver as the verified fallback (`ramp_step_mW = 3.0`,
+  `ramp_step_s = 0.01`, keywords of `TCubeLaser`: 40 mW in ~0.2 s, 70 mW in ~0.4 s; ramped runs never
+  failed, 10 of 10). The photodiode's UNDER-range flag now warns instead of
+  refusing (it was set at 1 mW while the loop regulated correctly).
+- **Found on the rig and fixed before release**, none of which the fake SDK
+  could have shown: the TLD001 **ignores setpoints sent while its output is
+  off** (so the driver sends them right after enabling, and zeroes the setpoint
+  before disabling); the setpoint read-back only refreshes while polling runs
+  (so polling starts first); the photocurrent reading is signed, with `0x8000`
+  meaning over range; a plain potentiometer write is ignored (adjust mode and a
+  pause are needed); and the header's potentiometer-to-mA scale is wrong for this
+  unit (so the clamp is the controller's own reported limit).
+
+Per decision 0035 this is a **non-breaking** change: `mode` defaults to
+`ConstantCurrent()`, so every existing construction line and `setpower` call
+keeps meaning what it meant in 0.2.4, and closed loop is additive and opt-in
+(`mode = ConstantPhotocurrent()`); the default will not change.
+Not verified: the meaning of `LD_EnableMaxCurrentAdjust`'s second flag (always
+passed `false`); and how the Kinesis application itself brings the loop up
+(the C API offers only `LD_SetLaserSetPoint`; the protocol document could not
+be fetched and the application was not traced), so whether a single write
+could be made to work is unknown. The ramp's ~0.2 s to 40 mW is almost all
+USB round trips (~15 ms per write), so the most a single write could save is
+that 0.2 s. Also observed: the controller must be power-cycled when switching
+between the Kinesis application and this driver, in either direction, or the
+next open fails (error code 2 / "load device failed").
+
+### Deprecated
+Each of these still works and keeps its 0.2.4 meaning; each is removed at the
+next breaking release.
+- `setpower(laser, mA)` on a `ConstantCurrent` `DiodeLaser` forwards to
+  `setcurrent!` and warns. The mode is fixed at construction, so a forwarded
+  call can never change unit. On a `ConstantPhotocurrent` laser it throws.
+- `properties.power` on a `TCubeLaser`: the uncalibrated `legacy_power` figure,
+  written by an open-loop `setcurrent!` as 0.2.4's `setpower` wrote it, and
+  still exported. Read `drive_current` instead.
+- The 2-argument `export_state(::TCubeLaser, x)`, which forwards to the 1-argument
+  method.
+
+Recommended new forms (the `mode = ConstantCurrent()` line is optional, it is the
+default):
+
+```julia
+# 0.2.4 line, still works
+laser = TCubeLaser("00000000"; max_current = 150.0)   # your diode's rating
+setpower(laser, 80.0)                     # mA, deprecated
+
+# open loop, with the unit in the name
+laser = TCubeLaser("00000000"; mode = ConstantCurrent(), max_current = 150.0)   # mode optional; max_current: your diode's rating
+setcurrent!(laser, 80.0)                  # mA
+
+# closed loop (calibration: src/hardware_implementations/tcube_laser/CALIBRATION.md)
+laser = TCubeLaser("00000000"; mode = ConstantPhotocurrent(),
+    wa_calibration = 224.2, tia_range = 1e-3, tec_stabilised = missing,
+    threshold_current = 65.0,
+    max_current = 150.0,                                                  # mA, your diode's rating
+    properties = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))     # 70.0 mW: your diode's rating
+setoutputpower!(laser, 20.0)              # mW at the laser output
+
+# either mode, when the unit does not matter: a fraction of the declared range
+setlevel!(laser, 0.4)
+```
+
+### Added
+- **`TCubeLaser` closed-loop loop-lock check and per-laser ramp keywords**
+  (#66): `ramp_step_mW` (default `Inf`, one write), `ramp_step_s` (`0.01`),
+  `lock_check_s` (`0.2`) and `lock_ratio` (`1.5`) are keywords of the
+  `ConstantPhotocurrent` `TCubeLaser` constructor and fields of
+  `PhotodiodeLoop`; they replace the `RAMP_STEP_mW` and `RAMP_STEP_S` globals,
+  which were never released. After a setpoint the driver now compares the
+  measured photocurrent with the request and, above `lock_ratio` times it,
+  disables the output and throws "loop lock suspected". The ramp starts from
+  what the driver knows the controller holds (0 in `light_on`, the previous
+  request in `setoutputpower!`), not from the stale `LD_GetLaserSetPoint`.
+  The threshold and wait are not yet run on hardware.
+- **`DiodeLaser <: LightSource`**, for lasers on a controller that regulates
+  something, and the mode types **`ConstantCurrent`** (the loop holds drive
+  current) and **`ConstantPhotocurrent`** (the loop holds the monitor photodiode
+  current). There is deliberately no `ConstantPower`: the loop does not hold
+  optical power, and without a temperature-stabilised mount the delivered power
+  drifts while the photocurrent is held. `regulation_mode(laser)` and
+  `supported_modes(T)` report the mode. The voltage-modulated lights
+  (`CrystaLaser`, `VortranLaser`, `DaqTrLight`) and `SimLight` are unchanged.
+- **`TCubeLaser{M}`**: the driver is parametric in its mode, fixed at
+  construction. **Closed loop** (`ConstantPhotocurrent`) takes the photodiode
+  calibration as required keywords -- `wa_calibration` (W/A at the laser
+  output), `tia_range` (the rear-panel DIP switch, A), `tec_stabilised` (`true`,
+  `false` or `missing`) -- held in a new **`PhotodiodeLoop`**, and
+  `properties.min_power`/`max_power` become the enforced mW bounds. A range the
+  amplifier cannot reach, a TIA range the TLD001 does not have, or a ceiling
+  below the potentiometer's lowest clamp is refused at construction.
+  `max_current` has no default in closed loop: it is the clamp `initialize`
+  programs and the only real protection there, so omitting it throws an
+  `ArgumentError`. In open loop it still defaults to `160.0`.
+- **Closed-loop `initialize`**, a protected sequence: require the key switch and
+  interlock; require the controller's TIA range to match `tia_range` (a moved
+  DIP switch is a silent factor-of-ten error otherwise); disable the output (the
+  setpoint cannot be zeroed with the output off, so `light_on` sends the real one
+  right after enabling); leave the max-current potentiometer at the highest
+  position whose controller-reported limit is `<= max_current` -- the only real
+  protection in closed loop, since a blocked photodiode drives the current
+  straight to it; enter closed loop and verify the status bit; write the W/A
+  factor to the controller's display and read it back. It never enables the
+  output. `light_on` and `setoutputpower!` refuse until the clamp is verified.
+- **`setcurrent!(laser, mA)`** (open loop) and **`setoutputpower!(laser, mW)`**
+  (closed loop, mW at the laser output -- not at the sample; the driver holds no
+  field describing the optics downstream). Both read their setpoint back and
+  record the request only after the controller confirmed it.
+  `pd.photocurrent_requested` holds the decoded setpoint the loop was actually
+  given. `setoutputpower!` refuses when the amplifier is over range, or under
+  range with the output on, or when the controller has left closed loop.
+- **`setlevel!(laser, frac)`**: unit-free, `frac` in 0..1 of the declared range,
+  linear in the regulated quantity; the same call works in both modes, so code
+  written against it survives a mode switch. `frac = 0` is the bottom of the
+  range, not off.
+- **Readbacks**: `measured_current` (mA), `measured_photocurrent` (A),
+  `indicated_output_power` (mW, closed loop; a conversion, not a measurement)
+  and `loop_status`, one snapshot of the status word, both readings and the
+  decoded flags, including `saturated` (at the current clamp) and
+  `below_threshold` (`missing` when the threshold is unknown, never a silent
+  pass). `initialize` starts Kinesis polling at 50 ms so these are cache reads.
+  New field `threshold_current` (mA, declared by the rig).
+- **Panels**: `gui(::DiodeLaser)` opens a current panel (slider in mA over the
+  enforced range) or a power panel (slider in mW at the laser output, the range
+  and the calibration basis shown). Opening issues no command and no read; the
+  readout fills on Read or a Poll toggle that starts off. The textbox accepts
+  only in-range values and turns red otherwise; an entry issues one command,
+  not two; the display changes only after a command succeeded, and a refusal
+  is shown in the panel instead of being thrown inside the event handler.
+- **`SimDiodeLaser{M}`**, a simulated twin on the same abstract type, with a
+  diode, photodiode and loop model, faults (blocked photodiode, responsivity
+  drift, TIA flags, key/interlock) and a log of every command and read. It
+  takes the same keywords with the same requirements as `TCubeLaser`, minus the
+  serial (`mode` default and closed-loop required keywords included), and its
+  default `properties` are labelled `"mA"`, so one construction line serves a rig
+  and its twin.
+- **`CALIBRATION.md`** in the TCube driver folder: how to choose the TIA range,
+  measure the threshold and the W/A factor, build the laser in closed loop and
+  verify it, and the 642 nm rig's current calibration (224.2 W/A on the 1 mA
+  range, measured before the fibre, with its closed-loop verification table).
+
+### Changed (TCube laser)
+- **`TCubeLaser.initialize` starts background polling** (`LD_StartPolling`,
+  every `POLL_INTERVAL_MS`); `shutdown` and a failed `initialize` stop it
+  (`LD_StopPolling`). Not yet run on hardware; needs the 642 nm rig check.
+- **`TCubeLaser.initialize` now zeroes and disables the output** in both modes,
+  before the mode command, so it never sends a mode command with the diode lit
+  and `properties.is_on` is false afterwards. Not yet run on hardware; needs the
+  642 nm rig check.
+- **Open loop: `initialize` may lower the controller's max-current
+  potentiometer** when its limit is above `max_current`, and never raises it, by
+  construction (the search's upper bound is the starting position). Not yet run
+  on hardware; needs the 642 nm rig check.
+- **Open loop: a `max_current` below the potentiometer's floor** (about
+  17.25 mA) warns that the ceiling is enforced in software only and leaves the
+  potentiometer alone, as in 0.2.4. If lowering the potentiometer fails (adjust
+  mode refused, or even the lowest position above `max_current`), `initialize`
+  warns the same way, records the limit the controller then reports, and goes
+  on: no configuration that initialized in 0.2.4 fails here. Not yet run on
+  hardware; needs the 642 nm rig check.
+- **`light_on` and `setcurrent!` wait for the controller's setpoint read-back**
+  (up to `SETPOINT_CONFIRM_TIMEOUT_S`, 1 s) and throw if it does not confirm;
+  `light_on` then zeroes and disables the output. Not yet run on hardware; needs
+  the 642 nm rig check.
+- **`setcurrent!` with the output off sends nothing** (0.2.4 sent a setpoint the
+  controller ignored); `light_on` applies it after the enable. When the driver
+  recorded the output off, "off" is a fresh status read (one request/read round
+  trip), since the polled word can lag a `light_off`. Not yet run on
+  hardware; needs the 642 nm rig check.
+- **`gui(laser)` on an open-loop `TCubeLaser` opens the diode-laser current
+  panel** (mA). Not yet run on hardware; needs the 642 nm rig check.
+- **Power mode re-checks the controller before emitting**: closed-loop
+  `light_on` and `setoutputpower!` read the status word and the current limit
+  afresh and refuse if the loop bit is gone or the limit is above `max_current`
+  or more than half a pot step above the programmed clamp (a controller power
+  cycle can restore the pot). The clamp is recorded only after the whole
+  closed-loop `initialize` succeeded. Two more
+  request/read round trips per call. Not yet run on hardware.
+- `setpower(laser, mA)` on a `DiodeLaser`: on a `ConstantCurrent` laser it
+  forwards to `setcurrent!` with a deprecation warning; on a
+  `ConstantPhotocurrent` laser it throws, naming `setoutputpower!` and
+  `setlevel!`, so that an mA call can never become an mW one.
+- `export_state(::TCubeLaser)` ADDS the keys `regulation_mode`, `setpoint_unit`,
+  `min_current_mA`, `max_current_mA`, `threshold_current_mA`; closed loop adds
+  `power_reference`, `min_output_power_mW`, `max_output_power_mW`,
+  `wa_calibration_W_per_A`, `tia_range_A`, `tec_stabilised`,
+  `max_current_clamp_mA`, `output_power_requested_mW`,
+  `photocurrent_requested_A`. The 0.2.4 keys (`min_current`, `max_current`,
+  `power_unit`, `power`, `min_power`, `max_power`) are kept, in both modes.
+- `LD_GetLaserDiodeCurrentReading` is bound as signed (`Cshort`): a negative
+  reading used to decode to about 440 mA. Kinesis booleans are split by role:
+  arguments as zero-extended `Cuint` (`KBOOL_ARG`), returns as one byte
+  (`KBOOL_RET`), from `fix/revert-cppbool`.
+- The contract test and the API-map generator walk the type hierarchy to its
+  leaves: `subtypes` is one level deep and would have dropped `TCubeLaser` the
+  moment it moved under `DiodeLaser`. **Downstream code calling
+  `subtypes(MicroscopeControl.LightSource)` now sees `DiodeLaser` in place of
+  `TCubeLaser` and `SimDiodeLaser`.**
+
+### Removed
+- The 2-argument interface stub `light_on(::LightSource, ipower::Float64)`,
+  which no driver implemented and which only ever threw; the stub is now
+  `light_on(::LightSource)`.
+
+### Deferred
+- Renaming `properties.is_on` to `is_on_requested` across all lights: deferred
+  to a breaking release. It touches every light driver, which the same plan
+  otherwise leaves untouched, and is independent of the laser modes.
 
 ## [0.2.4] - 2026-09-29
 
