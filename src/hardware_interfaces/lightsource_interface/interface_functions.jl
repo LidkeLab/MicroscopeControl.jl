@@ -47,15 +47,21 @@ end
 """
     setpower(laser::DiodeLaser, x::Float64)
 
-Always throws, naming the replacement. `setpower` meant mA on a TCube while its
-name and `power_unit` said mW, so with a power mode available the same call
-could mean either; it is not defined for any `DiodeLaser`, deliberately with no
-forwarder, so that no existing call silently changes unit.
+Deprecated for a [`ConstantCurrent`](@ref) laser, where it forwards to
+[`setcurrent!`](@ref) (`x` in mA, as it always was on a TCube) and warns. The
+mode is a type parameter fixed at construction, so a forwarded call can never
+change unit. It throws for a [`ConstantPhotocurrent`](@ref) laser: an mA call
+must not become an mW one, so use [`setoutputpower!`](@ref) there, or the
+unit-free [`setlevel!`](@ref) on either.
 """
 function setpower(laser::DiodeLaser, x::Float64)
+    if regulation_mode(laser) isa ConstantCurrent
+        Base.depwarn("setpower(laser, mA) on a $(nameof(typeof(laser))) is deprecated; use setcurrent!(laser, mA), or setlevel!(laser, frac)", :setpower)
+        return setcurrent!(laser, x)
+    end
     error("setpower is not defined for $(typeof(laser)): it took mA on this driver while its name said mW. " *
-          "Use setcurrent!(laser, mA) on a ConstantCurrent laser, setoutputpower!(laser, mW) on a ConstantPhotocurrent " *
-          "laser, or the unit-free setlevel!(laser, frac) on either. This laser is $(nameof(typeof(regulation_mode(laser)))).")
+          "Use setoutputpower!(laser, mW) on a ConstantPhotocurrent laser, or the unit-free setlevel!(laser, frac) " *
+          "on either. This laser is $(nameof(typeof(regulation_mode(laser)))).")
 end
 
 """

@@ -108,7 +108,7 @@ end
     # (throwing) instrument-level stub. As of 0.2.3 the 1-arg method exists
     # and the exclusion is gone with it, which is what makes the generic
     # assertion below cover this type. The 2-arg form was a deprecated
-    # forwarder until 0.3.0 removed it.
+    # forwarder, kept until the next breaking release.
     no_core_methods = Set([:MLSLM])
     no_initialize = Set([:ThorCamCSCCamera])
     no_shutdown = Set{Symbol}()
@@ -257,7 +257,8 @@ end
                         @test !has_specific_method(MC.setcurrent!, TM, Float64)
                     end
                     # `setlevel!` is the shared DiodeLaser method, never the
-                    # LightSource stub; `setpower` is the DiodeLaser refusal,
+                    # LightSource stub; `setpower` is the DiodeLaser method
+                    # (a deprecated forwarder in open loop, a refusal in closed),
                     # never a driver method.
                     @test which(MC.setlevel!, Tuple{TM,Float64}).sig.parameters[2] === MC.DiodeLaser
                     @test which(MC.setpower, Tuple{TM,Float64}).sig.parameters[2] === MC.DiodeLaser
@@ -270,8 +271,8 @@ end
             end
         end
         @test has_specific_method(MC.export_state, MC.TCubeLaser)
-        # The 2-arg deprecated forwarder was removed in 0.3.0.
-        @test !hasmethod(MC.export_state, Tuple{MC.TCubeLaser,Any})
+        # The 2-arg deprecated forwarder is kept until the next breaking release.
+        @test hasmethod(MC.export_state, Tuple{MC.TCubeLaser,Any})
     end
 
     @testset "Stub throws" begin

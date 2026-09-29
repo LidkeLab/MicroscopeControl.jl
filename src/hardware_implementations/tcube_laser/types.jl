@@ -12,17 +12,23 @@ modes fixed at construction:
   at the laser output, converted through `pd.wa_calibration`. See
   `CALIBRATION.md` beside this file for how that number is measured.
 
-`setpower` is not defined for this type (it throws): it took mA while its
-name and `properties.power_unit` said mW, and flipping the mode would have
-turned an 80 mA call into an 80 mW one without a word.
+`setpower(laser, mA)` still works on a `ConstantCurrent` laser: it forwards to
+`setcurrent!` and is deprecated. On a `ConstantPhotocurrent` laser it throws,
+so that an 80 mA call can never become an 80 mW one.
 
 # Fields
 - `unique_id::String`: A unique identifier for the light source.
 - `properties::LightSourceProperties`: `is_on` is the requested output state. In
   `ConstantPhotocurrent` mode `min_power`/`max_power` are the ENFORCED bounds of
   `setoutputpower!`, in mW at the laser output, and the endpoints of
-  `setlevel!`. In `ConstantCurrent` mode they are not read; `power` and
-  `power_unit` are not written by this driver in either mode.
+  `setlevel!`. In `ConstantCurrent` mode they are not read. `power` is
+  deprecated: an open-loop `setcurrent!` writes it as 0.2.4's figure
+  `drive_current * properties.max_power / <controller limit>`, an uncalibrated
+  guess that is NOT in `power_unit`'s unit (the `"mA"` label covers only
+  `min_power`/`max_power` in open loop). With the default `properties`, whose
+  `max_power` is now `max_current`, the figure differs from 0.2.4's
+  default-properties value; `drive_current` is the number to read. A
+  `ConstantPhotocurrent` laser never writes `power`.
 - `laser_color::String`: The color of the laser.
 - `min_current::Float64`: The lowest drive current this rig will command, in
   mA: `setcurrent!`'s floor and `setlevel!`'s zero. Defaults to `0.0`. It is a
@@ -141,17 +147,16 @@ LightSourceInterface.supported_modes(::Type{<:TCubeLaser}) = (ConstantCurrent, C
 LightSourceInterface.regulation_mode(::Type{TCubeLaser{M}}) where {M} = M()
 
 """
-    TCubeLaser(serialNo::String; mode, kwargs...)
+    TCubeLaser(serialNo::String; kwargs...)
 
 Construct a `TCubeLaser` for the Kinesis device `serialNo`. Pure: it opens
 nothing, so every keyword is a declaration that `initialize` and `setupIO` later
 act on. The keywords match the field names documented on
 [`TCubeLaser`](@ref).
 
-`mode` is **required**, with no default: `ConstantCurrent()` or
-`ConstantPhotocurrent()`. It is required rather than defaulted until closed loop
-has been verified on hardware, so that no existing construction line changes
-meaning silently.
+`mode` defaults to `ConstantCurrent()`, which is exactly the 0.2.x behaviour, so
+no existing construction line changes meaning. Closed loop is chosen explicitly
+with `mode = ConstantPhotocurrent()`. The default will not change.
 
 ```julia
 # 642 nm rig, closed loop. Calibration: see CALIBRATION.md beside this file.
@@ -165,7 +170,8 @@ laser = TCubeLaser("64849775";
     properties        = LightSourceProperties("mW", 0.0, false, 2.0, 80.0))
 
 # The same diode in open loop.
-laser = TCubeLaser("64849775"; mode = ConstantCurrent(), min_current = 70.0, max_current = 160.0)
+laser = TCubeLaser("64849775"; mode = ConstantCurrent(), # mode is optional here: the default
+    min_current = 70.0, max_current = 160.0)
 ```
 
 In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
@@ -186,7 +192,7 @@ defaults to `LightSourceProperties("mA", 0.0, false, min_current, max_current)`.
   currents without protecting against large ones.
 """
 function TCubeLaser(serialNo::String;
-    mode::Union{Nothing,RegulationMode}=nothing,
+    mode::RegulationMode=ConstantCurrent(),
     unique_id::String="TCubeLaser",
     properties::Union{Nothing,LightSourceProperties}=nothing,
     laser_color::String="red",
@@ -206,10 +212,6 @@ function TCubeLaser(serialNo::String;
     tec_stabilised::Union{Nothing,Bool,Missing}=nothing,
 )
     name = "TCubeLaser $serialNo"
-    mode === nothing && throw(ArgumentError(
-        "$name: the `mode` keyword is required: ConstantCurrent() (open loop, setcurrent! in mA) or " *
-        "ConstantPhotocurrent() (closed loop, setoutputpower! in mW, needs wa_calibration, tia_range, tec_stabilised and properties). " *
-        "There is no default, so no construction line changes meaning when one is chosen."))
     pd = if mode isa ConstantPhotocurrent
         absent = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
                                      :tec_stabilised => tec_stabilised, :properties => properties,

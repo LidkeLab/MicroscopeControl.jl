@@ -141,16 +141,9 @@ lab_summary("Core") do
             @test cperr isa ArgumentError
             @test occursin("max_current", cperr.msg)
 
-            # `mode` is required and has no default, so no construction line
-            # changes meaning when a default is eventually chosen.
-            err = try
-                TCubeLaser("00000000")
-                nothing
-            catch e
-                e
-            end
-            @test err isa ArgumentError
-            @test occursin("mode", err.msg)
+            # `mode` defaults to ConstantCurrent(), the 0.2.x behaviour, so no
+            # existing construction line changes meaning.
+            @test TCubeLaser("00000000") isa TCubeLaser{ConstantCurrent}
 
             laser = cc()
             @test laser isa TCubeLaser{ConstantCurrent}
@@ -317,23 +310,26 @@ lab_summary("Core") do
             @test isempty(FakeKinesis.calls)
         end
 
-        @testset "setpower is gone, and says what replaced it" begin
-            # `setpower` took mA while its name and power_unit said mW. With a
-            # power mode available the same call could mean either, so it is
-            # not defined -- deliberately with no forwarder -- and the error
-            # names the replacements. It reaches nothing.
+        @testset "setpower forwards in open loop (deprecated), throws in closed loop" begin
+            # `setpower` took mA. On a ConstantCurrent laser the mode is a type
+            # parameter, so forwarding to setcurrent! can never change unit;
+            # on a ConstantPhotocurrent laser it would, so it throws.
             FakeKinesis.reset!()
-            for laser in (cc(), cp())
-                err = try
-                    setpower(laser, 80.0)
-                    nothing
-                catch e
-                    e
-                end
-                @test err isa ErrorException
-                @test occursin("setcurrent!", err.msg) && occursin("setoutputpower!", err.msg)
-                @test occursin(string(nameof(typeof(regulation_mode(laser)))), err.msg)
+            c = cc()
+            initialize(c)
+            @test_deprecated setpower(c, 80.0)
+            @test c.drive_current == 80.0
+            FakeKinesis.reset!()
+            laser = cp()
+            err = try
+                setpower(laser, 80.0)
+                nothing
+            catch e
+                e
             end
+            @test err isa ErrorException
+            @test occursin("setoutputpower!", err.msg) && occursin("setlevel!", err.msg)
+            @test occursin("ConstantPhotocurrent", err.msg)
             @test isempty(FakeKinesis.calls)
             # ... and each unit-true setter exists only in its own mode.
             @test_throws "not implemented" setoutputpower!(cc(), 10.0)
@@ -973,14 +969,26 @@ lab_summary("Core") do
             @test isnan(attrs["drive_current"]) # nothing commanded yet
             @test attrs["daq_device"] == "Dev2"
             @test attrs["ao_channel"] == "Dev2/ao1"
-            # The deprecated linear guess under a "mW" label is gone.
-            @test !haskey(attrs, "power") && !haskey(attrs, "power_unit")
+            # 0.2.4's keys are kept next to the new ones.
+            for k in ("min_current", "max_current", "power_unit", "power", "min_power", "max_power")
+                @test haskey(attrs, k)
+            end
+            @test attrs["min_current"] == 0.0 && attrs["max_current"] == 160.0
+            @test attrs["power_unit"] == "mA"
+            @test attrs["max_power"] == 160.0
+            # setcurrent! writes 0.2.4's deprecated figure to properties.power.
+            FakeKinesis.reset!()
+            lp = cc()
+            initialize(lp)
+            setcurrent!(lp, 80.0)
+            @test lp.properties.power == TCube.legacy_power(lp, 80.0)
+            @test export_state(lp)[1]["power"] == lp.properties.power
             @test !haskey(attrs, "wa_calibration_W_per_A") # open loop has no calibration
             @test data === nothing
             @test haskey(children, "daq")
             @test export_state(cc())[1]["daq_device"] == ""
-            # The 2-argument forwarder was removed in 0.3.0.
-            @test_throws MethodError export_state(laser, nothing)
+            # The deprecated 2-argument forwarder still works.
+            @test export_state(laser, nothing)[1]["serialNo"] == "00000000"
 
             FakeKinesis.reset!()
             pl = cp(; threshold_current=65.0)
@@ -1065,7 +1073,9 @@ lab_summary("Core") do
             initialize(c); initialize(p)
             @test_throws "not implemented" setcurrent!(p, 80.0)
             @test_throws "not implemented" setoutputpower!(c, 10.0)
-            @test_throws "setcurrent!" setpower(c, 80.0)
+            @test_throws "setoutputpower!" setpower(p, 80.0)
+            @test_deprecated setpower(c, 80.0)
+            @test c.drive_current == 80.0
         end
 
         @testset "5. commands before initialize and after shutdown throw, state unchanged" begin

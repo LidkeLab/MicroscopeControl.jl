@@ -55,6 +55,39 @@ request and is the fallback.
 const POLL_INTERVAL_MS = 50
 
 """
+    legacy_power(light::TCubeLaser, current::Float64)
+
+The value `properties.power` has held since before v0.2.3: the requested
+current scaled linearly onto `properties.max_power`. **Deprecated, and
+scheduled for removal at the next breaking release** -- read `light.drive_current` instead.
+
+It is a guess, not a measurement. The controller reports no optical power in
+the open-loop mode this driver uses, and the bench table preserved in
+`TCubeLaserControl.jl` shows the real curve is not this line. It is reproduced
+here only so that a rig reading `properties.power` across an upgrade reads the
+same number it read before.
+
+Reproducing it exactly needs one step the old expression did not: it divided by
+`light.max_current`, and `initialize` used to overwrite that field with the
+controller's limit. `max_current` is now the caller's and stays so, so the
+divisor is `controller_max_current` once `initialize` has read it and
+`max_current` before that -- which is the same quantity the old field held at
+each of those two moments.
+
+**One case where this deliberately does not reproduce 0.2.2.** If a caller
+assigns `max_current` *after* `initialize`, 0.2.2 divided by the newly assigned
+value; this divides by the controller's limit still. With `max_current = 80.0`
+and a 40 mA request after a controller limit of 23830, 0.2.2 gave `50.0` and
+this gives `25.000572235150496`. Reproducing it would mean intercepting writes
+to the field, which is not worth doing for a number the driver invents and
+which the next breaking release removes. Read `drive_current` instead; it is exact and has no
+lifecycle. """
+function legacy_power(light::TCubeLaser, current::Float64)
+    divisor = isnan(light.controller_max_current) ? light.max_current : light.controller_max_current
+    return current * light.properties.max_power / divisor
+end
+
+"""
     effective_max_current(light::TCubeLaser)
 
 The ceiling `setcurrent!` enforces, in mA: the smallest of the caller's
@@ -791,7 +824,9 @@ Rounding such a request up would command more current than was asked for, which
 is the rule this driver will not break -- but `drive_current` records the
 **requested** current, not the zero that was commanded.
 
-On success, `light.drive_current` holds the accepted current, in mA.
+On success, `light.drive_current` holds the accepted current, in mA, and the
+deprecated `properties.power` holds [`legacy_power`](@ref)'s figure, as it did
+in 0.2.4.
 """
 function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
@@ -799,6 +834,7 @@ function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, cu
     on = output_enabled(light.serialNo)
     on && send_setpoint(light, code)
     light.drive_current = current
+    light.properties.power = legacy_power(light, current) # deprecated; see legacy_power
     println("Laser current set to $current mA", on ? "" : " (output off: applied at light_on)")
     return nothing
 end
@@ -1092,8 +1128,11 @@ the identifiers and DAQ names.
 `tia_range_A`, `tec_stabilised` (`"true"`/`"false"`/`"unknown"`),
 `max_current_clamp_mA`, `output_power_requested_mW`, `photocurrent_requested_A`.
 
-`power` and `power_unit` are no longer written: they held an uncalibrated
-linear guess under a `"mW"` label.
+0.2.4's keys are kept in both modes, with 0.2.4's values: `min_current`,
+`max_current` (the fields, in mA), `power_unit`, `power`, `min_power` and
+`max_power` (from `properties`). `power` is the deprecated uncalibrated linear
+guess described in [`legacy_power`](@ref), written only by open-loop
+`setcurrent!`; read `drive_current` instead.
 """
 function export_state(light::TCubeLaser)
     mode = regulation_mode(light)
@@ -1109,6 +1148,10 @@ function export_state(light::TCubeLaser)
         "daq_device" => something(light.daq_device, ""), "ao_channel" => something(light.ao_channel, ""),
         "drive_current" => light.drive_current,
         "is_on" => light.properties.is_on,
+        # 0.2.4's keys, kept next to the new ones.
+        "min_current" => light.min_current, "max_current" => light.max_current,
+        "power_unit" => light.properties.power_unit, "power" => light.properties.power,
+        "min_power" => light.properties.min_power, "max_power" => light.properties.max_power,
     )
     if mode isa ConstantPhotocurrent
         pd = light.pd
@@ -1131,6 +1174,43 @@ function export_state(light::TCubeLaser)
     )
 
     return attributes, data, children
+end
+
+"""
+    EXPORT_STATE_2ARG_WARNED
+
+Whether the deprecated 2-argument [`export_state`](@ref) has already attempted
+its warning in this session. Not `@warn`'s `maxlog=1`, so that the warning is
+testable more than once per process; `Threads.Atomic` rather than a plain `Ref`
+because a check followed by a store lets two concurrent callers both warn and
+is a data race besides. Reset it with `[] = false` in a test.
+"""
+const EXPORT_STATE_2ARG_WARNED = Threads.Atomic{Bool}(false)
+
+"""
+    export_state(light::TCubeLaser, ignored)
+
+Deprecated forwarder to [`export_state(::TCubeLaser)`](@ref). Warns once per
+session and ignores its second argument, which was never read.
+
+It is kept because removing it would be a break for no benefit. The bug was the
+*absence* of the 1-argument method -- `export_state(laser)` matched nothing on
+this type and fell through to the throwing instrument-level stub -- so adding
+that method is the whole fix, and a caller that had to pass a second argument
+to get anything at all keeps working. The forwarder is scheduled for removal in
+0.3.0.
+"""
+function export_state(light::TCubeLaser, ignored)
+    # Test-and-set in one atomic step: a plain `Ref` check followed by a store
+    # lets two concurrent callers both observe `false` and both warn, and is a
+    # data race besides. Note this is "attempt to warn once", not "display
+    # once": a first call under a logger that swallows warnings still spends
+    # the allowance.
+    if !Threads.atomic_cas!(EXPORT_STATE_2ARG_WARNED, false, true)
+        @warn "export_state(::TCubeLaser, x): the second argument is ignored and this method is deprecated; " *
+              "call export_state(laser). The 2-argument form is scheduled for removal at the next breaking release." ignored_argument = ignored
+    end
+    return export_state(light)
 end
 
 """

@@ -38,9 +38,11 @@ A `DiodeLaser` carries, by name, the fields the shared panels and
 [`setlevel!`](@ref) read: `unique_id`, `properties`, `min_current`,
 `max_current`, `threshold_current`, `drive_current` and `pd`.
 
-`[guarantee]` `setpower` is not defined for any `DiodeLaser`: its unit changed
-with the regulation mode, so it is replaced by [`setcurrent!`](@ref),
-[`setoutputpower!`](@ref) and the unit-free [`setlevel!`](@ref).
+`[guarantee]` `setpower(laser, mA)` on a `ConstantCurrent` `DiodeLaser` forwards
+to [`setcurrent!`](@ref) with a deprecation warning, and means what it always
+did; the mode is a type parameter fixed at construction, so a forwarded call can
+never change unit. On a `ConstantPhotocurrent` `DiodeLaser` it throws, and
+[`setoutputpower!`](@ref) and the unit-free [`setlevel!`](@ref) replace it.
 
 `[limitation]` `InteractiveUtils.subtypes` is one level deep, so
 `subtypes(LightSource)` lists `DiodeLaser` and not the drivers beneath it. Walk
