@@ -73,7 +73,7 @@ Since this package is under active development and not yet registered, install i
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
 ```
 
 **You must also declare this package's unregistered dependency in your own
@@ -88,7 +88,7 @@ writes both entries for you:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
 ```
 
 If you write the TOML by hand, `[sources]` alone is **not** enough — Julia
