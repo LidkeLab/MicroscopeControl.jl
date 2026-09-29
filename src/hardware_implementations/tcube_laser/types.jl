@@ -146,7 +146,7 @@ laser = TCubeLaser("64849775";
     tia_range         = 1e-3,      # A: the rear-panel DIP switch, as set
     tec_stabilised    = missing,   # honest until checked
     threshold_current = 65.0,      # mA, from a bench sweep
-    max_current       = 160.0,     # mA: programmed as the loop's clamp
+    max_current       = 150.0,     # mA: programmed as the loop's clamp
     properties        = LightSourceProperties("mW", 0.0, false, 2.0, 80.0))
 
 # The same diode in open loop.
