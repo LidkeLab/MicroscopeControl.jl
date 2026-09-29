@@ -29,8 +29,13 @@ the next version with `-DEV`).
   disabled the lock check. A construction passing a smaller value now throws.
 - `TCubeLaser`: `measured_current` (and so `loop_status`) accepts the raw reading -32768, which
   the Kinesis header defines as -220 mA, instead of throwing.
-- `TCubeLaser`: the calibration-reference re-check latches a mismatch until `initialize`, and does not
-  re-light the diode on every retried `light_on`.
+- `TCubeLaser`: any failure during the calibration-reference re-check (a mismatch, a mode refusal or a
+  command error) latches until the next `initialize`, and the diode is not re-lit on every retried `light_on`.
+- `TCubeLaser`: a safety check that refuses while the output may be on (the stored-limit
+  check, and in power mode also a mode, TIA-range or clamp change, or an over-range photodiode) now zeroes and disables
+  the output before it throws, instead of leaving the diode lit in the fault.
+- `TCubeLaser` open-loop `initialize` confirms open loop with a fresh status read after
+  `LD_SetOpenLoopMode`, and refuses if the controller stays in closed loop.
 - `TCubeLaser` power mode: `check_lock` also runs the current-limit test (`0x400`) at a zero request.
 - `TCubeLaser` power mode: `setoutputpower!` decides on fresh status and photocurrent reads, and
   `light_on` and `setoutputpower!` refuse a photodiode range that no longer matches `tia_range`.
@@ -63,8 +68,8 @@ the next version with `-DEV`).
   - an open-loop `light_on` takes about 0.1 s longer (one fresh limit read), and a `setcurrent!` with
     the output off about 0.1 s longer (one fresh status read);
   - `initialize` takes about 0.8 s longer in power mode (eight fresh reads: status 2, potentiometer 2, limit 3,
-    W/A 1, for one potentiometer setting; each further setting adds 0.2 s) and about 0.1 s in open loop
-    (one limit read, more if the potentiometer is lowered);
+    W/A 1, for one potentiometer setting; each further setting adds 0.2 s) and about 0.3 s in open loop
+    (one limit read, more if the potentiometer is lowered, plus 0.2 s for the open-loop confirm);
   - the first power-mode `light_on` after `initialize` also runs the calibration-reference re-check:
     `REFERENCE_DWELL_S` (0.1 s), three fresh reads (0.6 s) and the setpoint confirm, about 0.7 s plus the confirm.
 

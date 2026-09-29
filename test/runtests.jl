@@ -360,7 +360,8 @@ lab_summary("Core") do
             # The output is zeroed and disabled BEFORE the mode command.
             @test FakeKinesis.calls[1:7] == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
                 "LD_Open", "LD_StartPolling", "LD_SetLaserSetPoint", "LD_DisableOutput", "LD_SetOpenLoopMode"]
-            @test FakeKinesis.calls[8:10] == ["LD_RequestLaserDiodeMaxCurrentLimit", "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"]
+            @test FakeKinesis.calls[8:10] == ["LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits"] # open loop confirmed by a fresh status read
+            @test FakeKinesis.calls[11:13] == ["LD_RequestLaserDiodeMaxCurrentLimit", "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"]
             @test laser.max_current == 80.0 # survived initialize
             @test laser.controller_max_current <= 80.0 # lowered, never above the caller's ceiling
             @test TCube.effective_max_current(laser) == laser.controller_max_current # the lowered limit is now the tighter one
@@ -740,8 +741,19 @@ lab_summary("Core") do
             setcurrent!(l, 10.0); light_on(l); light_off(l)
             FK.diode_limit_raw[] = 23830   # the pot raised to 160 mA at the front panel
             n = count(==("LD_EnableOutput"), FK.calls)
+            m = length(FK.calls)
             @test_throws r"current limit stored in the controller" light_on(l)
             @test count(==("LD_EnableOutput"), FK.calls) == n && !enabled() && !l.properties.is_on
+            @test "LD_DisableOutput" ∉ FK.calls[m+1:end]   # M1: a refusal with the output off makes no disable
+            # M1: clamp drift while lit, open loop: the refusal also turns the diode off.
+            FK.reset!(limit_raw = floor(Int, 90 / 220 * 32767))
+            l = cc(; max_current=100.0)
+            initialize(l)
+            setcurrent!(l, 50.0); light_on(l)
+            @test enabled() && l.properties.is_on
+            FK.diode_limit_raw[] = 23830
+            @test_throws r"current limit stored in the controller" light_on(l)
+            @test !enabled() && !l.properties.is_on
             # N3: the same in power mode.
             l = ready_cp()
             setoutputpower!(l, 10.0); light_on(l); light_off(l)
@@ -919,11 +931,32 @@ lab_summary("Core") do
             @test "LD_EnableOutput" ∉ FK.calls && "LD_SetOpenLoopMode" ∉ FK.calls
             FK.pd_scale[] = 1.0; initialize(l); light_on(l)
             @test l.pd.scale_checked && !l.pd.scale_refused
+            # M5: a refusal from set_open_loop! inside the re-check latches too.
+            l = readyr(); FK.open_loop_ignored[] = true
+            @test_throws r"still reports closed loop" light_on(l)
+            @test l.pd.scale_refused
+            empty!(FK.calls)
+            @test_throws r"not lit again" light_on(l)
+            @test "LD_SetOpenLoopMode" ∉ FK.calls && "LD_EnableOutput" ∉ FK.calls
+            # M2: open-loop initialize confirms open loop.
+            FK.reset!(); FK.bits[] |= FK.CLOSED; FK.open_loop_ignored[] = true
+            l = cc()
+            @test_throws r"still reports closed loop" initialize(l)
+            @test "LD_EnableOutput" ∉ FK.calls && "LD_SetOpenLoopMode" ∈ FK.calls
+            @test last(FK.calls, 2) == ["LD_StopPolling", "LD_Close"]
             # L3: `light_on` checks the photodiode range against the fresh status word.
             l = ready_cp(); setoutputpower!(l, 10.0)
             FK.bits[] = (FK.bits[] & ~FK.TIA_1mA) | FK.TIA_10mA; empty!(FK.calls)
             @test_throws r"photodiode range" light_on(l)
             @test "LD_EnableOutput" ∉ FK.calls
+            # M1: DIP relabel while lit: the refusal zeroes and disables the output.
+            l = ready_cp(); setoutputpower!(l, 10.0); light_on(l); setoutputpower!(l, 10.0)
+            @test enabled() && l.properties.is_on
+            FK.bits[] = (FK.bits[] & ~FK.TIA_1mA) | FK.TIA_10mA; empty!(FK.calls); empty!(FK.setpoints)
+            @test_throws r"photodiode range" setoutputpower!(l, 10.0)
+            @test !enabled() && !l.properties.is_on
+            iD = findlast(==("LD_DisableOutput"), FK.calls)
+            @test iD !== nothing && findlast(==("LD_SetLaserSetPoint"), FK.calls[1:iD]) !== nothing && last(FK.setpoints) == 0
             # L6: `setoutputpower!` decides on fresh reads: the polled word is healthy, the fresh one says over range.
             l = ready_cp(); setoutputpower!(l, 10.0)
             @test_logs (:warn, r"no calibration reference") match_mode = :any light_on(l)
@@ -954,7 +987,7 @@ lab_summary("Core") do
             laser = cp()
             @test_throws "clamp" setoutputpower!(laser, 10.0)
             @test_throws "clamp" light_on(laser)
-            @test isempty(FakeKinesis.calls)
+            @test "LD_EnableOutput" ∉ FakeKinesis.calls && "LD_SetLaserSetPoint" ∉ FakeKinesis.calls # only the may-be-on status read
 
             initialize(laser)
             # Out of the declared [1, 70] mW is refused before anything is sent.
@@ -1055,7 +1088,9 @@ lab_summary("Core") do
             # ... and a controller that left closed loop behind the driver's back.
             FakeKinesis.setbits!(FakeKinesis.CLOSED; on=false)
             @test_throws "closed loop" setoutputpower!(laser, 30.0)
+            @test !laser.properties.is_on && !FakeKinesis.enabled() # M1: the refusal turned the lit output off
             FakeKinesis.setbits!(FakeKinesis.CLOSED)
+            light_on(laser)                                          # lit again for the readback test below
             # A setpoint the controller does not confirm is not recorded.
             FakeKinesis.setpoint_readback[] = UInt16(3)
             @test_throws ErrorException setoutputpower!(laser, 30.0)
