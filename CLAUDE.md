@@ -164,4 +164,25 @@ Some hardware modules are commented out in `MicroscopeControl.jl` while under de
 
 ### Versioning
 
-This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. Policy, following Julia's pre-1.0 convention: while the version is `0.x.y`, **`x` is the breaking component and `y` is the non-breaking one** -- `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one, which is also how Julia's `^0.2` compat bound reads them. So bump `x` only when working downstream code can behave differently (a signature, an export, or what a call returns or throws), and bump `y` for everything else, including bug fixes that change behaviour on a path that was already broken. `.github/workflows/TagOnMerge.yml` tags a merge to `main` only when its Project.toml version is a release `X.Y.Z` (a `-DEV` version is development and is skipped, lab decision 0033) and a passing `lab/tests` record covers that commit's tree (decision 0009); an untested tree is not tagged, and the job says why. Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.
+This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. Versions follow lab decision 0033.
+
+**`main` is the development branch.** Its `Project.toml` carries the next
+version with `-DEV`: after `vX.Y.Z` is tagged, the next pull request sets
+`X.Y.(Z+1)-DEV`. Every pull request goes into `main` and leaves that version
+alone, unless it breaks an interface, in which case it raises it to
+`X.(Y+1).0-DEV`. A release is one pull request that drops `-DEV` and writes
+the `CHANGELOG.md` section; `.github/workflows/TagOnMerge.yml` tags its merge
+`vX.Y.Z` when a passing `lab/tests` record covers that commit's tree
+(decision 0009), and otherwise fails and says why. It skips every `-DEV`
+merge. CI's "Version bumped" check runs on every pull request
+(`.github/scripts/versions.py`): against a `-DEV` base the version may stay
+or rise but never fall, and against a released base it must rise.
+
+A release branch exists only for a safety backport: when `main` has moved on
+to a breaking version and a rig pinned to the previous series needs a fix,
+cut `release-X.Y` from that series' last tag, merge the fix into it with a
+pull request that raises `Z`, and merge the same fix into `main`.
+`[limitation]` TagOnMerge watches `main` only, so a backport's tag is cut by
+hand, after checking the same `lab/tests` coverage.
+
+Policy, following Julia's pre-1.0 convention: while the version is `0.x.y`, **`x` is the breaking component and `y` is the non-breaking one** -- `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one, which is also how Julia's `^0.2` compat bound reads them. So bump `x` only when working downstream code can behave differently (a signature, an export, or what a call returns or throws), and bump `y` for everything else, including bug fixes that change behaviour on a path that was already broken. Config types are built by keyword (lab decision 0035): adding a field with a default is not a break, and a positional argument's meaning never changes (add a keyword and deprecate the old form instead). Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.

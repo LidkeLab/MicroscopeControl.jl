@@ -10,6 +10,25 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Fixed
+- **PI stage: `initialize` no longer finishes on an unreferenced stage.** It
+  ignored the return of the reference move (`PI_FRF`), so when the controller
+  rejected it (GCS error 5, e.g. one axis's servo off) the later move to the
+  centre was rejected too and the driver believed the stage was centred while
+  the controller read about 0. It now checks `PI_FRF`, then polls `PI_qFRF`
+  for up to 60 s until both axes report referenced; either failure throws
+  with the `PI_GetError` code and closes the connection first, so a retried
+  `initialize` starts clean. `referencemove`'s signature and return are
+  unchanged. Reported by the MicroscopeAdapt rig; not yet run on hardware
+  (#64).
+
+### Changed (release process)
+- **`main` is the development branch**, carrying the next version with
+  `-DEV`; every pull request goes into it. The `0.3rc1` release-candidate
+  branch, which never released, is folded into `main` and retired, and CI's
+  version check runs on every pull request again. A release branch is cut only
+  for a safety backport (CLAUDE.md "Versioning").
+
 ## [0.2.4] - 2026-09-29
 
 Safety patch for the TCube laser driver. **v0.2.3 and every earlier tag are
