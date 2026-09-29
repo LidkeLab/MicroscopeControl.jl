@@ -43,7 +43,14 @@ Laser diodes in two regulation modes, and closed loop (photodiode feedback,
 Per the plan's contingency (§8.1), `mode` is a **required keyword with no
 default**: closed loop is not yet verified across the rig's working range.
 Not verified: the meaning of `LD_EnableMaxCurrentAdjust`'s second flag (always
-passed `false`).
+passed `false`); and how the Kinesis application itself brings the loop up
+(the C API offers only `LD_SetLaserSetPoint`; the protocol document could not
+be fetched and the application was not traced), so whether a single write
+could be made to work is unknown. The ramp's ~0.2 s to 40 mW is almost all
+USB round trips (~15 ms per write), so the most a single write could save is
+that 0.2 s. Also observed: the controller must be power-cycled when switching
+between the Kinesis application and this driver, in either direction, or the
+next open fails (error code 2 / "load device failed").
 
 **Breaking.** Every downstream rig using a `TCubeLaser` must change its
 construction line and its `setpower` calls; nothing it can write silently

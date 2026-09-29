@@ -124,6 +124,19 @@ driver now **ramps** upward closed-loop steps ([`RAMP_STEP_mW`] = 3 mW every
 
 Open loop the same day: 110 mA -> 39.43 mW, 130 mA -> 57.71 mW.
 
+How the Kinesis application reaches a power setpoint was not determined (the C
+API has only `LD_SetLaserSetPoint`; the APT protocol document could not be
+fetched and the application was not traced with a USB capture). The ramp's
+time is almost all USB round trips, about 15 ms per write, so 5 ms pauses were
+no faster than 10 ms; a USB trace of Kinesis (Wireshark + USBPcap while it
+sets 10 mW) is the way to find out whether a single write can work.
+
+Two practical notes from the session: the controller must be **power-cycled
+when switching between the Kinesis application and this driver**, in either
+direction (`LD_Open` error 2, or "load device failed" in Kinesis, until then);
+and the max-current potentiometer position does not survive a power cycle
+(`initialize` re-programs it every time).
+
 Measured power is requested x 0.97 - ~0.3 mW over 1-40 mW (the loop holds the
 photocurrent exactly; the meter reads a little under 224.2 W/A's prediction).
 Closed loop is therefore usable over the rig's range; `properties.max_power`
