@@ -131,5 +131,37 @@ using MicroscopeControl.HardwareImplementations.TCubeLaserControl
         @test l.properties.is_on
     end
 
+    @testset "i: setpoint and then disable both failing leaves is_on true ($how)" for how in (:status, :throw)
+        l = fresh()
+        quiet() do
+            setpower(l, 10.0)
+        end
+        FK.fail!("LD_SetLaserSetPoint")
+        how === :status ? FK.fail!("LD_DisableOutput") : FK.throw!("LD_DisableOutput")
+        @test_logs (:error, r"may still be ON") match_mode = :any begin
+            @test_throws ErrorException quiet() do
+                light_on(l)
+            end
+        end
+        @test FK.output_on[]
+        @test l.properties.is_on
+    end
+
+    @testset "j: a failed zero is logged even when the disable then throws" begin
+        l = fresh()
+        quiet() do
+            setpower(l, 10.0)
+            light_on(l)
+        end
+        FK.fail!("LD_SetLaserSetPoint")
+        FK.fail!("LD_DisableOutput")
+        @test_logs (:error, r"stored setpoint was not cleared") match_mode = :any begin
+            @test_throws ErrorException quiet() do
+                light_off(l)
+            end
+        end
+        @test l.properties.is_on
+    end
+
     FK.reset!()
 end

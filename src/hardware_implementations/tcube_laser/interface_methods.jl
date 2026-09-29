@@ -263,20 +263,19 @@ end
 
 Enable the controller's output, then send the requested setpoint.
 
-The TLD001 ignores `LD_SetLaserSetPoint` while its output is disabled and runs
-on whatever setpoint it had stored when next enabled (observed on the 642 nm
-rig's TLD001 64849775, 2026-09-28). So the setpoint is validated first
-(`drive_current` against the current ceiling; nothing is sent if that throws),
-the output is enabled, and only then is the setpoint code for `drive_current`
-sent. If no [`setpower`](@ref) has been called, setpoint 0 is sent, with a
+The controller ignores a setpoint sent while its output is off (see
+[`TCubeLaser`](@ref)). So `drive_current` is validated first against the
+current ceiling (nothing is sent if that throws), the output is enabled, and
+only then is its setpoint code sent. Called while the output is already on,
+this re-sends `drive_current`, replacing any lower value set from Kinesis or
+the front panel. If no [`setpower`](@ref) has been called, setpoint 0 is sent, with a
 warning. If the setpoint fails after the enable, the output is disabled again
 and the error rethrown; `properties.is_on` is written only once both steps
 have succeeded (or to what the failed disable left the output as).
 
-`[limitation]` Between `LD_EnableOutput` and the setpoint that follows (one USB
-round trip) the controller runs on its stored setpoint; after this driver's
-[`light_off`](@ref)/[`shutdown`](@ref) that is 0, but a controller last left
-by other software may hold anything up to its current limit.
+`[limitation]` Between the enable and the setpoint the controller runs on its
+stored setpoint, bounded in hardware only by its current-limit potentiometer;
+see [`TCubeLaser`](@ref).
 """
 function LightSourceInterface.light_on(light::TCubeLaser)
     serialNo = light.serialNo
@@ -340,11 +339,10 @@ the wire.
 
 # The controller ignores setpoints while the output is off
 
-The TLD001 ignores `LD_SetLaserSetPoint` while its output is disabled and
-enables on its stored setpoint (TLD001 64849775, 642 nm rig, 2026-09-28). The
-setpoint is still sent on every call (it covers an output enabled outside this
-object), but with the output off it takes effect only because [`light_on`](@ref)
-sends it again after enabling.
+The setpoint is sent on every call, but the controller ignores it while the
+output is off (see [`TCubeLaser`](@ref)); it then takes effect only because
+[`light_on`](@ref) sends it again after enabling. Sending it anyway covers an
+output enabled outside this object.
 
 # What is recorded
 
@@ -391,19 +389,19 @@ end
 
 Zero the controller's setpoint, then disable its output, then record it.
 
-The TLD001 ignores `LD_SetLaserSetPoint` while disabled and enables on its
-stored setpoint (TLD001 64849775, 642 nm rig, 2026-09-28), so the setpoint is
-zeroed while the output is still on: the next enable starts dark. A failed
-zero is logged and does not throw, since the output is still turned off;
-a failed disable throws and leaves `properties.is_on` unchanged.
+The controller keeps its setpoint across a disable (see [`TCubeLaser`](@ref)),
+so the setpoint is zeroed while the output is still on: the next enable starts
+dark. A failed zero is logged, before the disable, and does not throw, since
+the output is still turned off; a failed disable throws and leaves
+`properties.is_on` unchanged.
 `drive_current` is not changed: it is the request the next [`light_on`](@ref)
 re-sends.
 """
 function LightSourceInterface.light_off(light::TCubeLaser)
     zeroed = zero_setpoint(light)
+    isnothing(zeroed) || @error "TCubeLaser $(light.serialNo): zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
     check_err(LD_DisableOutput(light.serialNo), "LD_DisableOutput", light.serialNo)
     light.properties.is_on = false
-    isnothing(zeroed) || @error "TCubeLaser $(light.serialNo): zeroing the setpoint before disable failed ($zeroed); the output is off, but the controller's stored setpoint was not cleared"
     println("$(light.laser_color)" * "_laser is off")
     return nothing
 end
@@ -411,10 +409,8 @@ end
 """
     shutdown(light::TCubeLaser)
 
-Zero the setpoint, disable the output and close the connection. The
-controller ignores a setpoint sent while disabled and enables on its stored
-one (TLD001 64849775, 642 nm rig, 2026-09-28), hence the zero comes first, as
-in [`light_off`](@ref). A failed zero is logged; a failed disable throws, but
+Zero the setpoint, disable the output and close the connection. The zero
+comes first, as in [`light_off`](@ref) (see [`TCubeLaser`](@ref)). A failed zero is logged; a failed disable throws, but
 the connection is closed either way: leaving the Kinesis handle open would also
 block the reconnection a caller needs in order to retry the disable.
 """

@@ -106,8 +106,9 @@ tag, so the report must say which tag, from the environment:
 gh issue create --repo LidkeLab/MicroscopeControl.jl --title "PIStage: <symptom> (v0.2.0, Windows)" --body-file report.md
 ```
 
-Upstream tags every merge to `main`, so a merged fix is pinnable the same day;
-offer a PR if you have the fix. Two honest workarounds while you wait:
+Upstream tags releases, not every merge: between releases `main` carries a
+`-DEV` version, so a merged fix is pinnable once the release that carries it is
+tested and tagged. Offer a PR if you have the fix. Two honest workarounds while you wait:
 
 - **Re-bind the C call under your own name** in your repo, with the corrected
   signature, and call that from your system code. MC is untouched:
@@ -371,7 +372,8 @@ checked) in the rig repo; upstream's CLAUDE.md says it is not tracked in MC.
    verification line.
 5. **Version** (traced from upstream CLAUDE.md): minor bump for an interface
    change (signature, export or dispatch contract), patch for everything else;
-   every merge to `main` is tagged. A new driver adds exports and a new
+   releases are the tagged commits, and `main` carries `X.Y.Z-DEV` between
+   them. A new driver adds exports and a new
    interface is an interface change, so expect a minor bump. Pin a tag, never
    `main`.
 6. **Refresh the installed skills** after moving the pin: `install_skills()`

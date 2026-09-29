@@ -5,7 +5,8 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows Julia's pre-1.0 versioning convention, described in
 the README's Installation section: in `0.x.y`, `x` is the breaking component
-and `y` is the non-breaking one (every merge to `main` is tagged).
+and `y` is the non-breaking one (releases are tagged; between them `main` carries
+the next version with `-DEV`).
 
 ## [Unreleased]
 
@@ -13,6 +14,20 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 Safety patch for the TCube laser driver. **v0.2.3 and every earlier tag are
 affected.**
+
+**UPGRADE WARNING: this release applies `setpower` values that were never
+applied before.** On v0.2.3 and earlier, `setpower(l, x); light_on(l)` never
+delivered `x`: the diode ran on the controller's stored setpoint. From 0.2.4
+it delivers `x`, so a rig whose `setpower` values were never really used (the
+usual order, for example MicroscopeSeqSR's 405 nm laser) will run currents it
+has never run, checked only against its ceiling, and `max_current` defaults to
+160 mA. `light_on` while the output is already on also re-sends
+`drive_current`, undoing a lower value set from Kinesis or the front panel.
+Before repinning a rig to 0.2.4:
+- check every `setpower` value that precedes a `light_on`;
+- set `max_current` to the diode's rating;
+- set the controller's current-limit potentiometer at or below that rating;
+- run a hardware check of the new sequence.
 
 **Hardware verification: NOT DONE in this repository.** The controller
 behaviour below was found on the 642 nm rig (recorded in PR #66); the fix is
@@ -40,9 +55,13 @@ exercised against a fake controller that models it
     USB round trip) the controller runs on its stored setpoint: 0 after this
     driver's `light_off` or `shutdown`, but anything up to the controller's
     current limit if other software (the Kinesis GUI, a session that died)
-    left it there.
+    left it there. In that window the current-limit potentiometer is the only
+    hardware bound: 160 mA on the 642 nm rig, above that diode's absolute
+    maximum.
 
 ### Changed
+- **`light_on(::TCubeLaser)` sends `drive_current` every time**, including
+  when the output is already on (see the upgrade warning).
 - **`light_on(::TCubeLaser)` before any `setpower` enables the output at
   setpoint 0 and warns.** It used to run at whatever the controller had
   stored, which is the hazard above.

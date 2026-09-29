@@ -31,7 +31,7 @@ function lab_summary(f, group::AbstractString)
             "seconds" => round(time() - t0; digits = 1))
         open(path, "w") do io
             TOML.print(io, Dict("julia" => string(VERSION),
-                "host" => first(split(gethostname(), '.')), "selection" => group,
+                "host" => first(split(gethostname(), '.')),
                 "groups" => Dict(group => result)); sorted = true)
         end
     end
