@@ -66,7 +66,7 @@ so that an 80 mA call can never become an 80 mW one.
   `nothing` otherwise.
 
 The first fourteen fields are in the order they have always been in, and the
-two added in 0.3.0 are at the end, so the pre-0.3.0 positional forms still
+two added in 0.2.5 are at the end, so the pre-0.2.5 positional forms still
 construct: they build a `TCubeLaser{ConstantCurrent}` with both defaulted.
 
 # The setpoint only takes while the output is on
@@ -126,7 +126,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     end
 end
 
-# The pre-0.3.0 positional arities, both building a ConstantCurrent laser: the
+# The pre-0.2.5 positional arities, both building a ConstantCurrent laser: the
 # fields added since sit at the end of the struct precisely so these can
 # default them. Positional construction cannot build a power-mode laser; that
 # needs the calibration keywords.

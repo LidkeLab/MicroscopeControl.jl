@@ -235,7 +235,7 @@ end
 
         for T in lights
             # Mode-shared methods are written against the bare (UnionAll) type.
-            # The 2-arg `light_on(light, ipower)` stub was removed in 0.3.0:
+            # The 2-arg `light_on(light, ipower)` stub was removed in 0.2.5:
             # "on at a power" has no definable unit across lights.
             @test has_specific_method(MC.light_on, T)
             @test has_specific_method(MC.light_off, T)

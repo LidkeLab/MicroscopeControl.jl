@@ -19,7 +19,7 @@ end
 Turn on the light source.
 
 The stub used to take a second `ipower::Float64` argument that no driver
-implemented. It was removed in 0.3.0 rather than implemented: "on at a power"
+implemented. It was removed in 0.2.5 rather than implemented: "on at a power"
 has no definable unit across lights, so it is two checkable calls -- set the
 level, then `light_on`.
 

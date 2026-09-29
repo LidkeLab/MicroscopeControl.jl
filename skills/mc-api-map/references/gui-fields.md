@@ -75,11 +75,11 @@ panel is observably read-only. The fix is scoped to the shared light panel;
 it is not a guarantee about the others, and `gui(::DAQ)` still calls
 `showdevices`/`showchannels` at construction.
 
-From 0.3.0 this panel serves only the lights that are not a `DiodeLaser`
+From 0.2.5 this panel serves only the lights that are not a `DiodeLaser`
 (`CrystaLaser`, `VortranLaser`, `DaqTrLight`, `SimLight`); a `DiodeLaser` has its
 own, below.
 
-## `gui(::DiodeLaser)` (0.3.0)
+## `gui(::DiodeLaser)` (0.2.5)
 
 Dispatches on `regulation_mode(laser)` to `current_panel` (`ConstantCurrent`:
 slider in mA over `min_current .. effective_max_current(laser)`, calling

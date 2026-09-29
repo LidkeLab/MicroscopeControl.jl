@@ -1197,8 +1197,8 @@ It is kept because removing it would be a break for no benefit. The bug was the
 *absence* of the 1-argument method -- `export_state(laser)` matched nothing on
 this type and fell through to the throwing instrument-level stub -- so adding
 that method is the whole fix, and a caller that had to pass a second argument
-to get anything at all keeps working. The forwarder is scheduled for removal in
-0.3.0.
+to get anything at all keeps working. The forwarder is scheduled for removal at the
+next breaking release.
 """
 function export_state(light::TCubeLaser, ignored)
     # Test-and-set in one atomic step: a plain `Ref` check followed by a store

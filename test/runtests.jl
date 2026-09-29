@@ -119,7 +119,7 @@ lab_summary("Core") do
     # unmodified against the recorder installed by `tcube_fake_sdk.jl`, which
     # is what makes their *own* control flow (not a helper's) a thing the suite
     # can fail on. What no test here can tell you is how a real controller
-    # answers: see CHANGELOG 0.2.3 and 0.3.0, hardware verification NOT DONE.
+    # answers: see CHANGELOG 0.2.3 and 0.2.5, hardware verification NOT DONE.
     @testset "TCube Laser (no hardware)" begin
         TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
         # Open-loop and closed-loop lasers as the rigs would build them. The
@@ -168,7 +168,7 @@ lab_summary("Core") do
 
         @testset "Positional construction, old arity and new" begin
             # The fields added since 0.2.2 sit at the end of the struct so that
-            # the ten- and fourteen-argument positional calls a pre-0.3.0
+            # the ten- and fourteen-argument positional calls a pre-0.2.5
             # caller wrote still construct -- as open-loop lasers, since only
             # the keyword form can supply a photodiode calibration.
             props = LightSourceProperties("mW", 0.0, false, 0.0, 100.0)

@@ -21,6 +21,9 @@ the next version with `-DEV`).
   `initialize` starts clean. `referencemove`'s signature and return are
   unchanged. Reported by the MicroscopeAdapt rig; not yet run on hardware
   (#64).
+- **`TCubeLaser`'s default `properties.power_unit` is now `"mA"` in open loop.**
+  It said `"mW"` while the values were always mA. Rigs that read `power_unit`
+  should check it; both known rigs already pass `"mA"`.
 
 ### Changed (release process)
 - **`main` is the development branch**, carrying the next version with
@@ -29,7 +32,7 @@ the next version with `-DEV`).
   version check runs on every pull request again. A release branch is cut only
   for a safety backport (CLAUDE.md "Versioning").
 
-## [0.3.0] - 2026-09-28
+### Laser diodes in two regulation modes (#66)
 
 Laser diodes in two regulation modes, and closed loop (photodiode feedback,
 "constant power") for the TCube. Implements the design plan
@@ -63,8 +66,10 @@ Laser diodes in two regulation modes, and closed loop (photodiode feedback,
   pause are needed); and the header's potentiometer-to-mA scale is wrong for this
   unit (so the clamp is the controller's own reported limit).
 
-Per the plan's contingency (§8.1), `mode` is a **required keyword with no
-default**: closed loop is not yet verified across the rig's working range.
+Per decision 0035 this is a **non-breaking** change: `mode` defaults to
+`ConstantCurrent()`, so every existing construction line and `setpower` call
+keeps meaning what it meant in 0.2.4, and closed loop is additive and opt-in
+(`mode = ConstantPhotocurrent()`); the default will not change.
 Not verified: the meaning of `LD_EnableMaxCurrentAdjust`'s second flag (always
 passed `false`); and how the Kinesis application itself brings the loop up
 (the C API offers only `LD_SetLaserSetPoint`; the protocol document could not
@@ -75,22 +80,31 @@ that 0.2 s. Also observed: the controller must be power-cycled when switching
 between the Kinesis application and this driver, in either direction, or the
 next open fails (error code 2 / "load device failed").
 
-**Breaking.** Every downstream rig using a `TCubeLaser` must change its
-construction line and its `setpower` calls; nothing it can write silently
-changes meaning, because the old calls now throw.
+### Deprecated
+Each of these still works and keeps its 0.2.4 meaning; each is removed at the
+next breaking release.
+- `setpower(laser, mA)` on a `ConstantCurrent` `DiodeLaser` forwards to
+  `setcurrent!` and warns. The mode is fixed at construction, so a forwarded
+  call can never change unit. On a `ConstantPhotocurrent` laser it throws.
+- `properties.power` on a `TCubeLaser`: the uncalibrated `legacy_power` figure,
+  written by an open-loop `setcurrent!` as 0.2.4's `setpower` wrote it, and
+  still exported. Read `drive_current` instead.
+- The 2-argument `export_state(::TCubeLaser, x)`, which forwards to the 1-argument
+  method.
 
-### Migration
+Recommended new forms (the `mode = ConstantCurrent()` line is optional, it is the
+default):
 
 ```julia
-# before
+# 0.2.4 line, still works
 laser = TCubeLaser("64849775"; max_current = 160.0)
-setpower(laser, 80.0)                     # this was mA, despite the name
+setpower(laser, 80.0)                     # mA, deprecated
 
-# after, open loop: the same behaviour, with the unit in the name
-laser = TCubeLaser("64849775"; mode = ConstantCurrent(), max_current = 160.0)
+# open loop, with the unit in the name
+laser = TCubeLaser("64849775"; mode = ConstantCurrent(), max_current = 160.0)   # mode optional
 setcurrent!(laser, 80.0)                  # mA
 
-# after, closed loop (calibration: src/hardware_implementations/tcube_laser/CALIBRATION.md)
+# closed loop (calibration: src/hardware_implementations/tcube_laser/CALIBRATION.md)
 laser = TCubeLaser("64849775"; mode = ConstantPhotocurrent(),
     wa_calibration = 224.2, tia_range = 1e-3, tec_stabilised = missing,
     threshold_current = 65.0, max_current = 160.0,
@@ -118,6 +132,9 @@ setlevel!(laser, 0.4)
   `properties.min_power`/`max_power` become the enforced mW bounds. A range the
   amplifier cannot reach, a TIA range the TLD001 does not have, or a ceiling
   below the potentiometer's lowest clamp is refused at construction.
+  `max_current` has no default in closed loop: it is the clamp `initialize`
+  programs and the only real protection there, so omitting it throws an
+  `ArgumentError`. In open loop it still defaults to `160.0`.
 - **Closed-loop `initialize`**, a protected sequence: require the key switch and
   interlock; require the controller's TIA range to match `tia_range` (a moved
   DIP switch is a silent factor-of-ten error otherwise); disable the output (the
@@ -162,18 +179,17 @@ setlevel!(laser, 0.4)
   range, measured before the fibre, with its closed-loop verification table).
 
 ### Changed
-- `setpower` is not defined for any `DiodeLaser`; it throws, naming the
-  replacements. There is no forwarder, on purpose: with a power mode available
-  a forwarded `setpower(laser, 80.0)` could have turned 80 mA into 80 mW.
-- `TCubeLaser`'s `properties.power_unit` defaults to `"mA"` in open loop, and
-  `properties.power` is no longer written.
-- `export_state(::TCubeLaser)` attributes: `regulation_mode`, `setpoint_unit`,
-  `min_current_mA`, `max_current_mA`, `threshold_current_mA` (were
-  `min_current`, `max_current`); closed loop adds `power_reference`,
-  `min_output_power_mW`, `max_output_power_mW`, `wa_calibration_W_per_A`,
-  `tia_range_A`, `tec_stabilised`, `max_current_clamp_mA`,
-  `output_power_requested_mW`, `photocurrent_requested_A`. `power` and
-  `power_unit` are gone.
+- `setpower(laser, mA)` on a `DiodeLaser`: on a `ConstantCurrent` laser it
+  forwards to `setcurrent!` with a deprecation warning; on a
+  `ConstantPhotocurrent` laser it throws, naming `setoutputpower!` and
+  `setlevel!`, so that an mA call can never become an mW one.
+- `export_state(::TCubeLaser)` ADDS the keys `regulation_mode`, `setpoint_unit`,
+  `min_current_mA`, `max_current_mA`, `threshold_current_mA`; closed loop adds
+  `power_reference`, `min_output_power_mW`, `max_output_power_mW`,
+  `wa_calibration_W_per_A`, `tia_range_A`, `tec_stabilised`,
+  `max_current_clamp_mA`, `output_power_requested_mW`,
+  `photocurrent_requested_A`. The 0.2.4 keys (`min_current`, `max_current`,
+  `power_unit`, `power`, `min_power`, `max_power`) are kept, in both modes.
 - `LD_GetLaserDiodeCurrentReading` is bound as signed (`Cshort`): a negative
   reading used to decode to about 440 mA. Kinesis booleans are split by role:
   arguments as zero-extended `Cuint` (`KBOOL_ARG`), returns as one byte
@@ -185,17 +201,14 @@ setlevel!(laser, 0.4)
   `TCubeLaser` and `SimDiodeLaser`.**
 
 ### Removed
-- The deprecated `legacy_power` figure (`properties.power` on `TCubeLaser`).
-- The deprecated 2-argument `export_state(::TCubeLaser, x)`.
 - The 2-argument interface stub `light_on(::LightSource, ipower::Float64)`,
-  which no driver implemented; the stub is now `light_on(::LightSource)`.
+  which no driver implemented and which only ever threw; the stub is now
+  `light_on(::LightSource)`.
 
 ### Deferred
-- Renaming `properties.is_on` to `is_on_requested` across all lights, queued in
-  the plan for this release: it touches every light driver, which the same plan
+- Renaming `properties.is_on` to `is_on_requested` across all lights: deferred
+  to a breaking release. It touches every light driver, which the same plan
   otherwise leaves untouched, and is independent of the laser modes.
-- Defaulting `mode` to `ConstantPhotocurrent()`: after closed loop has run on the
-  rig.
 
 ## [0.2.4] - 2026-09-29
 

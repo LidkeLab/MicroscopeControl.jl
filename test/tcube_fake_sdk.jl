@@ -45,7 +45,7 @@
 #     this file is included. They are expected.
 
 #
-# Since 0.3.0 the fake also carries the small amount of controller STATE the
+# Since 0.2.5 the fake also carries the small amount of controller STATE the
 # closed-loop path reads back -- status bits, the setpoint, the max-current
 # potentiometer, the W/A factor, the two readings -- because that path verifies
 # each of its writes, and a recorder that only returned 0 could not tell a
@@ -91,7 +91,7 @@ driver's default scale.
 """
 const diode_limit_raw = Ref{Int}(23830)
 
-"Raw diode-current reading; `nothing` returns `diode_limit_raw`, as before 0.3.0."
+"Raw diode-current reading; `nothing` returns `diode_limit_raw`, as before 0.2.5."
 const current_raw = Ref{Union{Nothing,Int}}(nothing)
 
 "Raw photocurrent reading (`LD_GetPhotoCurrentReading`)."

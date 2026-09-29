@@ -92,7 +92,7 @@ LightSourceInterface.regulation_mode(::Type{SimDiodeLaser{M}}) where {M} = M()
 """
     SimDiodeLaser(; mode, kwargs...)
 
-`mode` is required, as on `TCubeLaser`. In `ConstantPhotocurrent` mode so are
+`mode` is required here (unlike `TCubeLaser`, where it defaults to `ConstantCurrent()`). In `ConstantPhotocurrent` mode so are
 `wa_calibration`, `tia_range`, `tec_stabilised` and `properties`, exactly as on
 the hardware driver, so that a system built against the simulation constructs
 the same way. `threshold_current` defaults to 65 mA and `max_current` to 160 mA

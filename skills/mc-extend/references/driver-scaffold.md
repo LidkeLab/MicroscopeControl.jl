@@ -94,7 +94,7 @@ What the run showed:
 
 The interface stub signature is the contract you are satisfying **[guarantee]**:
 `setpower(::LightSource, ::Float64)`, `light_on(::LightSource)` and
-`light_off(::LightSource)`. From 0.3.0 the `light_on` stub is 1-arg, matching every
+`light_off(::LightSource)`. From 0.2.5 the `light_on` stub is 1-arg, matching every
 driver and the shared panels. (Up to v0.2.x the interface declared only a 2-arg
 `light_on(::LightSource, ipower::Float64)` that no driver implemented, tracked
 upstream as `@test_broken`, and a bare `LightSource` subtype got a `MethodError`
@@ -131,7 +131,7 @@ has_specific(f, T, args...) = hasmethod(f, Tuple{T,args...}) && which(f, Tuple{T
     end
     # 3. inherited gui is the interface panel, not the AbstractInstrument stub
     @test which(MC.gui, Tuple{T}).sig.parameters[2] === LightSource
-    # 4. unsupported operations fail loudly (from 0.3.0 no 2-arg light_on exists, so
+    # 4. unsupported operations fail loudly (from 0.2.5 no 2-arg light_on exists, so
     #    this is a MethodError; on v0.2.x it hit the throwing stub, an ErrorException)
     @test_throws MethodError MC.light_on(SerialLED(), 1.0)
     # 5. lifecycle and behaviour through the fake transport
