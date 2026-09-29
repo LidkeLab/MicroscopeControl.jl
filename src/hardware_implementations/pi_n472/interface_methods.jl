@@ -1,3 +1,12 @@
+"""
+    _cstring(buf) -> String
+
+The bytes of `buf` up to its first NUL, as a `String`.
+"""
+function _cstring(buf::Vector{UInt8})
+    i = findfirst(==(0x00), buf)
+    return String(buf[1:(i === nothing ? end : i - 1)])
+end
 
 function initialize(stage::N472)
     if stage.connectionstatus == true
@@ -5,55 +14,62 @@ function initialize(stage::N472)
         return
     end
 
-    # Create a buffer string
-    buffersize = 128
-    devstring = zeros(UInt8, buffersize)
+    # An absent, unpowered or held controller fails here or at the connect below.
+    buffersize = 1024
+    buffer = zeros(UInt8, buffersize)
     controllername = "C-885"
-    numdevice = PI_EnumerateUSB(devstring, buffersize, controllername)
-    devstring = filter(x -> x != 0x00, devstring)
-    
-
-
-    #Set connection status to true
-    if numdevice > 0
-        stage.connectionstatus = true
-    else
-        @error "No devices connected"
+    numdevice = PI_EnumerateUSB(buffer, buffersize, controllername)
+    if numdevice <= 0
+        @error "No PI C-885 found by the GCS2 library (absent, unpowered, or held by another process)"
         stage.connectionstatus = false
         return
     end
 
+    # Descriptions are '\n'-separated with one NUL at the end; pass the first as a String (NUL-terminated for Ptr{Cchar}).
+    devstring = String(strip(first(split(_cstring(buffer), '\n'))))
+    @info "PI device: " * devstring
+
     #Connect to usb device
     stage.id = PI_ConnectUSB(devstring)
-    @info "PI device: " * String(devstring)
     @info "Device ID: " * string(stage.id)
-
-    #Query the unit of the physical position
-    axes = join(stage.axes, " ")
-    #unitstring = zeros(UInt8, buffersize)
-    #success = PI_qPUN(stage.id, axes, unitstring, buffersize)
-    #stage.units = String(unitstring)
-
-    #query reference mode
-    refmode = zeros(BOOL, 3)
-    
-    success = PI_RON(stage.id, axes, refmode)
-    success = PI_qRON(stage.id, axes, refmode)
-    @info "Reference mode: " * string(refmode)
-
-    # set the current position as the reference position
-    success = set_refpos(stage)
-
-    # turn on servo 
-    for i in eachindex(stage.axes)
-        servo(stage, i, TRUE)
+    if stage.id < 0
+        # Connect failed (id -1): leave the flag cleared so initialize can be retried.
+        stage.connectionstatus = false
+        @error "PI_ConnectUSB failed for \"$devstring\" (init error $(PI_GetInitError())); the controller may be held by another process"
+        return
     end
-    #Query the travel range
-    success = PI_qTMN(stage.id, axes, stage.minpos)
-    success = PI_qTMX(stage.id, axes, stage.maxpos)
+    stage.connectionstatus = true
 
-    #set velocity
-    success = setvel(stage, stage.velocity)
+    # Every step from here is checked; on failure close the connection so a retry starts clean.
+    try
+        axes = join(stage.axes, " ")
+        failed(step) = error("N472 initialize: $step failed (GCS error $(PI_GetError(stage.id)))")
+
+        #query reference mode
+        refmode = zeros(BOOL, 3)
+
+        PI_RON(stage.id, axes, refmode) == FALSE && failed("PI_RON")
+        PI_qRON(stage.id, axes, refmode) == FALSE && failed("PI_qRON")
+        @info "Reference mode: " * string(refmode)
+
+        # set the current position as the reference position
+        set_refpos(stage) == FALSE && failed("set_refpos (PI_POS)")
+
+        # turn on servo
+        for i in eachindex(stage.axes)
+            servo(stage, i, TRUE) == FALSE && failed("servo axis $i")
+        end
+
+        #Query the travel range
+        PI_qTMN(stage.id, axes, stage.minpos) == FALSE && failed("PI_qTMN")
+        PI_qTMX(stage.id, axes, stage.maxpos) == FALSE && failed("PI_qTMX")
+
+        #set velocity
+        setvel(stage, stage.velocity) == FALSE && failed("setvel")
+    catch
+        shutdown(stage)
+        rethrow()
+    end
 
     @info "Stage initialized"
     return
@@ -67,6 +83,9 @@ function shutdown(stage::N472)
     else
         @info "Stage not connected"
     end
+    # Clearing both lets the object be re-initialized and stops a stale id closing another object's connection.
+    stage.connectionstatus = false
+    stage.id = Cint(-1)
     return
 end
 
@@ -95,7 +114,9 @@ function StageInterface.home(stage::N472)
 end
 
 function StageInterface.stopmotion(stage::N472)
-    success = PI_HLT(stage.id, stage.axes)
+    # GCS2 axes arguments are one space-separated string.
+    axes = join(stage.axes, " ")
+    success = PI_HLT(stage.id, axes)
     return success
 end
 

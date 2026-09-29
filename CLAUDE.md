@@ -49,7 +49,7 @@ What CI actually runs, deliberately thin (`.github/workflows/CI.yml`):
 Batch fixups into one push rather than pushing each review round separately;
 every push to an open pull request starts a fresh run.
 
-Tests use simulated devices only (`SimCamera`, `SimStage3d`/`SimStage2d`/`SimStage1d`, `SimLight`) - no hardware required. GLMakie needs a display: run under `xvfb-run -a` on a headless Linux box (CI does this). Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
+Tests use simulated devices only (`SimCamera`, `SimStage3d`/`SimStage2d`/`SimStage1d`, `SimLight`, `SimDiodeLaser`) plus a fake Kinesis SDK (`test/tcube_fake_sdk.jl`) that the real `TCubeLaser` driver runs against - no hardware required. GLMakie needs a display: run under `xvfb-run -a` on a headless Linux box (CI does this). Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
 
 ## Architecture
 
@@ -64,7 +64,8 @@ MicroscopeControl.jl uses a **three-layer architecture** leveraging Julia's mult
 │  Abstract types + contracts    │  Concrete device drivers   │
 │  - CameraInterface             │  - SimulatedCamera, DCAM4  │
 │  - StageInterface              │  - SimulatedStage, PI, MCL │
-│  - LightSourceInterface        │  - SimulatedLight, TCube   │
+│  - LightSourceInterface        │  - SimulatedLight, TCube,  │
+│    (+ DiodeLaser)              │    SimDiodeLaser           │
 │  - DAQInterface                │  - NIDAQcard               │
 │  - SLMInterface                │  - OK_XEM (FPGA)           │
 │  - AttenuatorInterface         │  - LCC1620                 │
@@ -101,6 +102,8 @@ Interfaces define method signatures with throwing `error("<name> not implemented
 
 **LightSource**: `setpower`, `light_on`, `light_off`
 
+**DiodeLaser** (`<: LightSource`; `TCubeLaser{M}`, `SimDiodeLaser{M}` with `M` = `ConstantCurrent` or `ConstantPhotocurrent`, fixed at construction, `mode=` required): `setcurrent!` (mA, `ConstantCurrent` only), `setoutputpower!` (mW at the laser output, `ConstantPhotocurrent` only), `setlevel!` (0..1 of the declared range, both), `measured_current`, `measured_photocurrent`, `indicated_output_power`, `loop_status`, `regulation_mode`, `supported_modes`. `setpower` throws on a `DiodeLaser`. Mode-shared methods are written against the bare `TCubeLaser`, mode-specific ones against `TCubeLaser{ConstantCurrent}` / `{ConstantPhotocurrent}`; never a `where M` method on a generic `test/contract.jl` checks. `subtypes` is one level deep, so the contract test and API map walk to the leaves (`device_types`). Closed-loop calibration and the 642 nm rig's measured facts: `src/hardware_implementations/tcube_laser/CALIBRATION.md`.
+
 **DAQ**: `showdevices`, `showchannels`, `createtask`, `setvoltage`, `readvoltage`, `deletetask`
 
 **Attenuator**: `setdrivevoltage`, `getdrivevoltage`, `settransmission`, `gettransmission`, `set_calibration!`
@@ -118,6 +121,23 @@ Hardware implementations use `ccall` for vendor SDKs:
 - `ok_xem/functions_okFP.jl` - Opal Kelly FrontPanel
 - `mcl_stage/*.jl` - Mad City Labs NanoDrive
 - Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
+
+Rules at the `ccall` boundary, learned from the C-867 servo bug (v0.1.1), the
+N-472 connect string that worked only by accident of `filter`, and the N-472
+`stopmotion` that never worked:
+- A `Ptr{Cchar}` argument (GCS2 axes lists, USB descriptions) gets a Julia
+  `String`, which is always NUL-terminated. Never a `Vector{UInt8}` with the
+  zeros filtered out, and never a `Vector{String}`; join axes with a space first.
+- A GCS2 `BOOL*` argument is 32-bit (`Cuint`/`Cint`), one element per axis,
+  never `UInt8`.
+- Set a driver's `connectionstatus` only after the connect call's return value
+  is checked, and clear it and the device id in `shutdown`, so a failed or
+  closed object can be initialized again and a stale id cannot close another
+  object's connection.
+
+The test suite must never command attached hardware. Driver tests replace the
+vendor wrappers with a recorder (`test/tcube_fake_sdk.jl`,
+`test/pi_n472_fake_sdk.jl`), so they run on every machine and never reach a DLL.
 
 ### Camera Image Data Convention
 
@@ -186,3 +206,50 @@ pull request that raises `Z`, and merge the same fix into `main`.
 hand, after checking the same `lab/tests` coverage.
 
 What the numbers mean (decision 0033): before 1.0, in `0.Y.Z` **raising `Z` is any non-breaking change, new features included, and raising `Y` is an interface break** -- `0.2.4 -> 0.3.0` declares a break and `0.2.4 -> 0.2.5` a compatible release, which is also how Julia's `^0.2` compat bound reads them. A break is anything that lets working downstream code behave differently: a signature, an export, or what a call returns or throws. A bug fix that changes behaviour only on a path that was already broken is not a break. Config types are built by keyword (lab decision 0035): adding a field with a default is not a break, and a positional argument's meaning never changes (add a keyword and deprecate the old form instead). Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.
+
+## Instrument documentation archive (`manuals/`)
+
+`manuals/` is a **local-only symlink** to the lab-wide instrument archive on
+the NAS — vendor manuals, SDK headers, API references and the driver-facing
+notes that explain why a binding is the way it is. It is gitignored and must
+**never** be committed: git stores a symlink as a mode-120000 blob, and on a
+Windows rig without the symlink privilege that checks out as a text file
+containing the path, which is worse than nothing. Each clone makes its own.
+
+```bash
+# Linux (any of the four hosts)
+ln -sfn /mnt/nas/lidkelab/Projects/lab_instruments manuals
+```
+```bat
+REM Windows rig, from the repo root. Needs an elevated prompt, OR Developer
+REM Mode enabled once (Settings > Privacy & security > For developers).
+mklink /D manuals \\192.168.1.21\lidke-lrs\Projects\lab_instruments
+```
+
+`[limitation]` The junction form, `mklink /J`, does **not** work here: junctions
+resolve only to local volumes, so a UNC target fails. `/D` is required, and it
+is the one step in this arrangement that needs a privilege — once per rig, not
+once per clone. This has not been run on either rig yet; if `/D` is refused,
+say so rather than reaching for a mapped drive letter, which differs between
+user sessions and services.
+
+Nothing else is required — no environment variable and no shell profile edit.
+If `manuals/` is absent, make it with the line above.
+
+Layout is manufacturer first, then model: `manuals/Thorlabs/TLD001/`,
+`manuals/Hamamatsu/C11440-22CU/`, with shared vendor SDKs under
+`manuals/<Manufacturer>/SDK/<sdk-id>/`. Start at `manuals/INDEX.md`; the rules
+for adding anything are in `manuals/README.md`.
+
+Within a model directory, `source/` is the vendor original, verbatim and never
+renamed, and `docs/` is the working copy with a predictable name. A
+`BINDING.md`, where one exists, is the distillate a driver author actually
+needs — for example `manuals/Thorlabs/TLD001/BINDING.md` records that a Kinesis
+C++ boolean must be *passed* as a 4-byte `Cuint` but *read back* as a 1-byte
+`Bool`, which this package got wrong twice in opposite directions.
+
+`[policy]` When a driver's behaviour turns on a vendor fact -- a struct layout,
+an ABI width, a scaling constant, a status bit -- record it in that model's
+`BINDING.md` and cite the document in `source/` it came from. Three of the four
+defects in v0.2.3 were found by a rig holding hardware rather than by review,
+because the vendor fact was not written down anywhere a reviewer could check.

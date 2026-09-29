@@ -76,6 +76,7 @@ gives the assembled instrument its meaning. Neither can do the other's job.
 | **State** | the device's own fields (`exposure_time`, `roi`, `targ_x`, `properties.power`) are the configuration the driver pushes to hardware; **[guarantee]** shared code reads those fields by name (see Principle 2). | the instrument-level configuration (`AbstractSystemState`), when it is captured, and which fields are requested values versus measured ones (see "Three kinds of state"). |
 | **Failure recovery** | **[guarantee]** since v0.1.0 the stubs of the five `AbstractInstrument` interfaces (`Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator`) and the `AbstractInstrument` lifecycle stubs throw `ErrorException("... not implemented for T")` instead of returning `nothing`. **[limitation]** `SLM`'s `displayimage(::SLM)` has an empty body and returns `nothing`, and `SLM`/`TRIG` devices get `MethodError`, not the stub, for lifecycle calls (`references/driver-caveats.md`). Drivers mostly `@warn`/`@error` and return on hardware errors. **[limitation]** the `AbstractSystem` fallbacks still `@error` and return `nothing`. | **[policy]** rollback on partial initialization, a shutdown that reports what it could not close, and a saved record that says what is missing. All three are in the worked example below; none is provided by MC. |
 | **Units, axes, conventions** | its own: PI in millimetres, MCL in micrometres, Sim stages unitless (0..100); cameras return `(H, W)` / `(H, W, N)` arrays **[guarantee]** for Sim and DCAM4 (executed / traced). | **[policy]** one normalisation layer in the system (a function per device, not a conversion at every call site). |
+| **Optical power at the sample** | **[guarantee]** (0.2.5, traced) a `DiodeLaser` in `ConstantPhotocurrent` mode commands and reports mW **at the laser output**, the plane its `wa_calibration` was measured at (`setoutputpower!`, `indicated_output_power`); no driver holds a field describing splitters, attenuators, fibres or objectives. In `ConstantCurrent` mode the driver has no optical number at all. | **[policy]** the path transmission from laser output to sample, its measurement and its drift belong to the system; convert in one place, and label saved values with the plane they refer to (the TCube export already writes `power_reference = "laser output"`). |
 | **Persistence** | a one-argument `export_state` returning `(attributes, data, children)` **[guarantee]** for every device except those in the caveats file **[limitation]**. | assembling the tree, choosing the child names, deciding when to snapshot, and recording incomplete exports (see Principle 5 and the worked example). |
 
 ## The boundary test: upstream or downstream?
@@ -130,6 +131,19 @@ call, because a shared interface is what gives you the Sim substitution and the
 GUI for free. Define a new one only when the nearest interface would lie about
 what the device does.
 
+Within lights **[guarantee]** (0.2.5): a laser on a controller that *regulates*
+something (drive current, or monitor photocurrent under photodiode feedback) is a
+`DiodeLaser <: LightSource`, parametric in a `RegulationMode` fixed at
+construction (`TCubeLaser{ConstantCurrent}`, `TCubeLaser{ConstantPhotocurrent}`,
+and the simulated `SimDiodeLaser{M}`); a light that is only on/off or modulated by
+a voltage (`CrystaLaser`, `VortranLaser`, `DaqTrLight`, `SimLight`) is a plain
+`LightSource`. The two take different setters: `setpower` on a plain light;
+`setcurrent!` (mA), `setoutputpower!` (mW at the laser output) or the unit-free
+`setlevel!` on a `DiodeLaser`, where `setpower` is a deprecated mA forwarder in open loop and throws in closed loop. **[policy]** type a system
+field `::DiodeLaser` when the system needs readback (`loop_status`,
+`measured_current`) and `::LightSource` when on/off is all it uses; test
+`isa DiodeLaser`, not a driver name, to choose the setter.
+
 ## Six design principles the source expresses
 
 Each is stated as what the code does today; the label says how far to trust it.
@@ -150,7 +164,9 @@ Each is stated as what the code does today; the label says how far to trust it.
    `targ_x/y/z`, `real_x/y/z`, `range_x/y/z`, `stagelabel`; `gui(::Camera)`
    (`camera_interface/gui.jl`) reads `unique_id`, `exposure_time`, `roi`,
    `capture_mode`, `trigger_mode`, `sequence_length`, `is_running`; the light
-   and attenuator panels read `unique_id` and `properties`. A device that
+   and attenuator panels read `unique_id` and `properties`; from 0.2.5 the
+   `DiodeLaser` panels and `setlevel!` also read `min_current`, `max_current`,
+   `threshold_current`, `drive_current` and `pd`. A device that
    satisfies the method contract but lacks a field cannot use the inherited
    panel. **[limitation]** the Sim stages have `label` where the GUI wants
    `stagelabel`, so `gui(SimStage3d())` throws a `FieldError` (executed at
@@ -205,8 +221,8 @@ Each is stated as what the code does today; the label says how far to trust it.
 
 | Kind | Lives in | Example | Trust |
 |---|---|---|---|
-| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.properties.power` | what you asked for. **[limitation]** `properties.power` is only updated by `setpower` on `SimLight` and `TCubeLaser` -- and on `TCubeLaser` it holds a linear current-to-power guess in a field labelled `"mW"`, contradicted by bench measurement and **deprecated from v0.2.3** (removal queued for a future 0.3.0). From v0.2.3 read `laser.drive_current` instead: the drive current in mA that `setpower` last accepted, `NaN` before the first one; `CrystaLaser`, `VortranLaser` and `DaqTrLight` write the voltage to the DAQ and leave the field at its constructor value (traced). Where the driver does not track it, the system must record the requested power itself: `Bench` below retains the last `BenchState` in `sys.requested`, `get_state` returns that, and `measured_power` reads the field (executed against a DAQ-like fake: requested `3.5`, measured `0.0`). |
-| **Measured hardware state** | whatever the driver reads back | `stage.real_x` after `getposition`; a frame; `connectionstatus` | what the hardware said, at the moment you asked. **[limitation]** the Sim stages copy `targ_*` into `real_*`, so measured equals requested there by construction. |
+| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.properties.power` | what you asked for. **[limitation]** `properties.power` is only updated by `setpower` on `SimLight`; `CrystaLaser`, `VortranLaser` and `DaqTrLight` write the voltage to the DAQ and leave the field at its constructor value (traced). **[guarantee]** (0.2.5) `properties.power` is deprecated on a `DiodeLaser`: `SimDiodeLaser` and any `ConstantPhotocurrent` laser never write it, and an open-loop `TCubeLaser` still writes 0.2.4's uncalibrated linear guess (not in `power_unit`'s unit; read `drive_current` instead). Its requested state splits by mode: in `ConstantCurrent`, `laser.drive_current` is the mA `setcurrent!` last accepted (`NaN` before the first); in `ConstantPhotocurrent`, `drive_current` stays `NaN` for the life of the laser (the loop owns the current) and the request lives in `laser.pd.output_power_requested` (mW at the laser output) and `laser.pd.photocurrent_requested` (A, the decoded setpoint the loop was given). What the controller reports is measured state, next row. Where the driver does not track it, the system must record the requested power itself: `Bench` below retains the last `BenchState` in `sys.requested`, `get_state` returns that, and `measured_power` reads the field (executed against a DAQ-like fake: requested `3.5`, measured `0.0`). |
+| **Measured hardware state** | whatever the driver reads back | `stage.real_x` after `getposition`; a frame; `connectionstatus` | what the hardware said, at the moment you asked. **[limitation]** the Sim stages copy `targ_*` into `real_*`, so measured equals requested there by construction. On a `DiodeLaser`: `measured_current` (mA), `measured_photocurrent` (A) and `loop_status` are readings; `indicated_output_power` (mW, `ConstantPhotocurrent` only) is a conversion of the photocurrent reading through a bench calibration, not a measurement of light. **[limitation]** on `TCubeLaser` these read Kinesis caches that `initialize` sets polling (50 ms); that polling refreshes them is not hardware-verified. |
 | **Saved metadata** | the `export_state` tree in the HDF5 file | `attrs["Main/camera"]["exposure_time"]` | a record of the above at snapshot time, plus whatever the system adds (which is missing, which is requested versus measured). |
 
 **[policy]** name attributes so the reader can tell the kinds apart
@@ -405,15 +421,23 @@ end
 
 # get_state returns what was REQUESTED; measured values are read from device fields separately.
 MC.get_state(sys::Bench) = sys.requested === nothing ? error("no configuration has been requested yet") : sys.requested
-measured_power(sys::Bench) = sys.laser.properties.power          # cached by SimLight/TCube only; stale on the DAQ lights
-                                                                 # and on TCube it is a deprecated uncalibrated guess:
-                                                                 # read laser.drive_current (mA) from v0.2.3 instead
+measured_power(sys::Bench) = laser_reading(sys.laser)
+laser_reading(l::LightSource) = l.properties.power               # cached by SimLight only; stale on the DAQ lights
+laser_reading(l::DiodeLaser) =                                   # 0.2.5: properties.power is deprecated on a DiodeLaser; do not read it
+    regulation_mode(l) isa ConstantPhotocurrent ?
+        indicated_output_power(l) :                              # mW at the laser OUTPUT: a conversion, not a meter
+        NaN                                                      # ConstantCurrent has no optical number; log measured_current(l) (mA)
+
+# The light's setter depends on its kind. On a DiodeLaser `setpower` is deprecated (throws in closed loop); setlevel! is the
+# mode-agnostic call, taking a fraction 0..1 of the device's declared range (0 is not off).
+set_laser!(l::LightSource, p::Float64) = setpower(l, p)          # plain light: the driver's own unit
+set_laser!(l::DiodeLaser, frac::Float64) = setlevel!(l, frac)    # so BenchState.laser_power is a fraction here
 
 function MC.set_state(sys::Bench, st::BenchState)
     sys.in_flight && error("refusing to change configuration while an acquisition is in flight")
     sys.cam.exposure_time = st.exposure_time      # requested; the driver pushes it on the next acquisition call
     move(sys.stage, sys.stage.targ_x, sys.stage.targ_y, st.z)
-    setpower(sys.laser, st.laser_power)
+    set_laser!(sys.laser, st.laser_power)
     sys.requested = st                            # retained here because the light driver may not keep it
     return sys
 end
@@ -469,7 +493,9 @@ end
 ```
 
 What the run showed (`SimCamera(roi=CameraROI(1,1,64,32), exposure_time=0.01)`,
-`SimStage3d()`, `SimLight()` unless stated):
+`SimStage3d()`, `SimLight()` unless stated; the `DiodeLaser` methods of
+`laser_reading` and `set_laser!` were added for 0.2.5 and are traced from the
+source, not part of this run, which exercised the `LightSource` paths):
 
 | Path | Result |
 |---|---|
@@ -545,17 +571,17 @@ stop; each is false at v0.2.0.
   the device's current `properties.power`/`properties.is_on`, so constructing
   the panel is observably read-only. **Caveat:** what `properties.power`
   holds after a `setpower` differs by driver (traced). `SimLight` stores the
-  argument it was given. `TCubeLaser`'s `setpower` takes current in
-  **milliamps** but stores a *calculated* power
-  (`current * max_power / <controller limit>`) in a field labelled `"mW"`, so
-  the units on display and on the wire differ. That pair is **deprecated from
-  v0.2.3** and queued for removal in a future 0.3.0; v0.2.3 adds
-  `laser.drive_current`, the accepted current in mA, which is what the panel
-  would have to read to show the wire. The slider still reads the deprecated
-  field. `CrystaLaser`,
+  argument it was given. `CrystaLaser`,
   `VortranLaser` and `DaqTrLight` never write the field at all, so the slider
   can display a stale cached value on those three. This is not a new opening-time write -- it is
-  about what the widget shows. If you're on an installed copy older
+  about what the widget shows. (Up to v0.2.4 `TCubeLaser` also went through this
+  panel, with a `setpower` that took **milliamps** and stored a calculated power
+  under a `"mW"` label. **[guarantee]** from 0.2.5 a `DiodeLaser` has its own
+  panel, `current_panel` in mA or `power_panel` in mW at the laser output, chosen
+  by mode; opening it issues no command and no read, the readout is filled only by
+  its Read button or the Poll toggle (off by default), and a refused command is
+  shown in the panel rather than thrown; `mc-api-map`'s `references/gui-fields.md`.)
+  If you're on an installed copy older
   than 0.2.1, this was a real hazard on a laser, and a reason a system may
   want its own panel, or to open the shared one only with the shutter closed
   or the laser off.
