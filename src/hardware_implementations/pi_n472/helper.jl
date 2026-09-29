@@ -71,9 +71,9 @@ function setvel(stage::N472,vel::Vector{Float64})
         @error "Failed to set velocity"
     end
 
-    success = PI_qVEL(stage.id, axes, stage.velocity)
-    if success == FALSE
+    qsuccess = PI_qVEL(stage.id, axes, stage.velocity)
+    if qsuccess == FALSE
         @error "Failed to query velocity"
     end
-    return success
+    return (success == FALSE || qsuccess == FALSE) ? FALSE : qsuccess
 end

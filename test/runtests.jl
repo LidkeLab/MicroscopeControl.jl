@@ -8,6 +8,10 @@ const HDF5 = MicroscopeControl.HDF5
 # be included at top level, before the testsets. See the file for the seam.
 include("tcube_fake_sdk.jl")
 
+# Likewise for the PI N-472's GCS2 wrappers, so `initialize`/`shutdown` run
+# against a recorder and never a rig's controller. Top level, before the testsets.
+include("pi_n472_fake_sdk.jl")
+
 @testset "MicroscopeControl.jl" begin
     @testset "Simulated Camera" begin
         cam = SimCamera(exposure_time=0.01)
@@ -702,53 +706,7 @@ include("tcube_fake_sdk.jl")
         end
     end
 
-    @testset "PI N472 (no hardware)" begin
-        N = MicroscopeControl.HardwareImplementations.PI_N472
-
-        @testset "_cstring stops at the first NUL" begin
-            buf = zeros(UInt8, 32)
-            buf[1:14] .= codeunits("PI C-885 SN 42")
-            buf[20] = UInt8('x')   # stale bytes past the terminator are ignored
-            @test N._cstring(buf) == "PI C-885 SN 42"
-            @test N._cstring(codeunits("abc") |> collect) == "abc"
-            @test N._cstring(UInt8[0x00]) == ""
-        end
-
-        @testset "shutdown clears connectionstatus" begin
-            stage = N472()
-            stage.connectionstatus = true
-            stage.id = Cint(-1)   # never connected; PI_IsConnected(-1) is FALSE
-            if isfile(N.PI_GCS2)
-                @test_logs (:info, "Stage not connected") shutdown(stage)
-                @test stage.connectionstatus == false
-            else
-                @test_skip "PI GCS2 DLL not installed"
-            end
-        end
-
-        @testset "initialize without a controller leaves the object retryable" begin
-            # Never command a real controller from the suite: on a rig with a
-            # C-885 attached, `initialize` connects, zeroes the origin and turns
-            # the servos on. Run this branch only when enumeration finds nothing.
-            present = isfile(N.PI_GCS2) &&
-                N.PI_EnumerateUSB(zeros(UInt8, 1024), 1024, "C-885") > 0
-            if present
-                @test_skip "PI C-885 attached; not commanding real hardware from the suite"
-            elseif isfile(N.PI_GCS2)
-                stage = N472()
-                # No C-885 is plugged into a build box: enumeration finds nothing,
-                # initialize must say so and leave the flag cleared (before this
-                # the flag was set before the connect was checked).
-                @test_logs (:error, r"No PI C-885 found") initialize(stage)
-                @test stage.connectionstatus == false
-                @test stage.id == 0
-                # and a second call is not refused as "already initialized"
-                @test_logs (:error, r"No PI C-885 found") initialize(stage)
-            else
-                @test_skip "PI GCS2 DLL not installed"
-            end
-        end
-    end
+    include("pi_n472.jl")
 
     include("contract.jl")
     include("skills.jl")

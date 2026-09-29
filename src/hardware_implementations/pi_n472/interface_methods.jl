@@ -14,67 +14,62 @@ function initialize(stage::N472)
         return
     end
 
-    # Enumerate the C-885 controllers the GCS2 DLL can see. The DLL lists only
-    # controllers nobody has open: one that Device Manager still shows but is
-    # missing here is held by another process (a second Julia, PIMikroMove, an
-    # open COM port).
+    # An absent, unpowered or held controller fails here or at the connect below.
     buffersize = 1024
     buffer = zeros(UInt8, buffersize)
     controllername = "C-885"
     numdevice = PI_EnumerateUSB(buffer, buffersize, controllername)
     if numdevice <= 0
-        @error "No PI C-885 found by the GCS2 library — controller absent, or held by another process"
+        @error "No PI C-885 found by the GCS2 library (absent, unpowered, or held by another process)"
         stage.connectionstatus = false
         return
     end
 
-    # The buffer holds one NUL-terminated description per line. Pass the first
-    # line as a `String`: Julia strings are always NUL-terminated for
-    # `Ptr{Cchar}`, whereas the old code stripped every 0x00 byte and handed
-    # the DLL a bare `Vector{UInt8}`, terminated only by whatever happened to
-    # follow it in memory (usually a zero, so it usually worked).
-    devstring = String(first(split(_cstring(buffer), '\n')))
+    # Descriptions are '\n'-separated with one NUL at the end; pass the first as a String (NUL-terminated for Ptr{Cchar}).
+    devstring = String(strip(first(split(_cstring(buffer), '\n'))))
     @info "PI device: " * devstring
 
     #Connect to usb device
     stage.id = PI_ConnectUSB(devstring)
     @info "Device ID: " * string(stage.id)
     if stage.id < 0
-        # The connect itself failed (id -1): typically another process already
-        # holds the controller. Leave the flag cleared so `initialize` can be
-        # retried on the same object.
+        # Connect failed (id -1): leave the flag cleared so initialize can be retried.
         stage.connectionstatus = false
-        @error "PI_ConnectUSB failed for \"$devstring\" (init error $(PI_GetInitError())) — the controller is probably held by another process"
+        @error "PI_ConnectUSB failed for \"$devstring\" (init error $(PI_GetInitError())); the controller may be held by another process"
         return
     end
     stage.connectionstatus = true
 
-    #Query the unit of the physical position
-    axes = join(stage.axes, " ")
-    #unitstring = zeros(UInt8, buffersize)
-    #success = PI_qPUN(stage.id, axes, unitstring, buffersize)
-    #stage.units = String(unitstring)
+    # Every step from here is checked; on failure close the connection so a retry starts clean.
+    try
+        axes = join(stage.axes, " ")
+        failed(step) = error("N472 initialize: $step failed (GCS error $(PI_GetError(stage.id)))")
 
-    #query reference mode
-    refmode = zeros(BOOL, 3)
-    
-    success = PI_RON(stage.id, axes, refmode)
-    success = PI_qRON(stage.id, axes, refmode)
-    @info "Reference mode: " * string(refmode)
+        #query reference mode
+        refmode = zeros(BOOL, 3)
 
-    # set the current position as the reference position
-    success = set_refpos(stage)
+        PI_RON(stage.id, axes, refmode) == FALSE && failed("PI_RON")
+        PI_qRON(stage.id, axes, refmode) == FALSE && failed("PI_qRON")
+        @info "Reference mode: " * string(refmode)
 
-    # turn on servo 
-    for i in eachindex(stage.axes)
-        servo(stage, i, TRUE)
+        # set the current position as the reference position
+        set_refpos(stage) == FALSE && failed("set_refpos (PI_POS)")
+
+        # turn on servo
+        for i in eachindex(stage.axes)
+            servo(stage, i, TRUE) == FALSE && failed("servo axis $i")
+        end
+
+        #Query the travel range
+        PI_qTMN(stage.id, axes, stage.minpos) == FALSE && failed("PI_qTMN")
+        PI_qTMX(stage.id, axes, stage.maxpos) == FALSE && failed("PI_qTMX")
+
+        #set velocity
+        setvel(stage, stage.velocity) == FALSE && failed("setvel")
+    catch
+        shutdown(stage)
+        rethrow()
     end
-    #Query the travel range
-    success = PI_qTMN(stage.id, axes, stage.minpos)
-    success = PI_qTMX(stage.id, axes, stage.maxpos)
-
-    #set velocity
-    success = setvel(stage, stage.velocity)
 
     @info "Stage initialized"
     return
@@ -88,9 +83,9 @@ function shutdown(stage::N472)
     else
         @info "Stage not connected"
     end
-    # Clear the flag so the same object can be initialized again; before this
-    # a second `initialize` after `shutdown` was refused as "already initialized".
+    # Clearing both lets the object be re-initialized and stops a stale id closing another object's connection.
     stage.connectionstatus = false
+    stage.id = Cint(-1)
     return
 end
 
@@ -119,9 +114,7 @@ function StageInterface.home(stage::N472)
 end
 
 function StageInterface.stopmotion(stage::N472)
-    # Every GCS2 axes argument is one space-separated string. `stage.axes` is a
-    # Vector{String}; passing it as Ptr{Cchar} handed the DLL a pointer to
-    # string references, not characters, so the halt never reached the axes.
+    # GCS2 axes arguments are one space-separated string.
     axes = join(stage.axes, " ")
     success = PI_HLT(stage.id, axes)
     return success
