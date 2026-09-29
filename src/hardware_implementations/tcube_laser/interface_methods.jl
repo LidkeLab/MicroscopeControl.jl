@@ -271,7 +271,7 @@ kept, which is an upper bound for the same reason.
 function lower_open_loop_clamp!(light::TCubeLaser{ConstantCurrent})
     light.controller_max_current > light.max_current || return nothing
     if light.max_current < DIGPOT_MIN_mA
-        @warn "TCubeLaser $(light.serialNo): max_current = $(light.max_current) mA is below the lowest limit the controller's potentiometer can be set to (about $(round(DIGPOT_MIN_mA; digits=2)) mA). The potentiometer is left alone: the controller's own limit stays $(light.controller_max_current) mA and max_current is enforced in software only (setcurrent! refuses above it), as in 0.2.4. Anything outside this driver can still drive the diode to the controller's limit."
+        @warn "TCubeLaser $(light.serialNo): max_current = $(light.max_current) mA is below the lowest limit the controller's potentiometer can be set to (about $(round(DIGPOT_MIN_mA; digits=2)) mA). The potentiometer is left alone: the controller's own limit stays $(light.controller_max_current) mA and max_current is enforced in software only (setcurrent! refuses above it), light_on will refuse until the current limit stored in the controller is at or below max_current."
         return nothing
     end
     try
@@ -284,7 +284,7 @@ function lower_open_loop_clamp!(light::TCubeLaser{ConstantCurrent})
             light.controller_max_current   # the pot was only lowered: the earlier reading is an upper bound
         end
         light.controller_max_current = limit
-        @warn "TCubeLaser $(light.serialNo): lowering the potentiometer to max_current = $(light.max_current) mA failed; the controller's limit now reads $(limit) mA and max_current is enforced in software only (setcurrent! refuses above it), as in 0.2.4. Anything outside this driver can still drive the diode to the controller's limit." exception = err
+        @warn "TCubeLaser $(light.serialNo): lowering the potentiometer to max_current = $(light.max_current) mA failed; the controller's limit now reads $(limit) mA and max_current is enforced in software only (setcurrent! refuses above it), light_on will refuse until the current limit stored in the controller is at or below max_current." exception = err
     end
     return nothing
 end
@@ -860,12 +860,16 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     serialNo = light.serialNo
     has_request(light) || @warn "TCubeLaser $(serialNo): light_on before any setpoint was requested; sending setpoint 0, since the controller's stored setpoint cannot be trusted"
     code = intended_code(light)
-    check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
+    # On (or unknown) from the moment the enable is sent (Codex C3); a failed
+    # enable is rolled back like a failed setpoint, since the SDK may report a
+    # failure for an enable that took (C2).
+    light.properties.is_on = true
     try
+        check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
         send_setpoint_ramped(light, code, 0)   # the ramp starts from 0: every disable in this driver zeroes first
         check_lock(light, code)
     catch
-        disable_after_failure(light, "setpoint after enable")
+        disable_after_failure(light, "enable or setpoint after enable")
         rethrow()
     end
     light.properties.is_on = true
@@ -873,7 +877,19 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     return nothing
 end
 
-require_clamp(::ConstantCurrent, light::TCubeLaser, op) = nothing
+# Open loop (Codex C1 and C4): between the enable and the setpoint that follows
+# it the diode runs on the controller's stored setpoint, which this driver cannot
+# clear with the output off. The only bound on that interval is the current
+# limit stored in the controller, so it is read fresh before every enable and
+# the enable is refused if it is above max_current.
+function require_clamp(::ConstantCurrent, light::TCubeLaser, op)
+    limit = read_limit_mA(light)
+    limit > light.max_current && error(
+        "TCubeLaser $(light.serialNo): $op refused: the current limit stored in the controller reads $(limit) mA, above max_current = $(light.max_current) mA. " *
+        "Between the enable and the setpoint the diode runs on the controller's stored setpoint, bounded only by that limit. " *
+        "Lower the controller's current limit (front-panel encoder or software) to max_current or below, or call initialize to lower it.")
+    return nothing
+end
 function require_clamp(::ConstantPhotocurrent, light::TCubeLaser, op)
     isnan(light.pd.max_current_clamp) && error(
         "TCubeLaser $(light.serialNo): $op refused: the max-current clamp has not been programmed and verified. " *

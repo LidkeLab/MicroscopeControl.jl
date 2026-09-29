@@ -380,7 +380,9 @@ lab_summary("Core") do
             # light_on enables, THEN sends it, and confirms it.
             empty!(FakeKinesis.calls)
             light_on(laser)
-            @test FakeKinesis.calls == ["LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            # A fresh read of the stored current limit first (Codex C1): the enable is refused above max_current.
+            @test FakeKinesis.calls == ["LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit",
+                                        "LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
             @test FakeKinesis.setpoints == [UInt16(5957)]
             @test FakeKinesis.setpoint_held[] == 5957
             @test Float64(5957) / laser.max_setpoint * laser.max_setcurrent <= 40.0
@@ -961,6 +963,39 @@ lab_summary("Core") do
             @test_logs (:warn, r"lowering the potentiometer.*software only") match_mode = :any initialize(laser)
             @test FK.digpot[] == 204 && isempty(FK.digpot_sets)
             @test TCube.effective_max_current(laser) == 100.0
+            FK.reset!()
+        end
+
+        @testset "Codex C1-C3: light_on's stored limit, failed enable, is_on (fake SDK)" begin
+            FK = FakeKinesis
+            # C1+C4: a stored current limit above max_current refuses the enable, fresh at every light_on.
+            FK.reset!()
+            laser = cc(; max_current=100.0)
+            initialize(laser)                                    # the fake's limit stays 160 mA: N1 warns
+            setcurrent!(laser, 10.0)
+            n = count(==("LD_EnableOutput"), FK.calls)
+            err = try; light_on(laser); nothing; catch e; e; end
+            @test err isa ErrorException && occursin("current limit stored in the controller", err.msg)
+            @test count(==("LD_EnableOutput"), FK.calls) == n && !laser.properties.is_on
+            FK.diode_limit_raw[] = floor(Int, 90 / 220 * 32767)  # lowered to 90 mA: allowed
+            light_on(laser)
+            @test laser.properties.is_on
+            # C2: an enable that reports failure is rolled back: a zero, then the disable.
+            FK.reset!()
+            laser = cc(); initialize(laser); setcurrent!(laser, 10.0)
+            FK.fail!("LD_EnableOutput")
+            @test_logs (:error, r"output disabled") match_mode = :any @test_throws ErrorException light_on(laser)
+            e = findfirst(==("LD_EnableOutput"), FK.calls)
+            off = findnext(==("LD_DisableOutput"), FK.calls, e)
+            @test off !== nothing && FK.calls[off-1] == "LD_SetLaserSetPoint" && FK.setpoints[end] == 0
+            @test !laser.properties.is_on
+            # C3: on (or unknown) from the moment the enable is sent: an enable that throws while
+            # the disable fails too leaves is_on true.
+            FK.reset!()
+            laser = cc(); initialize(laser); setcurrent!(laser, 10.0)
+            FK.throw!("LD_EnableOutput"); FK.fail!("LD_DisableOutput")
+            @test_logs (:error, r"may still be ON") match_mode = :any @test_throws Exception light_on(laser)
+            @test laser.properties.is_on
             FK.reset!()
         end
 

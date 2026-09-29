@@ -23,6 +23,24 @@ under Changed, and none of them has yet run on hardware.
   or by software) at or below that rating;
 - run a hardware check of the new sequence.
 
+**Deliberate safety change a rig may notice: `light_on` on an open-loop
+`TCubeLaser` now REFUSES while the current limit stored in the controller (set
+with its front-panel encoder or by software) is above `max_current`.** It reads
+that limit fresh before every enable (Codex C1 and C4, from the post-merge review
+of 0.2.4). Between an enable and the setpoint that follows it, the diode runs on
+the controller's stored setpoint. The controller ignores setpoints while its
+output is off, so software cannot clear that setpoint in advance, and the stored
+limit is the only bound on that interval. `initialize` lowers the stored limit to
+`max_current` when it can. When it cannot (a `max_current` below about 17.25 mA,
+or a failed lowering), it warns, and `light_on` then refuses until the limit is
+lowered. Closed loop already refused above its programmed clamp. Also from that
+review:
+- a failed enable is rolled back like a failed setpoint, with a zero and then
+  the disable (C2);
+- `properties.is_on` is recorded as true from the moment the enable is sent, so
+  a failure during the setpoint never reports a lit diode as off (C3).
+Not yet run on hardware.
+
 **Hardware verification.** Closed loop was run on the 642 nm rig on #66's
 original head. The review changes on top of it, the open-loop changes and the PI
 changes are exercised only against fake controllers.
@@ -91,7 +109,7 @@ connect-failure branch were not exercised on hardware.
   Julia always NUL-terminates at a `Ptr{Cchar}` boundary. The buffer grew from
   128 to 1024 bytes to match the C-867 driver.
 
-### Changed
+### Changed (PI N-472)
 
 Behaviour a rig pinned to an earlier tag will see from the PI N-472 driver,
 each on its own:
@@ -285,7 +303,7 @@ setlevel!(laser, 0.4)
   verify it, and the 642 nm rig's current calibration (224.2 W/A on the 1 mA
   range, measured before the fibre, with its closed-loop verification table).
 
-### Changed
+### Changed (TCube laser)
 - **`TCubeLaser.initialize` starts background polling** (`LD_StartPolling`,
   every `POLL_INTERVAL_MS`); `shutdown` and a failed `initialize` stop it
   (`LD_StopPolling`). Not yet run on hardware; needs the 642 nm rig check.
