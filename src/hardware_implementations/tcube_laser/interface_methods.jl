@@ -791,7 +791,14 @@ stored setpoint, bounded in hardware only by its current-limit potentiometer;
 see [`TCubeLaser`](@ref).
 
 A `ConstantPhotocurrent` laser refuses until `initialize` has programmed and
-verified its clamp (`pd.max_current_clamp` is not `NaN`).
+verified its clamp (`pd.max_current_clamp` is not `NaN`), and re-checks the
+controller before it emits: a fresh status read must report closed loop, and a
+fresh read of the controller's limit must not exceed the programmed clamp by
+more than 1 mA (a controller power cycle can restore the pot).
+
+`[limitation]` those two checks add two request/read round trips (about 2 x
+`REQUEST_WAIT_S`) to every closed-loop `light_on` and `setoutputpower!`;
+unvalidated on hardware.
 """
 function LightSourceInterface.light_on(light::TCubeLaser)
     require_clamp(regulation_mode(light), light, "light_on")
@@ -829,6 +836,16 @@ function require_clamp(::ConstantPhotocurrent, light::TCubeLaser, op)
     isnan(light.pd.max_current_clamp) && error(
         "TCubeLaser $(light.serialNo): $op refused: the max-current clamp has not been programmed and verified. " *
         "Call initialize first; it is the only real protection in closed loop.")
+    # Fresh reads, not the polled cache: the mode or the pot may have changed
+    # since initialize (front panel, or a controller power cycle).
+    bits = read_status_fresh(light.serialNo)
+    bits & STATUS_BITS.closed_loop != 0 || error(
+        "TCubeLaser $(light.serialNo): $op refused: the controller is not in closed loop (status 0x$(string(bits; base=16))); " *
+        "was the mode changed on the front panel? Call initialize again.")
+    limit = read_limit_mA(light)
+    limit > light.pd.max_current_clamp + 1.0 && error(
+        "TCubeLaser $(light.serialNo): $op refused: the controller's max-current clamp reads $(limit) mA, above the $(light.pd.max_current_clamp) mA " *
+        "that initialize programmed. The clamp may have been reset by a controller power cycle: call initialize again.")
     return nothing
 end
 
@@ -877,7 +894,11 @@ end
 Command the optical power at the laser output, in mW -- the plane where
 `pd.wa_calibration` was measured. Not the power at the sample.
 
-1. Refuse unless `initialize` programmed the clamp.
+1. Refuse unless `initialize` programmed the clamp, and re-check the controller:
+   a fresh status read must report closed loop and a fresh limit read must not
+   exceed the programmed clamp by more than 1 mA. `[limitation]` this adds two
+   request/read round trips (about 2 x `REQUEST_WAIT_S`) to every call;
+   unvalidated on hardware.
 2. [`check_power`](@ref) against `properties.min_power..max_power`.
 3. Refuse from the (polled) status word: unless it reports closed loop; if the
    photodiode amplifier is over range; or if it is under range while the output
