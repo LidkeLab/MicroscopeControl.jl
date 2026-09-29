@@ -53,7 +53,11 @@ const frf_hook = Ref{Any}(nothing)
 "Returned by `PI_GetError`."
 const error_code = Ref(0)
 
+"`PI_IsMoving` answers moving on both axes for this many polls."
+const moving_polls = Ref(0)
+
 const ready_polls = Ref(0)
+const moving_count = Ref(0)
 const referenced_polls = Ref(0)
 
 function reset!()
@@ -71,6 +75,8 @@ function reset!()
     error_code[] = 0
     ready_polls[] = 0
     referenced_polls[] = 0
+    moving_polls[] = 0
+    moving_count[] = 0
     return nothing
 end
 
@@ -144,22 +150,24 @@ FakePIStage.reset!()
     PI_VEL(ID, axes, values) = Main.FakePIStage.status!("PI_VEL")
     function PI_qVEL(ID, axes, values)
         st = Main.FakePIStage.status!("PI_qVEL")
-        values[1] = values[2] = 1.0
+        st == 1 && (values[1] = values[2] = 1.0)
         return st
     end
     function PI_IsMoving(ID, axes, values)
         st = Main.FakePIStage.status!("PI_IsMoving")
-        values[1] = values[2] = 0
+        Main.FakePIStage.moving_count[] += 1
+        moving = Main.FakePIStage.moving_count[] <= Main.FakePIStage.moving_polls[]
+        st == 1 && (values[1] = values[2] = moving ? 1 : 0)
         return st
     end
     function PI_qTMN(ID, axes, values)
         st = Main.FakePIStage.status!("PI_qTMN")
-        values[1] = values[2] = 0.0
+        st == 1 && (values[1] = values[2] = 0.0)
         return st
     end
     function PI_qTMX(ID, axes, values)
         st = Main.FakePIStage.status!("PI_qTMX")
-        values[1] = values[2] = 25.0
+        st == 1 && (values[1] = values[2] = 25.0)
         return st
     end
     function PI_qPOS(ID, axes, values)

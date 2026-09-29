@@ -37,6 +37,7 @@ Function to update the position range of the PI Stage
 """
 function StageInterface.getrange(stage::PIStage)
     getrange(stage)
+    return stage.range_y  # preserves 0.2.5's return value
 end
 
 

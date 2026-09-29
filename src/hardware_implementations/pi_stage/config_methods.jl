@@ -17,6 +17,17 @@ function initialize_original(stage::PIStage)
         return
     end
 
+    if stage.id >= 0
+        # An earlier initialize connected and its close failed: this stage still holds the
+        # controller, and the DLL does not enumerate a controller that is open. Close it first.
+        @info "Closing this stage's earlier connection (id $(stage.id)) before reconnecting"
+        shutdown_original(stage)
+        if stage.id >= 0
+            @error "This stage's earlier connection (id $(stage.id)) could not be closed; not reconnecting"
+            return
+        end
+    end
+
     # Create a buffer string
     bufferstring = Vector{UInt8}(undef, 1024)
 
@@ -60,16 +71,15 @@ function initialize_original(stage::PIStage)
         _waitforreference(stage; timeout = REFERENCE_TIMEOUT_S[])
 
         #Find the max and min position of the axes
-        getrange(stage)
+        getrange(stage) == 1 ||
+            error("PI_qTMN/PI_qTMX failed (GCS error $(_pi_geterror(stage))); travel range unknown")
 
         #Wait for any remaining motion to finish
-        ismoving(stage)
-        while stage.ismoving[1] == 1 || stage.ismoving[2] == 1
-            ismoving(stage)
-        end
+        _waitforstop(stage; timeout = REFERENCE_TIMEOUT_S[])
 
         #Set the velocity to `stage.velocity`
-        success = setvel(stage, stage.velocity)
+        setvel(stage, stage.velocity) == 1 ||
+            error("PI_VEL/PI_qVEL failed (GCS error $(_pi_geterror(stage))); velocity not set")
     catch
         shutdown_original(stage)
         rethrow()
@@ -93,8 +103,9 @@ end
 _pi_geterror(stage::PIStage) = PI_GetError(stage.id)
 
 """
-How long `initialize` waits, in seconds, for the controller to become ready and then for both
-axes to report referenced. A `Ref` so tests can shorten it.
+How long each of `initialize`'s three waits may take, in seconds: for the controller to report
+ready, for both axes to report referenced, and for motion to stop. The budgets are separate, so
+`initialize` can wait up to three times this in all. A `Ref` so tests can shorten it.
 """
 const REFERENCE_TIMEOUT_S = Ref(60.0)
 
@@ -117,10 +128,28 @@ function _waitforready(stage::PIStage; timeout::Real = REFERENCE_TIMEOUT_S[])
 end
 
 """
+Poll `PI_IsMoving` every 0.1 s until neither axis is moving; throw if the query fails or motion
+has not stopped within `timeout` seconds. Query only: it sends no motion command.
+"""
+function _waitforstop(stage::PIStage; timeout::Real = REFERENCE_TIMEOUT_S[])
+    # PI_IsMoving fills `BOOL*`, bound as UInt32 in gcs2.jl.
+    moving = zeros(UInt32, 2)
+    deadline = time() + timeout
+    while true
+        ok = PI_IsMoving(stage.id, "1 2", moving)
+        ok == 1 || error("PI_IsMoving failed (GCS error $(_pi_geterror(stage)))")
+        stage.ismoving = (moving[1] != 0, moving[2] != 0)
+        any(!=(0), moving) || return nothing
+        time() > deadline && error("PI stage still moving after $(timeout) s")
+        sleep(0.1)
+    end
+end
+
+"""
 Poll `PI_qFRF` until both axes report referenced; throw if that has not happened within
 `timeout` seconds or the query itself fails.
 """
-function _waitforreference(stage::PIStage; timeout::Real = 60.0)
+function _waitforreference(stage::PIStage; timeout::Real = REFERENCE_TIMEOUT_S[])
     # PI_qFRF fills `BOOL*`: one 32-bit int per axis, like PI_SVO.
     referenced = zeros(Cint, 2)
     deadline = time() + timeout
@@ -196,18 +225,18 @@ end
 
 function setvel(stage::PIStage,vel::Vector{Float64})
 
-    success = PI_VEL(stage.id, "1 2", vel)
+    setok = PI_VEL(stage.id, "1 2", vel)
 
-    if success == 0
+    if setok == 0
         @error "Failed to set velocity"
     end
-    velocity = Vector{Cdouble}(undef, 2)
-    success = PI_qVEL(stage.id, "1 2", velocity)
-    
-    if success == 0
+    velocity = zeros(Cdouble, 2)
+    queryok = PI_qVEL(stage.id, "1 2", velocity)
+
+    if queryok == 0
         @error "Failed to query velocity"
     else
         stage.velocity = velocity
     end
-    return success
+    return setok == 1 && queryok == 1 ? Cint(1) : Cint(0)
 end

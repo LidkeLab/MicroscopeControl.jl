@@ -1,12 +1,7 @@
 using GLMakie
 
 function gui(positioner::Zpositioner)
-    try
-        initialize(positioner)
-    catch
-        @error "Failed to initialize the positioner. Please check the connection."
-        return
-    end
+    MicroscopeControl.gui_initialize(positioner, "positioner") || return
 
     fig = Figure(size=(600, 400))
     
