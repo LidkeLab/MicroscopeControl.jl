@@ -748,8 +748,9 @@ function enter_mode!(::ConstantPhotocurrent, light::TCubeLaser)
         "Check the rear-panel DIP switch; the calibration is only valid on the range it was measured on.")
 
     # 3. the clamp, as the controller itself reports it (the output is off:
-    # `initialize` zeroed and disabled it before this)
-    pd.max_current_clamp = program_clamp!(light)
+    # `initialize` zeroed and disabled it before this). Recorded only once the
+    # whole sequence has succeeded, so a failure below leaves it NaN.
+    clamp = program_clamp!(light)
 
     # 4. closed loop, verified
     check_err(LD_SetClosedLoopMode(serialNo), "LD_SetClosedLoopMode", serialNo)
@@ -763,6 +764,7 @@ function enter_mode!(::ConstantPhotocurrent, light::TCubeLaser)
     wa = Float64(LD_GetWACalibFactor(serialNo))
     isapprox(wa, pd.wa_calibration; rtol=1e-6) || error(
         "$name: set the W/A calibration factor to $(pd.wa_calibration) but the controller reports $(wa)")
+    pd.max_current_clamp = clamp
     return nothing
 end
 
@@ -845,8 +847,11 @@ function require_clamp(::ConstantPhotocurrent, light::TCubeLaser, op)
     bits & STATUS_BITS.closed_loop != 0 || error(
         "TCubeLaser $(light.serialNo): $op refused: the controller is not in closed loop (status 0x$(string(bits; base=16))); " *
         "was the mode changed on the front panel? Call initialize again.")
+    # The clamp is the highest pot position whose limit is <= max_current, so
+    # one step up already exceeds max_current; half a step (~0.4 mA) of slack
+    # above the recorded clamp catches that drift too.
     limit = read_limit_mA(light)
-    limit > light.pd.max_current_clamp + 1.0 && error(
+    (limit > light.max_current || limit > light.pd.max_current_clamp + 0.5) && error(
         "TCubeLaser $(light.serialNo): $op refused: the controller's max-current clamp reads $(limit) mA, above the $(light.pd.max_current_clamp) mA " *
         "that initialize programmed. The clamp may have been reset by a controller power cycle: call initialize again.")
     return nothing
@@ -903,9 +908,10 @@ Command the optical power at the laser output, in mW -- the plane where
    request/read round trips (about 2 x `REQUEST_WAIT_S`) to every call;
    unvalidated on hardware.
 2. [`check_power`](@ref) against `properties.min_power..max_power`.
-3. Refuse from the (polled) status word: unless it reports closed loop; if the
-   photodiode amplifier is over range; or if it is under range while the output
-   is on. An under-range flag with the output off is expected and ignored.
+3. Refuse from the (polled) status word unless it reports closed loop, or if the
+   photodiode amplifier is over range. An under-range flag with the output on
+   only warns (the resolution is reduced; the loop still regulates, as seen at
+   1 mW on the 642 nm rig); with the output off it is expected and ignored.
 4. Convert: photocurrent `= power_mW / 1000 / wa_calibration` A, encoded by
    [`photocurrent_code`](@ref), rounding DOWN; above full scale it throws
    naming the DIP switch.
