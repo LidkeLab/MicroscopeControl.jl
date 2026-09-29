@@ -70,8 +70,9 @@ each on its own:
   `connectionstatus` and `id`, and throws with the step and its GCS error
   code. Before, failures were ignored and "Stage initialized" was logged on a
   half-initialized stage. Enumeration and connect failures still log `@error`
-  and return, as `initialize(::PIStage)` does. **Breaking** under this
-  package's versioning rule: what the call throws changed.
+  and return, as `initialize(::PIStage)` does. Not a break under this
+  package's versioning rule: it changes behaviour only on a path that was
+  already broken.
 - **Re-initializing after `shutdown` now re-zeroes the frame.** A second
   `initialize` on the same object was refused and did nothing; it now runs the
   full sequence: reference mode off, `PI_POS` redefining the current position
