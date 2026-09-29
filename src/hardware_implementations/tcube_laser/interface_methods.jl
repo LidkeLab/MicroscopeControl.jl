@@ -261,13 +261,49 @@ end
 """
     light_on(light::TCubeLaser)
 
-Enable the controller's output, then record it. `properties.is_on` is a
-*requested* state across this package, but it is at least written after the
-call that was supposed to make it true rather than before it, so a failed
-enable no longer leaves the field claiming the laser is on.
+Enable the controller's output, then send the requested setpoint.
+
+The controller ignores a setpoint sent while its output is off (see
+[`TCubeLaser`](@ref)). So `drive_current` is validated first against the
+current ceiling (nothing is sent if that throws), the output is enabled, and
+only then is its setpoint code sent. Called while the output is already on,
+this re-sends `drive_current`, replacing any lower value set from Kinesis or
+the front panel. If no [`setpower`](@ref) has been called, setpoint 0 is sent, with a
+warning. If the setpoint fails after the enable, the output is disabled again
+and the error rethrown; `properties.is_on` is written only once both steps
+have succeeded (or to what the failed disable left the output as).
+
+`[limitation]` Between the enable and the setpoint the controller runs on its
+stored setpoint, bounded in hardware only by its current-limit potentiometer;
+see [`TCubeLaser`](@ref).
 """
 function LightSourceInterface.light_on(light::TCubeLaser)
-    check_err(LD_EnableOutput(light.serialNo), "LD_EnableOutput", light.serialNo)
+    serialNo = light.serialNo
+    if isnan(light.drive_current)
+        code = UInt16(0)
+        @warn "TCubeLaser $(serialNo): light_on before any setpower; sending setpoint 0, since the controller's stored setpoint cannot be trusted"
+    else
+        check_current(light, light.drive_current)
+        code = setpoint_code(light, light.drive_current)
+    end
+    check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
+    try
+        check_err(LD_SetLaserSetPoint(serialNo, code), "LD_SetLaserSetPoint", serialNo)
+    catch
+        disabled = false
+        try
+            disabled = LD_DisableOutput(serialNo) == 0
+        catch
+        end
+        if disabled
+            light.properties.is_on = false
+            @error "TCubeLaser $(serialNo): setpoint after enable failed; output disabled"
+        else
+            light.properties.is_on = true
+            @error "TCubeLaser $(serialNo): setpoint after enable failed and the disable failed; the output may still be ON at the controller's stored setpoint"
+        end
+        rethrow()
+    end
     light.properties.is_on = true
     println("$(light.laser_color)" * "_laser is on")
     return nothing
@@ -301,6 +337,13 @@ sub-code request sees its own number, and `export_state` writes that number to
 the HDF5 attributes. There is no field here that reports what actually went to
 the wire.
 
+# The controller ignores setpoints while the output is off
+
+The setpoint is sent on every call, but the controller ignores it while the
+output is off (see [`TCubeLaser`](@ref)); it then takes effect only because
+[`light_on`](@ref) sends it again after enabling. Sending it anyway covers an
+output enabled outside this object.
+
 # What is recorded
 
 On success, `light.drive_current` holds the current that was accepted, in mA.
@@ -320,17 +363,43 @@ function LightSourceInterface.setpower(light::TCubeLaser, current::Float64)
     check_err(LD_SetLaserSetPoint(light.serialNo, current_setpoint), "LD_SetLaserSetPoint", light.serialNo)
     light.drive_current = current
     light.properties.power = legacy_power(light, current) # deprecated; see legacy_power
-    println("Laser current set to $current mA")
+    println("Laser current set to $current mA" * (light.properties.is_on ? "" : " (output off: applied at light_on)"))
     return nothing
+end
+
+"""
+    zero_setpoint(light::TCubeLaser)
+
+Send setpoint 0 while the output is still on, so the controller does not keep
+the last current for its next enable. Never throws: returns `nothing` on
+success, otherwise the failure (a status code or an exception) for the caller
+to report.
+"""
+function zero_setpoint(light::TCubeLaser)
+    try
+        status = LD_SetLaserSetPoint(light.serialNo, UInt16(0))
+        return status == 0 ? nothing : "status $status"
+    catch err
+        return err
+    end
 end
 
 """
     light_off(light::TCubeLaser)
 
-Disable the controller's output, then record it. See [`light_on`](@ref) on the
-ordering.
+Zero the controller's setpoint, then disable its output, then record it.
+
+The controller keeps its setpoint across a disable (see [`TCubeLaser`](@ref)),
+so the setpoint is zeroed while the output is still on: the next enable starts
+dark. A failed zero is logged, before the disable, and does not throw, since
+the output is still turned off; a failed disable throws and leaves
+`properties.is_on` unchanged.
+`drive_current` is not changed: it is the request the next [`light_on`](@ref)
+re-sends.
 """
 function LightSourceInterface.light_off(light::TCubeLaser)
+    zeroed = zero_setpoint(light)
+    isnothing(zeroed) || @error "TCubeLaser $(light.serialNo): zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
     check_err(LD_DisableOutput(light.serialNo), "LD_DisableOutput", light.serialNo)
     light.properties.is_on = false
     println("$(light.laser_color)" * "_laser is off")
@@ -340,12 +409,15 @@ end
 """
     shutdown(light::TCubeLaser)
 
-Disable the output and close the connection. A failed disable throws, but the
-connection is closed either way: leaving the Kinesis handle open would also
+Zero the setpoint, disable the output and close the connection. The zero
+comes first, as in [`light_off`](@ref) (see [`TCubeLaser`](@ref)). A failed zero is logged; a failed disable throws, but
+the connection is closed either way: leaving the Kinesis handle open would also
 block the reconnection a caller needs in order to retry the disable.
 """
 function shutdown(light::TCubeLaser)
     serialNo = light.serialNo
+    zeroed = zero_setpoint(light)
+    isnothing(zeroed) || @error "TCubeLaser $serialNo: zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
     try
         check_err(LD_DisableOutput(serialNo), "LD_DisableOutput", serialNo)
         light.properties.is_on = false

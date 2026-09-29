@@ -55,6 +55,21 @@ number the driver actually acted on.
 `setpower` validates against the *smallest* of `min_current`'s counterparts:
 `max_current`, `controller_max_current` (ignored while `NaN`) and
 `max_setcurrent`. See [`check_current`](@ref).
+
+# The setpoint only takes while the output is on
+
+The Thorlabs TLD001 ignores `LD_SetLaserSetPoint` while its output is disabled
+and, on the next `LD_EnableOutput`, runs on whatever setpoint it had stored
+(observed on the 642 nm rig's TLD001 64849775, 2026-09-28). So a `setpower`
+value reaches the diode only because `light_on` sends it again right after
+enabling, and `light_off` and `shutdown` zero the setpoint before disabling,
+so the next enable starts dark.
+
+`[limitation]` Between the enable and the setpoint that follows it (one USB
+round trip) the controller runs on its stored setpoint: 0 after this driver's
+`light_off` or `shutdown`, but anything up to the controller's current limit if
+other software left it there. In that window the current-limit potentiometer
+is the only hardware bound; set it at or below the diode's rating.
 """
 mutable struct TCubeLaser <: LightSource
     unique_id::String
