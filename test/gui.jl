@@ -148,4 +148,28 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
         end
         @test isempty(FakeKinesis.calls)
     end
+
+    # The toggle's label follows the driver's `is_on`, not the click: a
+    # `light_off` that fails leaves the diode on, and the panel must say so.
+    @testset "Output toggle reports the driver's state, not the click" begin
+        FakeKinesis.reset!()
+        laser = TCubeLaser("00000000"; mode=ConstantCurrent())
+        initialize(laser)
+        light_on(laser)
+        fig = Figure()
+        message = Label(fig[1, 1], "")
+        toggle, status = MicroscopeControl.LightSourceInterface._attach_output_toggle!(fig, 2, laser, message)
+        @test toggle.active[] && status[] == "output on"
+        FakeKinesis.fail!("LD_DisableOutput")
+        toggle.active[] = false
+        @test laser.properties.is_on
+        @test status[] == "output on"
+        @test toggle.active[]
+        @test startswith(message.text[], "refused")
+        # A command that works is followed by the label.
+        delete!(FakeKinesis.status, "LD_DisableOutput")
+        toggle.active[] = false
+        @test !laser.properties.is_on && status[] == "output off" && !toggle.active[]
+        GLMakie.closeall()
+    end
 end

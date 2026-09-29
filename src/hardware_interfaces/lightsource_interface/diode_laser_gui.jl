@@ -136,18 +136,38 @@ end
 
 On/off toggle, initialised from `properties.is_on` so opening the panel does not
 impose a state. The slider's lowest position is not "off"; this is.
+
+The label follows the driver, not the click: after every command it shows
+`properties.is_on`, whatever the command did, and if the toggle disagrees (a
+failed `light_off` leaves the diode on) the toggle is put back, under a guard
+that keeps the correction from firing `light_on`/`light_off` again. Returns
+`(; toggle, status)`, the `Toggle` and the label's `Observable{String}`.
 """
 function _attach_output_toggle!(fig, row, laser::DiodeLaser, message)
+    label(is_on) = is_on ? "output on" : "output off"
     toggle = Toggle(fig[row, 1], active=laser.properties.is_on, halign=:left)
-    Label(fig[row, 2], lift(x -> x ? "output on" : "output off", toggle.active))
+    status = Observable(label(laser.properties.is_on))
+    Label(fig[row, 2], status)
+    correcting = Ref(false)
     on(toggle.active) do x
+        correcting[] && return
         try
             x ? light_on(laser) : light_off(laser)
         catch e
             message.text = "refused: " * _panel_message(e)
         end
+        is_on = laser.properties.is_on
+        status[] = label(is_on)
+        if toggle.active[] != is_on
+            correcting[] = true
+            try
+                toggle.active[] = is_on
+            finally
+                correcting[] = false
+            end
+        end
     end
-    return toggle
+    return (; toggle, status)
 end
 
 function _show_panel(fig, laser::DiodeLaser)
