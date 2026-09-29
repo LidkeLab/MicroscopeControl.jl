@@ -485,27 +485,27 @@ end
 """
     RAMP_STEP_mW, RAMP_STEP_S
 
-In closed loop a large upward setpoint step from a low level locks the loop:
-hardware-verified on the 642 nm rig's TLD001 (2026-09-29), a jump from 0 to
-10 mW settled at ~90 mA / 21 mW (the photodiode reading pinned at 98 µA)
-whatever the request, while the same target reached in steps settled at
-78 mA / 9.3 mW, exactly as the Kinesis application does. So
-[`send_setpoint_ramped`](@ref) walks any upward closed-loop step in
-`RAMP_STEP_mW` increments `RAMP_STEP_S` apart. Downward steps and open loop
-are sent directly.
+An optional ramp for upward closed-loop setpoint steps, **off by default**
+(`RAMP_STEP_mW[] = Inf`: every setpoint is a single write, ~10 ms). Set
+`RAMP_STEP_mW[]` to a finite value in mW and [`send_setpoint_ramped`](@ref)
+walks any larger upward step in increments of that size, `RAMP_STEP_S[]`
+apart. Downward steps and open loop are always sent directly.
 
-The defaults, 3 mW every 10 ms, were chosen on the rig: 1 mW steps worked at
-2 s, 50 ms, 20 ms, 10 ms and 5 ms spacing (9.29-9.31 mW measured for 10 mW
-each time); below ~10 ms the USB round trip per write (~15 ms) sets the pace,
-so 5 ms was no faster than 10 ms; and 3 mW steps at 10 ms reached 40 mW in
-0.22 s at 38.74 mW measured, the same as 1 mW steps. 0 -> 5 mW in one jump
-worked once and failed once, so the step is kept at 3 mW. Both are `Ref`s so
-the test suite can zero the pause and a rig can tune the step. Whether the
-mechanism is a loop transient or something in the controller's firmware is
-not known; the ramp is an empirical fix, verified at 10, 20 and 40 mW against
-three failures out of three for the jump.
+Why it exists, for the record (642 nm rig's TLD001, 2026-09-28/29): on one
+night a setpoint jumped from 0 to 10 mW locked the loop at ~90 mA / ~21 mW
+whatever the request, 3 times out of 3, while the same target reached in steps
+settled at 78 mA / 9.3 mW, as the Kinesis application does. Later the same
+night, after a Kinesis CONST P session, the jump worked 4 times out of 4
+(9.30-9.31 mW). Ramped runs never failed (10 of 10, 10-70 mW). The cause is
+not known. The jump is the default because it is the fastest and was reliable
+when last tested; if the lock recurs (the symptom: ~90 mA and ~21 mW whatever
+is requested) set `RAMP_STEP_mW[] = 3.0` and `RAMP_STEP_S[] = 0.01`, which
+were verified on the rig: 1 mW steps worked at 2 s, 50, 20, 10 and 5 ms
+spacing; below ~10 ms the USB round trip per write (~15 ms) sets the pace;
+3 mW steps at 10 ms reached 40 mW in 0.22 s (38.74 mW) and 70 mW in 0.38 s
+(68.59 mW).
 """
-const RAMP_STEP_mW = Ref(3.0)
+const RAMP_STEP_mW = Ref(Inf)
 
 "See [`RAMP_STEP_mW`](@ref)."
 const RAMP_STEP_S = Ref(0.01)
@@ -521,6 +521,7 @@ confirmed by [`send_setpoint`](@ref).
 send_setpoint_ramped(light::TCubeLaser{ConstantCurrent}, code::UInt16) = send_setpoint(light, code)
 function send_setpoint_ramped(light::TCubeLaser{ConstantPhotocurrent}, code::UInt16)
     serialNo, pd = light.serialNo, light.pd
+    isfinite(RAMP_STEP_mW[]) || return send_setpoint(light, code)   # ramp off: one write
     start = Int(LD_GetLaserSetPoint(serialNo))
     step = max(1, round(Int, RAMP_STEP_mW[] / 1000 / pd.wa_calibration / pd.tia_range * light.max_setpoint))
     if 0 <= start && Int(code) - start > step

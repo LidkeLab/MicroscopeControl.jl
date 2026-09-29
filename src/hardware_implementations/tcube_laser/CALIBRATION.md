@@ -121,6 +121,8 @@ driver now **ramps** upward closed-loop steps ([`RAMP_STEP_mW`] = 3 mW every
 | 20 mW | 1 mW steps, 50 ms | 19.04 mW | 88.2 mA |
 | 40 mW | 1 mW steps, 50 ms | 38.79 mW | 109.1 mA |
 | 40 mW | **3 mW steps, 10 ms (shipped default)** | **38.74 mW** | 109.3 mA |
+| 70 mW | 3 mW steps, 10 ms (0.38 s) | 68.59 mW | 141.4 mA |
+| 10 mW | jump from 0, later the same night, 4 runs | 9.30 / 9.31 / 9.30 / 9.31 mW | 77.6-78.0 mA |
 
 Open loop the same day: 110 mA -> 39.43 mW, 130 mA -> 57.71 mW.
 
@@ -137,12 +139,25 @@ direction (`LD_Open` error 2, or "load device failed" in Kinesis, until then);
 and the max-current potentiometer position does not survive a power cycle
 (`initialize` re-programs it every time).
 
-Measured power is requested x 0.97 - ~0.3 mW over 1-40 mW (the loop holds the
+Measured power is requested x 0.97 - ~0.3 mW over 1-70 mW (the loop holds the
 photocurrent exactly; the meter reads a little under 224.2 W/A's prediction).
-Closed loop is therefore usable over the rig's range; `properties.max_power`
-can be set to what the rig needs (70 mW has not been re-verified since 2024,
-but nothing changed between 20 and 40 mW). Why a jump locks the loop is not
-known; the ramp is empirical, verified at 10, 20 and 40 mW.
+Closed loop is therefore verified over the rig's range, and
+`properties.max_power = 70.0` is supported. Note that 70 mW needs ~141 mA,
+above the 132 mA the rig had used as its working ceiling; the clamp at
+`max_current` (160 mA) is the hard limit.
+
+**The lock is intermittent, and its cause is not known.** The jump from 0 to
+10 mW failed 3 times out of 3 on 09-28/29 (before and after the gain
+re-optimisation, before and after a power cycle), then, later on 09-29 after a
+Kinesis CONST P session at 10 mW with the W/A factor persisted, worked 4 times
+out of 4, and then also at 40 mW (controller readings identical to the ramped
+run) and 70 mW (68.5 mW measured). Ramped runs have never failed (10 of 10,
+10-70 mW). **The jump is the shipped default** (one write, ~10 ms) because it
+is the fastest and was reliable when last tested; the ramp is kept in the
+driver as a recorded, verified fallback: set `RAMP_STEP_mW[] = 3.0` and
+`RAMP_STEP_S[] = 0.01` (40 mW in 0.22 s, 70 mW in 0.38 s). If the lock recurs
+the symptom is unmistakable, ~90 mA and ~21 mW whatever the request; switch
+the ramp on and report the run.
 
 Found on the same day, and fixed in the driver: the controller ignores a
 setpoint sent while its output is off (it then runs on a stale stored setpoint,

@@ -21,15 +21,18 @@ Laser diodes in two regulation modes, and closed loop (photodiode feedback,
 
 - **Open loop: verified.** 70 / 90 / 110 mA gave 70.0 / 90.0 / 110.0 mA on the
   front display and 1.69 / 20.67 / 39.42 mW.
-- **Closed loop: verified from 1 to 40 mW** (2026-09-28/29): 1, 2, 3, 5, 10,
-  20 and 40 mW gave 0.56, 1.55, 2.54, 4.52, 9.30, 19.04 and 38.74 mW, so the
-  224.2 W/A calibration holds. One controller behaviour had to be worked
-  around: **a setpoint jumped from 0 locks the loop** at ~21 mW / 90 mA
-  whatever the request (3 of 3 attempts at 10 mW), while the same target
-  reached in steps regulates exactly, as the Kinesis application does. The
-  driver therefore **ramps** upward closed-loop steps, 3 mW every 10 ms (40 mW
-  in ~0.2 s; `RAMP_STEP_mW`, `RAMP_STEP_S`). The mechanism is not known; the
-  ramp is empirical. The photodiode's UNDER-range flag now warns instead of
+- **Closed loop: verified from 1 to 70 mW** (2026-09-28/29): 1, 2, 3, 5, 10,
+  20, 40 and 70 mW gave 0.56, 1.55, 2.54, 4.52, 9.30, 19.04, 38.74 and
+  68.59 mW, so the 224.2 W/A calibration holds. One controller behaviour had
+  to be guarded against: **a setpoint jumped from 0 locked the loop** at
+  ~21 mW / 90 mA whatever the request, 3 of 3 attempts at 10 mW, while the same
+  target reached in steps regulated exactly, as the Kinesis application does.
+  Later the same night the jump worked at 10 mW (4 of 4), 40 and 70 mW, so
+  the lock is intermittent and its cause unknown. The single write is the
+  default (fastest, ~10 ms); an optional ramp of upward closed-loop steps is
+  kept in the driver as the verified fallback (`RAMP_STEP_mW[] = 3.0`,
+  `RAMP_STEP_S[] = 0.01`: 40 mW in ~0.2 s, 70 mW in ~0.4 s; ramped runs never
+  failed, 10 of 10). The photodiode's UNDER-range flag now warns instead of
   refusing (it was set at 1 mW while the loop regulated correctly).
 - **Found on the rig and fixed before release**, none of which the fake SDK
   could have shown: the TLD001 **ignores setpoints sent while its output is

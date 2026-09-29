@@ -607,24 +607,37 @@ include("tcube_fake_sdk.jl")
             @test laser.pd.output_power_requested == 50.0
             empty!(FakeKinesis.calls)
             light_on(laser)
-            # From 0 to 50 mW the setpoint is RAMPED in ~3 mW steps (the rig's loop
-            # locks on a big jump): enable, read the held setpoint, ~16 intermediate
-            # sends, then the final one, confirmed.
-            @test FakeKinesis.calls[1:2] == ["LD_EnableOutput", "LD_GetLaserSetPoint"]
-            @test FakeKinesis.calls[end] == "LD_GetLaserSetPoint"
-            @test all(==("LD_SetLaserSetPoint"), FakeKinesis.calls[3:end-1])
+            # The ramp is off by default (jumps were reliable on the rig when last
+            # tested): enable, read the held setpoint, one write, confirmed.
+            @test isinf(TCube.RAMP_STEP_mW[])
+            @test FakeKinesis.calls == ["LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
             code = FakeKinesis.setpoints[end]
             @test code == UInt16(floor(i_pd / 1e-3 * 32767))
             @test FakeKinesis.setpoint_held[] == code
-            step = round(Int, TCube.RAMP_STEP_mW[] / 1000 / 224.2 / 1e-3 * 32767)  # 3 mW steps
-            @test 15 <= length(FakeKinesis.setpoints) <= 18
-            @test issorted(FakeKinesis.setpoints)
-            @test all(d -> 0 < d <= step, diff(Int.(FakeKinesis.setpoints)))
+            # With the ramp enabled (the safeguard verified on the rig), the same
+            # 0 -> 50 mW is walked in ~3 mW steps: ~16 intermediate sends, then
+            # the final one, confirmed.
+            light_off(laser)
+            TCube.RAMP_STEP_mW[] = 3.0
+            try
+                empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
+                light_on(laser)
+                @test FakeKinesis.calls[1:2] == ["LD_EnableOutput", "LD_GetLaserSetPoint"]
+                @test FakeKinesis.calls[end] == "LD_GetLaserSetPoint"
+                @test all(==("LD_SetLaserSetPoint"), FakeKinesis.calls[3:end-1])
+                @test FakeKinesis.setpoints[end] == code
+                step = round(Int, 3.0 / 1000 / 224.2 / 1e-3 * 32767)
+                @test 15 <= length(FakeKinesis.setpoints) <= 18
+                @test issorted(FakeKinesis.setpoints)
+                @test all(d -> 0 < d <= step, diff(Int.(FakeKinesis.setpoints)))
+            finally
+                TCube.RAMP_STEP_mW[] = Inf
+            end
             # With the output on, a new power is sent and confirmed at once (after
             # checking the photodiode is not reading 0x8000, over range).
             empty!(FakeKinesis.calls)
             setoutputpower!(laser, 50.0)
-            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_GetPhotoCurrentReading", "LD_GetLaserSetPoint", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
+            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_GetPhotoCurrentReading", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
             # Downward steps are sent directly, no ramp.
             empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
             setoutputpower!(laser, 10.0)
