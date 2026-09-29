@@ -161,8 +161,9 @@ lab_summary("Core") do
             @test isnan(laser.drive_current)
             @test isnan(laser.threshold_current)
             @test laser.pd === nothing
-            # The unit label no longer says mW for a laser commanded in mA.
-            @test laser.properties.power_unit == "mA"
+            # The default properties are 0.2.4's, labels only in open loop.
+            @test laser.properties.power_unit == "mW"
+            @test laser.properties.min_power == 0.0 && laser.properties.max_power == 100.0
             @test laser.daq_device === nothing
             @test laser.ao_channel === nothing
         end
@@ -1144,8 +1145,8 @@ lab_summary("Core") do
                 @test haskey(attrs, k)
             end
             @test attrs["min_current"] == 0.0 && attrs["max_current"] == 160.0
-            @test attrs["power_unit"] == "mA"
-            @test attrs["max_power"] == 160.0
+            @test attrs["power_unit"] == "mW"
+            @test attrs["max_power"] == 100.0
             # setcurrent! writes 0.2.4's deprecated figure to properties.power.
             FakeKinesis.reset!()
             lp = cc()

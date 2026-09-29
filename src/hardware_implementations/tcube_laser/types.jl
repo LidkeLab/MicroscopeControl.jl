@@ -21,13 +21,15 @@ so that an 80 mA call can never become an 80 mW one.
 - `properties::LightSourceProperties`: `is_on` is the requested output state. In
   `ConstantPhotocurrent` mode `min_power`/`max_power` are the ENFORCED bounds of
   `setoutputpower!`, in mW at the laser output, and the endpoints of
-  `setlevel!`. In `ConstantCurrent` mode they are not read. `power` is
-  deprecated: an open-loop `setcurrent!` writes it as 0.2.4's figure
+  `setlevel!`. In `ConstantCurrent` mode `properties` is labels only: nothing
+  checks or enforces `min_power`/`max_power`. The default is 0.2.4's
+  `LightSourceProperties("mW", 0.0, false, 0.0, 100.0)`, kept for compatibility
+  although this driver's values are mA, so pass `LightSourceProperties("mA", ...)`
+  to label them truthfully. `power` is deprecated: an open-loop `setcurrent!`
+  writes it as 0.2.4's figure
   `drive_current * properties.max_power / <controller limit>`, an uncalibrated
-  guess that is NOT in `power_unit`'s unit (the `"mA"` label covers only
-  `min_power`/`max_power` in open loop). With the default `properties`, whose
-  `max_power` is now `max_current`, the figure differs from 0.2.4's
-  default-properties value; `drive_current` is the number to read. A
+  guess that is NOT in `power_unit`'s unit, and with the default `properties` it
+  is the same figure 0.2.4 gave; `drive_current` is the number to read. A
   `ConstantPhotocurrent` laser never writes `power`.
 - `laser_color::String`: The color of the laser.
 - `min_current::Float64`: The lowest drive current this rig will command, in
@@ -180,7 +182,8 @@ are required: a rig cannot reach power mode without a measured calibration, a
 stated amplifier range, an answer to the temperature question and an explicit
 clamp. In
 `ConstantCurrent` mode passing any of the first three throws, and `properties`
-defaults to `LightSourceProperties("mA", 0.0, false, min_current, max_current)`.
+defaults to 0.2.4's `LightSourceProperties("mW", 0.0, false, 0.0, 100.0)`: labels
+only in this mode, nothing enforces them (see the `properties` field).
 
 - `max_current` is **your** ceiling for this diode and is never overwritten. In
   `ConstantCurrent` mode it defaults to `160.0`; in `ConstantPhotocurrent` mode
@@ -243,7 +246,7 @@ function TCubeLaser(serialNo::String;
         nothing
     end
     max_current = something(max_current, 160.0)
-    props = something(properties, LightSourceProperties("mA", 0.0, false, min_current, max_current))
+    props = something(properties, LightSourceProperties("mW", 0.0, false, 0.0, 100.0))
     TCubeLaser{typeof(mode)}(unique_id, props, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
         controller_max_current, daq_device, ao_channel, drive_current,

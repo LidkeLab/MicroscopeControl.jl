@@ -26,9 +26,6 @@ the next version with `-DEV`).
   `initialize` starts clean. `referencemove`'s signature and return are
   unchanged. Reported by the MicroscopeAdapt rig; not yet run on hardware
   (#64).
-- **`TCubeLaser`'s default `properties.power_unit` is now `"mA"` in open loop.**
-  It said `"mW"` while the values were always mA. Rigs that read `power_unit`
-  should check it; both known rigs already pass `"mA"`.
 
 ### Changed (release process)
 - **`main` is the development branch**, carrying the next version with
