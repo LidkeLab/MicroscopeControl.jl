@@ -81,12 +81,27 @@ driver's default scale.
 """
 const diode_limit_raw = Ref{Int}(23830)
 
+"Whether the fake controller's output is currently enabled."
+const output_on = Ref{Bool}(false)
+
+"""
+The controller's stored setpoint. Like the real TLD001 it changes only when
+`LD_SetLaserSetPoint` succeeds while the output is on.
+"""
+const stored = Ref{Int}(0)
+
+"The stored setpoint at each successful `LD_EnableOutput`, i.e. what it ran on."
+const enable_log = Int[]
+
 "Forget the recorded history and restore the default responses."
-function reset!(; limit_raw::Integer=23830)
+function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     empty!(calls)
     empty!(status)
     empty!(setpoints)
     empty!(throws)
+    empty!(enable_log)
+    output_on[] = false
+    FakeKinesis.stored[] = stored
     diode_limit_raw[] = limit_raw
     return nothing
 end
@@ -119,11 +134,24 @@ end
     LD_RequestReadings(serialNo) = Main.FakeKinesis.record!("LD_RequestReadings")
     LD_RequestLaserDiodeMaxCurrentLimit(serialNo) =
         Main.FakeKinesis.record!("LD_RequestLaserDiodeMaxCurrentLimit")
-    LD_EnableOutput(serialNo) = Main.FakeKinesis.record!("LD_EnableOutput")
-    LD_DisableOutput(serialNo) = Main.FakeKinesis.record!("LD_DisableOutput")
+    function LD_EnableOutput(serialNo)
+        st = Main.FakeKinesis.record!("LD_EnableOutput")
+        if st == 0
+            Main.FakeKinesis.output_on[] = true
+            push!(Main.FakeKinesis.enable_log, Main.FakeKinesis.stored[])
+        end
+        return st
+    end
+    function LD_DisableOutput(serialNo)
+        st = Main.FakeKinesis.record!("LD_DisableOutput")
+        st == 0 && (Main.FakeKinesis.output_on[] = false)
+        return st
+    end
     function LD_SetLaserSetPoint(serialNo, laserDiodeCurrent)
         push!(Main.FakeKinesis.setpoints, laserDiodeCurrent)
-        return Main.FakeKinesis.record!("LD_SetLaserSetPoint")
+        st = Main.FakeKinesis.record!("LD_SetLaserSetPoint")
+        st == 0 && Main.FakeKinesis.output_on[] && (Main.FakeKinesis.stored[] = Int(laserDiodeCurrent))
+        return st
     end
     function LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         Main.FakeKinesis.record!("LD_GetLaserDiodeMaxCurrentLimit")

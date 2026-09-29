@@ -73,7 +73,7 @@ Since this package is under active development and not yet registered, install i
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
 ```
 
 **You must also declare this package's unregistered dependency in your own
@@ -88,7 +88,7 @@ writes both entries for you:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
 ```
 
 If you write the TOML by hand, `[sources]` alone is **not** enough — Julia
@@ -110,7 +110,7 @@ remove the requirement entirely.
 
 Advance the pinned tag deliberately when you want a newer release. `Pkg.develop` (tracking `main` directly, no tag) is for contributors working on the package itself, not for rig code that depends on it.
 
-This package follows Julia's pre-1.0 versioning convention: while the version is `0.x.y`, `x` is the breaking component and `y` is the non-breaking one, so `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one. Every merge to `main` is tagged (`.github/workflows/TagOnMerge.yml`). Hardware verification is not tracked here; it is recorded by the downstream rig repo that pins to a given tag.
+This package follows Julia's pre-1.0 versioning convention: while the version is `0.x.y`, `x` is the breaking component and `y` is the non-breaking one, so `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one. A release is tagged `vX.Y.Z` when it merges to `main` (`.github/workflows/TagOnMerge.yml`), and only once a recorded test run covers that exact tree; between releases `main` carries the next version with `-DEV` and is not tagged. Hardware verification is not tracked here; it is recorded by the downstream rig repo that pins to a given tag.
 
 ## Claude Code skills
 

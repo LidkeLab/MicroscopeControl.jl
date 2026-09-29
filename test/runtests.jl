@@ -12,6 +12,10 @@ include("tcube_fake_sdk.jl")
 # against a recorder and never a rig's controller. Top level, before the testsets.
 include("pi_n472_fake_sdk.jl")
 
+# Writes the lab test record summary when LAB_TEST_SUMMARY is set; see the file.
+include("lab_summary.jl")
+
+lab_summary("Core") do
 @testset "MicroscopeControl.jl" begin
     @testset "Simulated Camera" begin
         cam = SimCamera(exposure_time=0.01)
@@ -381,7 +385,7 @@ include("pi_n472_fake_sdk.jl")
             laser = TCubeLaser("00000000")
             laser.properties.is_on = true
             shutdown(laser)
-            @test FakeKinesis.calls == ["LD_DisableOutput", "LD_Close"]
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput", "LD_Close"]
             @test laser.properties.is_on == false
 
             # A failed disable throws -- and the handle is closed anyway,
@@ -399,7 +403,7 @@ include("pi_n472_fake_sdk.jl")
             end
             @test err isa ErrorException
             @test occursin("LD_DisableOutput", err.msg)
-            @test FakeKinesis.calls == ["LD_DisableOutput", "LD_Close"] # closed regardless
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput", "LD_Close"] # closed regardless
             # The disable failed, so the output is not recorded as off: the
             # field follows the call, not the request.
             @test stuck.properties.is_on == true
@@ -630,6 +634,8 @@ include("pi_n472_fake_sdk.jl")
             @test_logs export_state(laser, nothing)
             @test TCube.EXPORT_STATE_2ARG_WARNED[]
         end
+
+        include("tcube_output_order.jl")
     end
 
     @testset "NIdaq digital output" begin
@@ -712,3 +718,4 @@ include("pi_n472_fake_sdk.jl")
     include("skills.jl")
     include("gui.jl")
 end
+end  # lab_summary

@@ -5,6 +5,12 @@ on:
     branches:
       - main
 
+# This repo's own tag workflow: LidkeLab/.github has no shared tag-on-merge
+# (its julia-ci.yml does not tag; checked 2026-09-29). It implements lab
+# decisions 0033 (a -DEV version is development, never tagged) and 0009's
+# amendment (tag only a tree that a passing lab/tests record covers); keep
+# the two in step if a shared one appears.
+
 # No `concurrency` group here on purpose: GitHub keeps at most one pending run
 # per group and cancels the older one even with cancel-in-progress: false, so a
 # queued merge could silently lose its tag. Without a group, two merges landing
@@ -17,28 +23,36 @@ jobs:
     permissions:
       contents: write
       actions: write # to trigger CI.yml's workflow_dispatch for the new tag
+      statuses: read # lab/tests records
+      pull-requests: read # the merged pull request's head commit
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Tag the merged version if it doesn't exist yet
+      - name: Tag a release whose tree has a passing lab/tests record
         id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
           # Local tag refs from checkout can be stale; get the real state of
           # the remote before deciding whether the tag already exists.
           git fetch --tags --force
 
-          # ubuntu-latest ships Python >=3.11, so tomllib is stdlib. Kept on
-          # one physical line: a `run: |` block scalar requires every line to
-          # carry the step's own indentation, and Python does not tolerate an
-          # indented first line.
-          version=$(python3 -c 'import re, sys, tomllib; v = tomllib.load(sys.stdin.buffer)["version"]; print(v) if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", v) else sys.exit(f"invalid version for tagging: {v}")' < Project.toml)
+          # Version rules live in .github/scripts/versions.py (shared with
+          # CI.yml's version check). A -DEV version is development: no tag.
+          version=$(python3 .github/scripts/versions.py read < Project.toml)
+          if [[ "$version" == *-DEV ]]; then
+            echo "Project.toml is $version, a development version; nothing to tag."
+            exit 0
+          fi
           tag="v${version}"
+          head=$(git rev-parse HEAD)
 
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$(git rev-parse HEAD)" ]; then
-              echo "main has moved past $tag without a version bump; bump Project.toml"
+            if [ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$head" ]; then
+              echo "main has moved past $tag without a version change; set Project.toml to the next -DEV version"
               exit 1
             fi
             # Still emit the tag so a rerun (e.g. after a transient dispatch
@@ -47,6 +61,27 @@ jobs:
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # A merge or squash makes a commit the record never saw. It is
+          # covered when its tree is byte-identical to the tree of a commit
+          # with a passing lab/tests: this commit itself, or the head of the
+          # pull request it merged.
+          tree=$(git rev-parse "HEAD^{tree}")
+          candidates="$head $(gh api "repos/$REPO/commits/$head/pulls" --jq '.[].head.sha' || true)"
+          covered=""
+          for c in $candidates; do
+            state=$(gh api "repos/$REPO/commits/$c/status" --jq '[.statuses[] | select(.context == "lab/tests")][0].state // ""' || true)
+            [ "$state" = "success" ] || continue
+            if [ "$(gh api "repos/$REPO/git/commits/$c" --jq '.tree.sha' || true)" = "$tree" ]; then
+              covered=$c
+              break
+            fi
+          done
+          if [ -z "$covered" ]; then
+            echo "::error::Not tagging $tag: no commit with a passing lab/tests record has this tree ($tree). Checked: $candidates. Run record_tests.jl on $head (on main), then re-run this job."
+            exit 1
+          fi
+          echo "lab/tests covers $head: its tree equals that of $covered."
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
