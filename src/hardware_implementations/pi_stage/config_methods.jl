@@ -1,7 +1,17 @@
 """
-Function to initialize PI Stage, right now this requires calibration using PiMikroMove to work correctly, no documentation on how to calibrate using the PI_GCS2 library
+Initialize the PI stage. Connects to the first PI C-867 the GCS2 library enumerates, turns both
+servos on, starts the reference move, waits for the controller and for both axes to report
+referenced, reads the travel range, waits for motion to stop, and sets `stage.velocity`.
+
+`connectionstatus` becomes true only when all of that succeeded. A failure after the connect
+closes the connection and throws. Enumeration and connect failures log `@error` and return with
+`connectionstatus == false`.
+
+`[limitation]` Not yet run on hardware; the wait for `PI_IsControllerReady` needs a rig check on
+the C-867. The stage needs calibration using PiMikroMove to work correctly; there is no
+documentation on how to calibrate using the PI_GCS2 library.
 """
-function initialize_original(stage::PIStage) #TODO: Error handling
+function initialize_original(stage::PIStage)
     if stage.connectionstatus == true
         @error "Stage already initialized"
         return
@@ -15,15 +25,11 @@ function initialize_original(stage::PIStage) #TODO: Error handling
 
     @info "Number of connected devices: " * string(numconnected)
 
-    #Set connection status to true
-    if numconnected > 0
-        stage.connectionstatus = true
-    else
+    if numconnected <= 0
         # The DLL enumerates only controllers nobody has open: a C-867 that Device Manager
         # still lists is held by another process (a second Julia with an initialized stage —
         # under any Windows user —, PIMikroMove, or an open COM port).
         @error "No PI C-867 found by the GCS2 library — controller absent, or held by another process"
-        stage.connectionstatus = false
         return
     end
     #Connect to usb device
@@ -34,48 +40,49 @@ function initialize_original(stage::PIStage) #TODO: Error handling
     if stage.id < 0
         # The connect itself failed (id -1): typically another process already holds the
         # controller (a second Julia with an initialized stage, PIMikroMove, an open COM port).
-        stage.connectionstatus = false
         @error "PI_ConnectUSB failed — the controller is probably held by another process"
         return
     end
 
-    #Set servo mode to on for both axes, noting axis X is labeled "1" and axis Y is labeled "2"
-    servo(stage, true, true)
-
-    #Reference stage. A rejected FRF (e.g. GCS error 5, servo off on one axis) used to be
-    # ignored: every later PI_MOV was refused too, while the driver's cached position said
-    # the stage was centred. Refuse to come back from initialize unreferenced.
-    # On failure, close the connection so a retried initialize starts clean.
+    # Everything after the connect is inside the cleanup: a failure closes the connection so a
+    # retried initialize starts clean, and connectionstatus is set only once all of it succeeded.
     try
+        #Set servo mode to on for both axes, noting axis X is labeled "1" and axis Y is labeled "2"
+        servo(stage, true, true)
+
+        #Reference stage. A rejected FRF (e.g. GCS error 5, servo off on one axis) used to be
+        # ignored: every later PI_MOV was refused too, while the driver's cached position said
+        # the stage was centred. Refuse to come back from initialize unreferenced.
         if referencemove(stage) != 1
             error("PI_FRF refused (GCS error $(_pi_geterror(stage))); stage is not referenced")
         end
-        _waitforreference(stage)
+        _waitforready(stage; timeout = REFERENCE_TIMEOUT_S[])
+        _waitforreference(stage; timeout = REFERENCE_TIMEOUT_S[])
+
+        #Find the max and min position of the axes
+        getrange(stage)
+
+        #Wait for any remaining motion to finish
+        ismoving(stage)
+        while stage.ismoving[1] == 1 || stage.ismoving[2] == 1
+            ismoving(stage)
+        end
+
+        #Set the velocity to `stage.velocity`
+        success = setvel(stage, stage.velocity)
     catch
         shutdown_original(stage)
         rethrow()
     end
 
-    #Find the max and min position of the axes
-    getrange(stage)
-
-    #Wait for any remaining motion to finish
-    ismoving(stage)
-    while stage.ismoving[1] == 1 || stage.ismoving[2] == 1
-        ismoving(stage)
-    end
-
-    #Set velocity to 1 mm/s
-    success = setvel(stage, stage.velocity)
-
+    stage.connectionstatus = true
     @info "Stage initialized"
     return
 end
 
 """
-Function to calibrate PI Stage, not implemented yet as there is no documentation for this stage on calibration using the PI_GCS2 library
-Possibly must use PiMikroMove to calibrate, but this is not ideal, however there is a CLI
-
+Start the reference move (`PI_FRF`) on both axes and return the GCS BOOL, 1 if accepted.
+`initialize` waits for it to finish.
 """
 function referencemove(stage::PIStage)
     ismoved = PI_FRF(stage.id, "1 2")
@@ -84,6 +91,30 @@ end
 
 # PI_GetError returns and clears the controller's last GCS error code (0 = none).
 _pi_geterror(stage::PIStage) = PI_GetError(stage.id)
+
+"""
+How long `initialize` waits, in seconds, for the controller to become ready and then for both
+axes to report referenced. A `Ref` so tests can shorten it.
+"""
+const REFERENCE_TIMEOUT_S = Ref(60.0)
+
+"""
+Poll `PI_IsControllerReady` every 0.1 s until the controller reports ready; throw if the call
+fails or it is not ready within `timeout` seconds.
+
+`[limitation]` Not yet run on hardware; the wait needs a rig check on the C-867.
+"""
+function _waitforready(stage::PIStage; timeout::Real = REFERENCE_TIMEOUT_S[])
+    ready = Ref{Cint}(0)
+    deadline = time() + timeout
+    while true
+        ok = PI_IsControllerReady(stage.id, ready)
+        ok == 0 && error("PI_IsControllerReady failed (GCS error $(_pi_geterror(stage)))")
+        ready[] != 0 && return nothing
+        time() > deadline && error("PI controller not ready after $(timeout) s")
+        sleep(0.1)
+    end
+end
 
 """
 Poll `PI_qFRF` until both axes report referenced; throw if that has not happened within
@@ -119,10 +150,12 @@ function shutdown_original(stage::PIStage)
         else
             @info "Stage disconnected"
             stage.connectionstatus = false
+            stage.id = Cint(-1)
         end
     else
         @error "Stage already disconnected"
         stage.connectionstatus = false
+        stage.id = Cint(-1)
     end
 end
 

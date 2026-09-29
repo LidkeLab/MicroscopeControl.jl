@@ -10,7 +10,13 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Added
+- Fake-GCS2 tests for `PIStage` (`test/pi_stage_fake_sdk.jl`, `test/pi_stage.jl`): `initialize`'s ordering and cleanup and `shutdown`'s id handling, with no hardware.
+
 ### Fixed
+- `PIStage`: `shutdown` could close another object's connection. `id` defaulted to `0`, a valid GCS id, and was never reset; it now defaults to `-1` and `shutdown` resets it.
+- `PIStage.initialize` reported the stage connected before it was: `connectionstatus` was set before the connect, and a failed close after a failed reference left it `true`, so a retry answered "already initialized". It is now set only after the whole sequence succeeds, and every step after the connect is inside the cleanup.
+- The stage panels' initialize buttons log a failed `initialize` instead of throwing out of the click callback.
 - **PI stage: `initialize` no longer finishes on an unreferenced stage.** It
   ignored the return of the reference move (`PI_FRF`), so when the controller
   rejected it (GCS error 5, e.g. one axis's servo off) the later move to the
@@ -21,6 +27,9 @@ the next version with `-DEV`).
   `initialize` starts clean. `referencemove`'s signature and return are
   unchanged. Reported by the MicroscopeAdapt rig; not yet run on hardware
   (#64).
+
+### Changed
+- `PIStage.initialize` waits for `PI_IsControllerReady` after the reference move, before polling `PI_qFRF`, as PI's samples do. Not yet run on hardware; needs a rig check on the C-867.
 
 ### Changed (release process)
 - **`main` is the development branch**, carrying the next version with
