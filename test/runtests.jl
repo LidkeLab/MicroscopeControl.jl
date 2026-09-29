@@ -8,6 +8,10 @@ const HDF5 = MicroscopeControl.HDF5
 # be included at top level, before the testsets. See the file for the seam.
 include("tcube_fake_sdk.jl")
 
+# Writes the lab test record summary when LAB_TEST_SUMMARY is set; see the file.
+include("lab_summary.jl")
+
+lab_summary("Core") do
 @testset "MicroscopeControl.jl" begin
     @testset "Simulated Camera" begin
         cam = SimCamera(exposure_time=0.01)
@@ -702,7 +706,8 @@ include("tcube_fake_sdk.jl")
             setcurrent!(laser, 80.0)
             empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
             light_off(laser)
-            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint", "LD_DisableOutput"]
+            # One write of 0, no status read and no read-back wait, then the disable.
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput"]
             @test FakeKinesis.setpoints == [UInt16(0)]
             @test FakeKinesis.setpoint_held[] == 0
             @test laser.drive_current == 80.0 # the request survives the off
@@ -718,10 +723,10 @@ include("tcube_fake_sdk.jl")
             @test laser.properties.is_on == false
             FakeKinesis.setpoint_readback[] = nothing
 
-            # A zero that cannot be confirmed never prevents light_off's disable.
+            # A zero that fails never prevents light_off's disable.
             light_on(laser)
-            FakeKinesis.setpoint_readback[] = UInt16(3)
-            @test_logs (:error,) match_mode = :any light_off(laser)
+            FakeKinesis.fail!("LD_SetLaserSetPoint")
+            @test_logs (:error, r"zeroing the setpoint") match_mode = :any light_off(laser)
             @test FakeKinesis.bits[] & FakeKinesis.ENABLED == 0
             @test laser.properties.is_on == false
             FakeKinesis.setpoint_readback[] = nothing
@@ -808,8 +813,9 @@ include("tcube_fake_sdk.jl")
             laser = cc()
             laser.properties.is_on = true
             shutdown(laser)
-            # Output already off (polled word): nothing to zero, straight to the disable.
-            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_DisableOutput", "LD_StopPolling", "LD_Close"]
+            # The zero is one write, with no status read and no read-back wait (a
+            # setpoint sent with the output off is ignored), then the disable.
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput", "LD_StopPolling", "LD_Close"]
             @test laser.properties.is_on == false
 
             # A failed disable throws -- and the handle is closed anyway,
@@ -827,7 +833,7 @@ include("tcube_fake_sdk.jl")
             end
             @test err isa ErrorException
             @test occursin("LD_DisableOutput", err.msg)
-            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_DisableOutput", "LD_StopPolling", "LD_Close"] # closed regardless
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput", "LD_StopPolling", "LD_Close"] # closed regardless
             # The disable failed, so the output is not recorded as off.
             @test stuck.properties.is_on == true
 
@@ -842,8 +848,7 @@ include("tcube_fake_sdk.jl")
             @test FakeKinesis.setpoint_held[] != 0
             empty!(FakeKinesis.calls)
             shutdown(pl)
-            @test FakeKinesis.calls == ["LD_GetStatusBits", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint",
-                                        "LD_DisableOutput", "LD_StopPolling", "LD_Close"]
+            @test FakeKinesis.calls == ["LD_SetLaserSetPoint", "LD_DisableOutput", "LD_StopPolling", "LD_Close"]
             @test FakeKinesis.setpoint_held[] == 0
             @test pl.pd.output_power_requested == 50.0 # the request is kept
         end
@@ -1129,6 +1134,8 @@ include("tcube_fake_sdk.jl")
             @test issubset(simk, hw)
             @test "power_reference" in simk && "wa_calibration_W_per_A" in simk
         end
+
+        include("tcube_output_order.jl")
     end
 
     @testset "NIdaq digital output" begin
@@ -1209,3 +1216,4 @@ include("tcube_fake_sdk.jl")
     include("skills.jl")
     include("gui.jl")
 end
+end  # lab_summary

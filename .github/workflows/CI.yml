@@ -82,6 +82,8 @@ jobs:
   version-bumped:
     name: Version bumped
     runs-on: ubuntu-latest
+    # Every pull request: ordinary work on a -DEV base keeps the version, and
+    # a release-branch backport on a released base must raise it (versions.py).
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
@@ -93,31 +95,21 @@ jobs:
         # to update refs/remotes/origin/<branch> for a plain `git fetch
         # origin <branch>`, and `git show origin/<base>:...` below needs it.
         run: git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}" --depth=1
-      - name: Check Project.toml version is a real, untagged bump
+      - name: Check Project.toml version against the base branch
+        # Rules (lab decision 0033) live in .github/scripts/versions.py,
+        # shared with TagOnMerge.yml; its selftest runs first.
         run: |
-          # ubuntu-latest ships Python >=3.11, so tomllib is stdlib. Each
-          # snippet below is kept on one physical line on purpose: a `run: |`
-          # block scalar requires every line to carry the step's own
-          # indentation, and Python does not tolerate an indented first line.
-          read_version() {
-            python3 -c 'import re, sys, tomllib; v = tomllib.load(sys.stdin.buffer)["version"]; print(v) if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", v) else sys.exit(f"invalid version for tagging: {v}")'
-          }
-          pr_version=$(read_version < Project.toml)
-          # The base may still carry a prerelease version (e.g. 1.0.0-DEV before
-          # the 0.x reset); parse it leniently and only compare against a plain X.Y.Z.
-          base_version=$(git show "origin/${{ github.base_ref }}:Project.toml" | python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["version"])')
+          python3 .github/scripts/versions.py selftest
+          pr_version=$(python3 .github/scripts/versions.py read < Project.toml)
+          base_version=$(git show "origin/${{ github.base_ref }}:Project.toml" | python3 .github/scripts/versions.py read)
 
-          tag="v${pr_version}"
+          # A release X.Y.Z, or the X.Y.Z a -DEV version leads to, must not be tagged yet.
+          tag="v${pr_version%-DEV}"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "bump Project.toml version; $tag is already tagged"
+            echo "Project.toml is $pr_version but $tag is already tagged; move to the next version"
             exit 1
           fi
-
-          if [[ "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            python3 -c 'import sys; parse = lambda v: tuple(int(x) for x in v.split(".")); pr, base = sys.argv[1], sys.argv[2]; sys.exit(f"Project.toml version {pr} must be greater than base branch version {base}") if not (parse(pr) > parse(base)) else None' "$pr_version" "$base_version"
-          else
-            echo "base branch version $base_version is a prerelease; skipping ordering check (version reset)"
-          fi
+          python3 .github/scripts/versions.py check-pr "$pr_version" "$base_version"
   docs:
     name: Documentation
     # The longest job in this workflow by a wide margin, and it deploys

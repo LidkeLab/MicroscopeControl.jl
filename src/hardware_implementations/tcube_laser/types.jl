@@ -62,6 +62,21 @@ turned an 80 mA call into an 80 mW one without a word.
 The first fourteen fields are in the order they have always been in, and the
 two added in 0.3.0 are at the end, so the pre-0.3.0 positional forms still
 construct: they build a `TCubeLaser{ConstantCurrent}` with both defaulted.
+
+# The setpoint only takes while the output is on
+
+The Thorlabs TLD001 ignores `LD_SetLaserSetPoint` while its output is disabled
+and, on the next `LD_EnableOutput`, runs on whatever setpoint it had stored
+(observed on the 642 nm rig's TLD001 64849775, 2026-09-28). So a requested
+setpoint (`setcurrent!`, `setoutputpower!`) reaches the diode only because
+`light_on` sends it right after enabling, and `light_off` and `shutdown` zero
+the setpoint before disabling, so the next enable starts dark.
+
+`[limitation]` Between the enable and the setpoint that follows it (one USB
+round trip) the controller runs on its stored setpoint: 0 after this driver's
+`light_off` or `shutdown`, but anything up to the controller's current limit if
+other software left it there. In that window the current-limit potentiometer
+is the only hardware bound; set it at or below the diode's rating.
 """
 mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     unique_id::String

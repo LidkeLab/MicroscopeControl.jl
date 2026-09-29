@@ -144,18 +144,32 @@ const wa_readback = Ref{Union{Nothing,Float32}}(nothing)
 "What `LD_StartPolling` returns: a success FLAG."
 const polling_ok = Ref(true)
 
+"""
+0.2.4's names for the same controller state, kept so its tests
+(`tcube_output_order.jl`) run unchanged: `stored` IS `setpoint_held`, and
+`output_on[]` reads the `ENABLED` status bit.
+"""
+const stored = setpoint_held
+struct OutputOn end
+Base.getindex(::OutputOn) = bits[] & ENABLED != 0
+const output_on = OutputOn()
+
+"The stored setpoint at each successful `LD_EnableOutput`, i.e. what it ran on."
+const enable_log = Int[]
+
 "Forget the recorded history and restore the default responses."
-function reset!(; limit_raw::Integer=23830)
+function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     empty!(calls)
     empty!(status)
     empty!(setpoints)
     empty!(throws)
+    empty!(enable_log)
     diode_limit_raw[] = limit_raw
     current_raw[] = nothing
     photocurrent_raw[] = 0
     bits[] = KEY | INTERLOCK | PSU_OK | TIA_1mA
     closed_loop_takes[] = true
-    setpoint_held[] = 0
+    setpoint_held[] = stored
     setpoint_readback[] = nothing
     digpot[] = 204
     limit_follows_pot[] = false
@@ -210,7 +224,10 @@ end
         Main.FakeKinesis.record!("LD_RequestLaserDiodeMaxCurrentLimit")
     function LD_EnableOutput(serialNo)
         s = Main.FakeKinesis.record!("LD_EnableOutput")
-        s == 0 && Main.FakeKinesis.setbits!(Main.FakeKinesis.ENABLED)
+        if s == 0
+            Main.FakeKinesis.setbits!(Main.FakeKinesis.ENABLED)
+            push!(Main.FakeKinesis.enable_log, Int(Main.FakeKinesis.setpoint_held[]))
+        end
         return s
     end
     function LD_DisableOutput(serialNo)

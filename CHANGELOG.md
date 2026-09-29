@@ -5,9 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows Julia's pre-1.0 versioning convention, described in
 the README's Installation section: in `0.x.y`, `x` is the breaking component
-and `y` is the non-breaking one (every merge to `main` is tagged).
+and `y` is the non-breaking one (releases are tagged; between them `main` carries
+the next version with `-DEV`).
 
 ## [Unreleased]
+
+### Fixed
+- **PI stage: `initialize` no longer finishes on an unreferenced stage.** It
+  ignored the return of the reference move (`PI_FRF`), so when the controller
+  rejected it (GCS error 5, e.g. one axis's servo off) the later move to the
+  centre was rejected too and the driver believed the stage was centred while
+  the controller read about 0. It now checks `PI_FRF`, then polls `PI_qFRF`
+  for up to 60 s until both axes report referenced; either failure throws
+  with the `PI_GetError` code and closes the connection first, so a retried
+  `initialize` starts clean. `referencemove`'s signature and return are
+  unchanged. Reported by the MicroscopeAdapt rig; not yet run on hardware
+  (#64).
+
+### Changed (release process)
+- **`main` is the development branch**, carrying the next version with
+  `-DEV`; every pull request goes into it. The `0.3rc1` release-candidate
+  branch, which never released, is folded into `main` and retired, and CI's
+  version check runs on every pull request again. A release branch is cut only
+  for a safety backport (CLAUDE.md "Versioning").
 
 ## [0.3.0] - 2026-09-28
 
@@ -176,6 +196,80 @@ setlevel!(laser, 0.4)
   otherwise leaves untouched, and is independent of the laser modes.
 - Defaulting `mode` to `ConstantPhotocurrent()`: after closed loop has run on the
   rig.
+
+## [0.2.4] - 2026-09-29
+
+Safety patch for the TCube laser driver. **v0.2.3 and every earlier tag are
+affected.**
+
+**UPGRADE WARNING: this release applies `setpower` values that were never
+applied before.** On v0.2.3 and earlier, `setpower(l, x); light_on(l)` never
+delivered `x`: the diode ran on the controller's stored setpoint. From 0.2.4
+it delivers `x`, so a rig whose `setpower` values were never really used (the
+usual order, for example MicroscopeSeqSR's 405 nm laser) will run currents it
+has never run, checked only against its ceiling, and `max_current` defaults to
+160 mA. `light_on` while the output is already on also re-sends
+`drive_current`, undoing a lower value set from Kinesis or the front panel.
+Before repinning a rig to 0.2.4:
+- check every `setpower` value that precedes a `light_on`;
+- set `max_current` to the diode's rating;
+- set the controller's current-limit potentiometer at or below that rating;
+- run a hardware check of the new sequence.
+
+**Hardware verification: NOT DONE in this repository.** The controller
+behaviour below was found on the 642 nm rig (recorded in PR #66); the fix is
+exercised against a fake controller that models it
+(`test/tcube_output_order.jl`), and those tests fail on v0.2.3.
+
+### Fixed
+- **`light_on(::TCubeLaser)` ran the diode at the controller's stored
+  setpoint, not the requested current.** The Thorlabs TLD001 ignores
+  `LD_SetLaserSetPoint` while its output is disabled and, on the next
+  `LD_EnableOutput`, runs on whatever setpoint it had stored. `setpower` sent
+  the setpoint whenever it was called and `light_on` only enabled the output,
+  so the ordinary `setpower(l, x); light_on(l)` ran at the stale value.
+  Observed on the 642 nm rig's TLD001 (serial 64849775) on 2026-09-28; on
+  2026-09-29 a script in that order drove the diode for about 13 s at the
+  controller's ~160 mA limit, above the diode's absolute maximum. Now
+  `light_on` re-checks the requested current against the ceiling, enables,
+  and sends the setpoint immediately; if that setpoint fails it disables the
+  output again and throws. `light_off` and `shutdown` zero the setpoint
+  before disabling, so the controller's stored value is 0 and the next enable
+  starts dark.
+  - **Rigs pinned to v0.2.3 or earlier:** call `light_on` before `setpower`,
+    and `setpower(l, 0.0)` before `light_off`, or move to v0.2.4.
+  - `[limitation]` Between the enable and the setpoint that follows it (one
+    USB round trip) the controller runs on its stored setpoint: 0 after this
+    driver's `light_off` or `shutdown`, but anything up to the controller's
+    current limit if other software (the Kinesis GUI, a session that died)
+    left it there. In that window the current-limit potentiometer is the only
+    hardware bound: 160 mA on the 642 nm rig, above that diode's absolute
+    maximum.
+
+### Changed
+- **`light_on(::TCubeLaser)` sends `drive_current` every time**, including
+  when the output is already on (see the upgrade warning).
+- **`light_on(::TCubeLaser)` before any `setpower` enables the output at
+  setpoint 0 and warns.** It used to run at whatever the controller had
+  stored, which is the hazard above.
+- **A failed zeroing in `light_off(::TCubeLaser)` logs `@error` instead of
+  throwing**, because the output is disabled regardless; a failed disable
+  still throws, as before.
+- `setpower(::TCubeLaser, ...)` says when the output is off that the current
+  will be applied by `light_on`.
+
+### Changed (release process)
+- **Lab decision 0033: `main` carries the next version with `-DEV`.**
+  `TagOnMerge` skips a `-DEV` version quietly, and CI's version check accepts
+  `X.Y.Z-DEV` (rules and their selftest in `.github/scripts/versions.py`).
+- **`TagOnMerge` tags only a commit whose tree is identical to that of a
+  commit with a passing `lab/tests` record** (decision 0009's amendment), the
+  merged commit or its pull request's head; otherwise it fails and says why.
+- `test/test_groups.toml` (the whole suite as group Core), `test/lab_summary.jl`
+  and an ignored `dev/output/`, so admiral's `record_tests.jl` can record this
+  package. `DAQmx`'s `[sources]` entry is committed in the form `Pkg.test()`
+  rewrites it to (`rev = "main"`), so a test run leaves the tree clean;
+  `[sources]` is read only in the root project, so no dependent sees it.
 
 ### Fixed (documentation)
 - **Depending on this package needs more than pinning the tag, and the docs did
