@@ -1162,7 +1162,7 @@ lab_summary("Core") do
 
         @testset "export_state matches the hardware driver's attribute names" begin
             hw = Set(keys(export_state(TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
-                tia_range=1e-3, tec_stabilised=missing, properties=LightSourceProperties("mW", 0.0, false, 1.0, 70.0)))[1]))
+                tia_range=1e-3, tec_stabilised=missing, properties=LightSourceProperties("mW", 0.0, false, 1.0, 70.0), max_current=160.0))[1]))
             simk = Set(keys(export_state(sim_cp())[1]))
             @test issubset(simk, hw)
             @test "power_reference" in simk && "wa_calibration_W_per_A" in simk
