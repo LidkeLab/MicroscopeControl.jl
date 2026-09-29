@@ -186,9 +186,11 @@ setlevel!(laser, 0.4)
   is shown in the panel instead of being thrown inside the event handler.
 - **`SimDiodeLaser{M}`**, a simulated twin on the same abstract type, with a
   diode, photodiode and loop model, faults (blocked photodiode, responsivity
-  drift, TIA flags, key/interlock) and a log of every command and read. It is
-  constructed exactly as `TCubeLaser`, `mode` default and closed-loop required
-  keywords included, so one construction line serves a rig and its twin.
+  drift, TIA flags, key/interlock) and a log of every command and read. It
+  takes the same keywords with the same requirements as `TCubeLaser`, minus the
+  serial (`mode` default and closed-loop required keywords included), and its
+  default `properties` are labelled `"mA"`, so one construction line serves a rig
+  and its twin.
 - **`CALIBRATION.md`** in the TCube driver folder: how to choose the TIA range,
   measure the threshold and the W/A factor, build the laser in closed loop and
   verify it, and the 642 nm rig's current calibration (224.2 W/A on the 1 mA

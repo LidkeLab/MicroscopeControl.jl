@@ -122,6 +122,46 @@ function status_snapshot(word, current_mA::Float64, photocurrent_A::Float64;
 end
 
 """
+    diode_loop_from_keywords(mode::RegulationMode, name; wa_calibration, tia_range,
+        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s,
+        lock_check_s, lock_ratio)
+
+The keyword rules a [`DiodeLaser`](@ref) constructor applies, in one place so
+`TCubeLaser(serialNo; ...)` and `SimDiodeLaser(; ...)` cannot drift apart. Every
+keyword is `nothing` when the caller did not pass it. In `ConstantPhotocurrent`
+mode `wa_calibration`, `tia_range`, `tec_stabilised`, `properties` and
+`max_current` are required and the [`PhotodiodeLoop`](@ref) is returned, built
+from them and from whichever of the loop keywords (`ramp_step_mW`, `ramp_step_s`,
+`lock_check_s`, `lock_ratio`) were passed. In any other mode passing a loop
+keyword throws and `nothing` is returned. Throws `ArgumentError`s prefixed with
+`name`.
+"""
+function diode_loop_from_keywords(mode::RegulationMode, name; wa_calibration, tia_range,
+        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio)
+    if mode isa ConstantPhotocurrent
+        absent = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
+                                     :tec_stabilised => tec_stabilised, :properties => properties,
+                                     :max_current => max_current) if v === nothing]
+        isempty(absent) || throw(ArgumentError(
+            "$name: a ConstantPhotocurrent laser needs these keywords, none of which has a default: $(join(absent, ", ")). " *
+            "wa_calibration is W/A measured with a power meter at the laser output; tia_range is the rear-panel DIP switch in A; " *
+            "tec_stabilised is true, false or missing; properties carries the enforced min_power/max_power in mW; " *
+            "max_current is the clamp initialize programs into the controller, the only real protection in closed loop."))
+        loop_kw = (; (kw => v for (kw, v) in (:ramp_step_mW => ramp_step_mW, :ramp_step_s => ramp_step_s,
+                                              :lock_check_s => lock_check_s, :lock_ratio => lock_ratio) if v !== nothing)...)
+        return PhotodiodeLoop(; wa_calibration=wa_calibration, tia_range=tia_range, tec_stabilised=tec_stabilised, loop_kw...)
+    end
+    given = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
+                                :tec_stabilised => tec_stabilised, :ramp_step_mW => ramp_step_mW,
+                                :ramp_step_s => ramp_step_s, :lock_check_s => lock_check_s,
+                                :lock_ratio => lock_ratio) if v !== nothing]
+    isempty(given) || throw(ArgumentError(
+        "$name: $(join(given, ", ")) describe a photodiode loop, which only a ConstantPhotocurrent laser has; " *
+        "this one is $(nameof(typeof(mode)))"))
+    return nothing
+end
+
+"""
     check_diode_config(M, pd, properties, max_current, name)
 
 The construction-time invariants every [`DiodeLaser`](@ref) shares, for a

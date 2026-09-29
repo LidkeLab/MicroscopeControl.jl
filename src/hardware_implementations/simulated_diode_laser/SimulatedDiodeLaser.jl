@@ -92,8 +92,10 @@ LightSourceInterface.regulation_mode(::Type{SimDiodeLaser{M}}) where {M} = M()
 """
     SimDiodeLaser(; mode = ConstantCurrent(), kwargs...)
 
-Constructed exactly as [`TCubeLaser`](@ref) is, so that one construction line
-serves a system and its simulated twin. `mode` defaults to `ConstantCurrent()`.
+Takes the same keywords with the same requirements as [`TCubeLaser`](@ref),
+minus the serial (both apply them through `diode_loop_from_keywords`), so one
+construction line serves a system and its simulated twin. `mode` defaults to
+`ConstantCurrent()`.
 In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
 `properties` and `max_current` are required, and the loop keywords `ramp_step_mW`,
 `ramp_step_s`, `lock_check_s` and `lock_ratio` are accepted into the
@@ -129,21 +131,9 @@ function SimDiodeLaser(;
     pd_blocked::Bool=false,
     settle_s::Float64=0.0,
 )
-    pd = if mode isa ConstantPhotocurrent
-        absent = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
-                                     :tec_stabilised => tec_stabilised, :properties => properties,
-                                     :max_current => max_current) if v === nothing]
-        isempty(absent) || throw(ArgumentError(
-            "SimDiodeLaser: a ConstantPhotocurrent laser needs these keywords, none of which has a default: $(join(absent, ", "))"))
-        loopkw = (; (k => v for (k, v) in (:ramp_step_mW => ramp_step_mW, :ramp_step_s => ramp_step_s,
-                   :lock_check_s => lock_check_s, :lock_ratio => lock_ratio) if v !== nothing)...)
-        PhotodiodeLoop(; wa_calibration=wa_calibration, tia_range=tia_range, tec_stabilised=tec_stabilised, loopkw...)
-    else
-        any(!isnothing, (wa_calibration, tia_range, tec_stabilised, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio)) &&
-            throw(ArgumentError("SimDiodeLaser: wa_calibration, tia_range, tec_stabilised and the ramp and lock keywords " *
-                                "describe a photodiode loop, which only a ConstantPhotocurrent laser has"))
-        nothing
-    end
+    name = "SimDiodeLaser"
+    pd = LightSourceInterface.diode_loop_from_keywords(mode, name; wa_calibration, tia_range,
+        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio)
     max_current = something(max_current, 160.0)
     props = something(properties, LightSourceProperties("mA", 0.0, false, min_current, max_current))
     resp = something(responsivity, pd === nothing ? 1 / 224.2 : 1 / pd.wa_calibration)
