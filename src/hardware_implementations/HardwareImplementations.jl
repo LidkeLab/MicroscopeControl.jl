@@ -47,6 +47,9 @@ include("simulated_light/SimulatedLight.jl")
 include("tcube_laser/TCubeLaserControl.jl")
 @reexport using .TCubeLaserControl
 
+include("simulated_diode_laser/SimulatedDiodeLaser.jl")
+@reexport using .SimulatedDiodeLaser
+
 include("daq_transmission_light/TransmissionDaqControl.jl")
 @reexport using .TransmissionDaqControl
 

@@ -47,6 +47,7 @@ machine with no hardware or DLLs loads the package fine.
 | `SimCamera` | keyword, all defaulted | `exposure_time=0.1` (s), `roi=CameraROI(1, 1, 1024, 1024)`, `sequence_length=10`, `capture_mode=LIVE`, `is_running=false` |
 | `SimStage3d` / `SimStage2d` / `SimStage1d` | `Base.@kwdef` | `dimensions=3/2/1`, `range_*=(0, 100)`, `real_*=0.0`, `targ_*=0.0`, `connectionstatus=false`, `label` |
 | `SimLight` | keyword | `properties=LightSourceProperties("mW", 0.0, false, 0.0, 100.0)` |
+| `SimDiodeLaser{M}` (0.3.0) | keyword; **`mode` required**, and in `ConstantPhotocurrent` also `wa_calibration`, `tia_range`, `tec_stabilised`, `properties`, exactly as `TCubeLaser` | `threshold_current=65.0`, `max_current=160.0` (mA), `min_current=0.0`, `efficiency=1.2` (mW/mA above threshold), `responsivity=1/wa_calibration` (calibration starts true); fault fields `pd_blocked`, `responsivity_drift`, `tia_range_A` (the simulated DIP switch), `tia_over_fault`, `tia_under_fault`, `key`, `interlock`; `log` |
 
 All implement `initialize`, `shutdown`, `export_state` **[guarantee]**. There is no
 simulated DAQ, attenuator, Triggerscope or SLM; for those, write a fake behind
@@ -72,8 +73,32 @@ Honestly, per device (executed):
   call `println`s a status line. `move` is `Float64`-only.
 - **SimLight.** `setpower` writes `properties.power` with no clamp;
   `light_on`/`light_off` toggle `is_on`; `initialize` turns it **on**,
-  `shutdown` off. 2-arg `light_on(light, power)` throws (interface arity
-  mismatch shared by every light).
+  `shutdown` off. 2-arg `light_on(light, power)` is a `MethodError` from 0.3.0
+  (up to v0.2.x it hit a throwing interface stub). `SimLight` is a plain
+  `LightSource`, so it is **not** the simulator for a `TCubeLaser`.
+- **SimDiodeLaser** (0.3.0; traced from the source and its upstream testset, not
+  part of the v0.2.0 run). The simulator for any `DiodeLaser` system: same
+  abstract type, same constructor keywords and validation, same `loop_status`
+  layout and `export_state` attribute names as `TCubeLaser`, so a field typed
+  `::DiodeLaser` takes either. **[guarantee]** every command and read throws
+  before `initialize` and after `shutdown`; power-mode `initialize` refuses on a
+  missing key or interlock or a `tia_range_A` that differs from `tia_range`, and
+  sets the clamp to `max_current`. The model is three lines: `P = efficiency *
+  max(0, I - threshold_current)`; photocurrent `= responsivity * (1 +
+  responsivity_drift) * P / 1000`; in power mode the loop settles instantly at
+  the setpoint or at the clamp (`saturated`). `pd_blocked = true` drives the
+  current to the clamp; a nonzero `responsivity_drift` moves the true power while
+  `indicated_output_power` stays put. The setpoint uses the TLD001's round-down
+  encoding, so `pd.photocurrent_requested` differs from the request as on hardware.
+  `sim.log` records every call as a `(verb, value)` tuple, **reads as well as
+  commands** (`(:read, :loop_status)`), so a test can assert that something issued
+  neither: e.g. `empty!(sim.log); gui(sim); @test isempty(sim.log)`.
+  `MicroscopeControl.HardwareImplementations.SimulatedDiodeLaser.true_output_power(sim)`
+  is the model's true mW at the laser output: a **test oracle only**, not
+  exported and not an interface generic; compare it with
+  `indicated_output_power` to test what your system does when the calibration
+  is wrong. Not modelled: settling dynamics (only an optional real `sleep` via
+  `settle_s`), Kinesis polling, the DAQ modulation input, thermal behaviour.
 
 Good for: dispatch, composition, lifecycle order, state round trips,
 `export_state`/`save_h5` tree shape, array shapes, refusal logic. Not good for:
@@ -152,9 +177,20 @@ types; today the same loop fails for `ThorCamCSCCamera` (`initialize`,
 `export_state`), naming the device that would throw during `shutdown` before it
 does. `TCubeLaser` failed the `export_state` assertion too until **v0.2.3**, whose
 `export_state(::TCubeLaser)` is the 1-argument method that was missing; the old
-`export_state(::TCubeLaser, sth)` remains as a deprecated forwarder rather than
-being deleted. An installed copy of this skill older than v0.2.3 still lists
-`TCubeLaser` as failing.
+`export_state(::TCubeLaser, sth)` stayed as a deprecated forwarder through
+v0.2.x and **0.3.0 removed it** (a 2-arg call is now a `MethodError`). An
+installed copy of this skill older than v0.2.3 still lists `TCubeLaser` as
+failing.
+
+For a parametric `DiodeLaser` (`TCubeLaser`, `SimDiodeLaser`), pass the **bare**
+type for the lifecycle and other mode-shared methods, and the instantiation for
+a mode-specific one: `has_specific(setcurrent!, TCubeLaser{ConstantCurrent},
+Float64)`. **[guarantee]** from 0.3.0 upstream's own check unwraps `UnionAll`
+signatures (`Base.unwrap_unionall(m.sig).parameters[2]`); the plain
+`.sig.parameters[2]` above throws on a `where`-method, so use the unwrapped form
+if your loop can reach one. **[limitation]** if you build the type list with
+`subtypes(LightSource)`, it contains `DiodeLaser`, not `TCubeLaser` or
+`SimDiodeLaser`; walk to the non-abstract leaves instead.
 
 Behavioural tests on top, executed:
 
@@ -217,7 +253,12 @@ test: it snapshots `export_state(dev)` before and after `gui(dev)` for every
 Sim device, and additionally opens the light panel on a recording light whose
 `setpower`/`light_on`/`light_off` log every call, asserting the log is empty.
 The state snapshot alone cannot catch the defect, because the widgets now
-initialise from the device's own values.) One remaining fact for a GUI test: the camera panel
+initialise from the device's own values.) From 0.3.0 `test/gui.jl` does the same
+for the `DiodeLaser` panels with `SimDiodeLaser` in both modes: `empty!(sim.log)`,
+open the panel, assert the log is still empty. **[guarantee]** opening
+`current_panel`/`power_panel` issues no command and **no read** (the readout
+waits for Read or Poll); a system test can use the same `log` check on its own
+panels and menus. One remaining fact for a GUI test: the camera panel
 uses `capture`'s return value as the frame, so "Start Capture" misbehaves on
 `SimCamera`. Test the panels you can; list the rest under hardware
 acceptance.
@@ -245,7 +286,7 @@ Upstream's `.github/workflows/CI.yml` (Ubuntu):
 Both halves matter: the background `Xvfb :99` plus `DISPLAY` covers
 precompilation in `julia-buildpkg`, the `xvfb-run -a` prefix covers the test
 process. Add `RIG_SIMULATE: "true"` to the job `env`. Pin MicroscopeControl.jl
-to a tag (`Pkg.add(url=..., rev="v0.2.0")`) and rerun `install_skills()` after
+to a tag (`Pkg.add(url=..., rev="v0.3.0")`) and rerun `install_skills()` after
 moving it so the API map matches what CI tests against.
 
 ## What hardware acceptance must still establish

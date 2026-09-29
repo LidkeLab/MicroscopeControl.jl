@@ -96,14 +96,29 @@ not necessarily the one you are about to call. The case that exposed this was
 sth)`, the map listed that and nothing else, and the 1-arg `export_state(laser)` every
 lifecycle loop calls fell through to the throwing `AbstractInstrument` stub.
 **[fixed in v0.2.3]** — `export_state(::TCubeLaser)` exists and
-`which(export_state, Tuple{TCubeLaser})` lands on it. The 2-arg method is still
-there as a deprecated forwarder that warns and delegates (removal scheduled for
-a future 0.3.0), so the map may still list *that* signature: adding the 1-arg
-method was the fix, not deleting the other one. The blind spot
-is a property of the generator rather than of that driver, and an installed map
-generated against an older pinned tag still shows the old signature. `light_on` is a
-live example (below). When the listed signature is not the one you are calling, check
-the exact tuple with `hasmethod`/`which`.
+`which(export_state, Tuple{TCubeLaser})` lands on it. v0.2.3 kept the 2-arg method
+as a deprecated forwarder; **[guarantee]** 0.3.0 removed it, so
+`hasmethod(export_state, Tuple{TCubeLaser,Any})` is false and an installed map at
+0.3.0 lists only the 1-arg signature. The blind spot is a property of the generator
+rather than of that driver, and an installed map generated against an older pinned
+tag still shows the old signature. A current example: the generator's inherited
+check asks about the 1-arg tuple only, so a 2-arg generic whose only method is on an
+abstract intermediate (`setpower(::DiodeLaser, ::Float64)`, the throwing refusal, and
+`setlevel!(::DiodeLaser, ::Float64)`, the shared implementation) does not appear in a
+`TCubeLaser` or `SimDiodeLaser` section at all. When the listed signature is not the
+one you are calling, check the exact tuple with `hasmethod`/`which`.
+
+**[guarantee]** Parametric devices are listed once, under the bare name
+(`### TCubeLaser`), and a method written against one instantiation is printed with
+it: `setcurrent!(TCubeLaser{ConstantCurrent}, Float64)`,
+`setoutputpower!(TCubeLaser{ConstantPhotocurrent}, Float64)`. A method written
+against the bare type (`light_on(TCubeLaser)`) serves both modes. The generator
+walks the type tree to its non-abstract leaves, so drivers beneath the abstract
+intermediate `DiodeLaser` are listed under `## LightSource`.
+**[limitation]** `InteractiveUtils.subtypes` is one level deep: downstream code that
+enumerates lights with `subtypes(LightSource)` gets `DiodeLaser` in place of
+`TCubeLaser` and `SimDiodeLaser`, silently. Walk to the leaves
+(`isabstracttype(S) ? recurse : keep`), as the map generator and `test/contract.jl` do.
 
 **[limitation]** `MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy (`SLM`
 and `TRIG` are `abstract type ... end` with no supertype). A lifecycle name missing
@@ -129,20 +144,27 @@ where dispatch lands and whether that is the concrete type:
 ```julia
 using MicroscopeControl
 
-# true for every LightSource, because the interface stub exists
+# false from 0.3.0: the 2-arg light_on stub was removed (up to v0.2.x it was true
+# for every LightSource and landed on a throwing stub)
 hasmethod(light_on, Tuple{TCubeLaser,Float64})
-# -> true
+# -> false
 
-# where the call actually goes
-which(light_on, Tuple{TCubeLaser,Float64}).sig
-# -> Tuple{typeof(light_on), LightSource, Float64}     (the throwing stub: no
-#                                                       driver implements 2-arg light_on)
+# resolves, but lands on the DiodeLaser-level refusal, which throws and names
+# setcurrent! / setoutputpower! / setlevel!
+which(setpower, Tuple{TCubeLaser{ConstantCurrent},Float64}).sig
+# -> Tuple{typeof(setpower), DiodeLaser, Float64}
+
+# mode-specific: exists only on the instantiation for that mode
+hasmethod(setcurrent!, Tuple{TCubeLaser{ConstantPhotocurrent},Float64})
+# -> true, but it is the throwing DiodeLaser stub; check which(...).sig
+which(setcurrent!, Tuple{TCubeLaser{ConstantCurrent},Float64}).sig
+# -> Tuple{typeof(setcurrent!), TCubeLaser{ConstantCurrent}, Float64}
 
 which(export_state, Tuple{TCubeLaser}).sig
 # -> Tuple{typeof(export_state), TCubeLaser}           (real driver code from v0.2.3;
 #                                                       up to v0.2.2, the throwing stub.
-#                                                       Tuple{TCubeLaser,Any} still resolves,
-#                                                       to the deprecated forwarder)
+#                                                       Tuple{TCubeLaser,Any} no longer
+#                                                       resolves: forwarder removed in 0.3.0)
 
 which(getdata, Tuple{SimCamera}).sig
 # -> Tuple{typeof(getdata), SimCamera}                 (real driver code)
@@ -156,12 +178,21 @@ in the upstream repo uses:
 
 ```julia
 has_specific(f, T, args...) =
-    hasmethod(f, Tuple{T, args...}) && which(f, Tuple{T, args...}).sig.parameters[2] === T
+    hasmethod(f, Tuple{T, args...}) &&
+    Base.unwrap_unionall(which(f, Tuple{T, args...}).sig).parameters[2] === T
 
 has_specific(initialize, SimCamera)          # true
 has_specific(initialize, ThorCamCSCCamera)   # false
 has_specific(setpower, SimLight, Float64)    # true
+has_specific(setpower, TCubeLaser, Float64)  # false: lands on the DiodeLaser refusal
+has_specific(light_on, TCubeLaser)           # true: mode-shared, written on the bare type
+has_specific(setcurrent!, TCubeLaser{ConstantCurrent}, Float64)   # true: mode-specific
 ```
+
+The `unwrap_unionall` matters from 0.3.0: a `where`-method has a `UnionAll`
+signature whose `.parameters` throws. Pass the bare `TCubeLaser` for a mode-shared
+method and the instantiation for a mode-specific one; `has_specific(setcurrent!,
+TCubeLaser, Float64)` is false because no method is written on the bare type.
 
 For `gui` the right question is "does dispatch avoid the `AbstractInstrument`
 stub", since the interface-level `gui` is the intended shared implementation:
@@ -178,10 +209,15 @@ per device.
 
 ## Arity traps the map makes visible
 
-- **[limitation]** `light_on` is declared `light_on(::LightSource, ipower::Float64)` at the interface
-  and implemented as `light_on(::T)` by all five drivers. The 2-arg call throws for
-  every light source. The map lists `light_on(TCubeLaser)` etc. as device-specific;
-  a 2-arg form never appears.
+- **[guarantee]** `light_on` takes the light only. Up to v0.2.x the interface
+  declared `light_on(::LightSource, ipower::Float64)`, which no driver implemented
+  and which threw for every light; 0.3.0 replaced it with a 1-arg stub, so the 2-arg
+  call is now a plain `MethodError`. Set the level first, then `light_on`.
+- **[guarantee]** `setpower` is not defined for any `DiodeLaser` (`TCubeLaser`,
+  `SimDiodeLaser`): it resolves to a refusal that throws and names `setcurrent!`
+  (mA, `ConstantCurrent` only), `setoutputpower!` (mW at the laser output,
+  `ConstantPhotocurrent` only) and `setlevel!` (unit-free `0..1`). It is unchanged on
+  the other lights. None of this shows in the map (the 2-arg blind spot above).
 - `move` takes `Float64` positions. `move(stage, 1, 2, 3)` with integers is a
   `MethodError`, not a stub error.
 - The SmarAct `MCS2Stage` has `move(MCS2Stage, Float64, Float64[, Float64])` in

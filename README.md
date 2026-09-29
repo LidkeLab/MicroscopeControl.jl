@@ -55,7 +55,8 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 - Simulated stage for testing
 
 ### Light Sources
-- Thorlabs TCube laser diode controller
+- Thorlabs TCube laser diode controller (TLD001), open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`)
+- Simulated laser diode (`SimDiodeLaser`) for testing either mode
 - CrystaLaser 561nm
 - Vortran 488nm laser
 - Simulated light source for testing
@@ -73,7 +74,7 @@ Since this package is under active development and not yet registered, install i
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.3.0")
 ```
 
 **You must also declare this package's unregistered dependency in your own
@@ -88,7 +89,7 @@ writes both entries for you:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.3")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.3.0")
 ```
 
 If you write the TOML by hand, `[sources]` alone is **not** enough — Julia

@@ -9,6 +9,160 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
+Laser diodes in two regulation modes, and closed loop (photodiode feedback,
+"constant power") for the TCube. Implements the design plan
+`dev/output/plan-laser-modes.md` (revision 3, on branch `fix/revert-cppbool`).
+
+**Hardware verification: PARTIAL**, on the 642 nm rig's TLD001 (64849775),
+2026-09-28, with a power meter before the fibre; the tables are in
+`src/hardware_implementations/tcube_laser/CALIBRATION.md`.
+
+- **Open loop: verified.** 70 / 90 / 110 mA gave 70.0 / 90.0 / 110.0 mA on the
+  front display and 1.69 / 20.67 / 39.42 mW.
+- **Closed loop: verified from 1 to 5 mW only.** Measured = requested - 0.46 mW,
+  slope 0.99, so the 224.2 W/A calibration holds. **Above about 5 mW it failed on
+  this rig**: the photodiode reading clips at about 3213 counts (~21 mW) and
+  reads `0x8000` above it, and the loop held ~21 mW for a 10 mW request. That is
+  the controller's photodiode channel (range DIP switch or TIA gain), not this
+  driver or the calibration; `CALIBRATION.md` says what to check.
+- **Found on the rig and fixed before release**, none of which the fake SDK
+  could have shown: the TLD001 **ignores setpoints sent while its output is
+  off** (so the driver sends them right after enabling, and zeroes the setpoint
+  before disabling); the setpoint read-back only refreshes while polling runs
+  (so polling starts first); the photocurrent reading is signed, with `0x8000`
+  meaning over range; a plain potentiometer write is ignored (adjust mode and a
+  pause are needed); and the header's potentiometer-to-mA scale is wrong for this
+  unit (so the clamp is the controller's own reported limit).
+
+Per the plan's contingency (§8.1), `mode` is a **required keyword with no
+default**: closed loop is not yet verified across the rig's working range.
+Not verified: the meaning of `LD_EnableMaxCurrentAdjust`'s second flag (always
+passed `false`).
+
+**Breaking.** Every downstream rig using a `TCubeLaser` must change its
+construction line and its `setpower` calls; nothing it can write silently
+changes meaning, because the old calls now throw.
+
+### Migration
+
+```julia
+# before
+laser = TCubeLaser("64849775"; max_current = 160.0)
+setpower(laser, 80.0)                     # this was mA, despite the name
+
+# after, open loop: the same behaviour, with the unit in the name
+laser = TCubeLaser("64849775"; mode = ConstantCurrent(), max_current = 160.0)
+setcurrent!(laser, 80.0)                  # mA
+
+# after, closed loop (calibration: src/hardware_implementations/tcube_laser/CALIBRATION.md)
+laser = TCubeLaser("64849775"; mode = ConstantPhotocurrent(),
+    wa_calibration = 224.2, tia_range = 1e-3, tec_stabilised = missing,
+    threshold_current = 65.0, max_current = 160.0,
+    properties = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))
+setoutputpower!(laser, 20.0)              # mW at the laser output
+
+# either mode, when the unit does not matter: a fraction of the declared range
+setlevel!(laser, 0.4)
+```
+
+### Added
+- **`DiodeLaser <: LightSource`**, for lasers on a controller that regulates
+  something, and the mode types **`ConstantCurrent`** (the loop holds drive
+  current) and **`ConstantPhotocurrent`** (the loop holds the monitor photodiode
+  current). There is deliberately no `ConstantPower`: the loop does not hold
+  optical power, and without a temperature-stabilised mount the delivered power
+  drifts while the photocurrent is held. `regulation_mode(laser)` and
+  `supported_modes(T)` report the mode. The voltage-modulated lights
+  (`CrystaLaser`, `VortranLaser`, `DaqTrLight`) and `SimLight` are unchanged.
+- **`TCubeLaser{M}`**: the driver is parametric in its mode, fixed at
+  construction. **Closed loop** (`ConstantPhotocurrent`) takes the photodiode
+  calibration as required keywords -- `wa_calibration` (W/A at the laser
+  output), `tia_range` (the rear-panel DIP switch, A), `tec_stabilised` (`true`,
+  `false` or `missing`) -- held in a new **`PhotodiodeLoop`**, and
+  `properties.min_power`/`max_power` become the enforced mW bounds. A range the
+  amplifier cannot reach, a TIA range the TLD001 does not have, or a ceiling
+  below the potentiometer's lowest clamp is refused at construction.
+- **Closed-loop `initialize`**, a protected sequence: require the key switch and
+  interlock; require the controller's TIA range to match `tia_range` (a moved
+  DIP switch is a silent factor-of-ten error otherwise); disable the output (the
+  setpoint cannot be zeroed with the output off, so `light_on` sends the real one
+  right after enabling); leave the max-current potentiometer at the highest
+  position whose controller-reported limit is `<= max_current` -- the only real
+  protection in closed loop, since a blocked photodiode drives the current
+  straight to it; enter closed loop and verify the status bit; write the W/A
+  factor to the controller's display and read it back. It never enables the
+  output. `light_on` and `setoutputpower!` refuse until the clamp is verified.
+- **`setcurrent!(laser, mA)`** (open loop) and **`setoutputpower!(laser, mW)`**
+  (closed loop, mW at the laser output -- not at the sample; the driver holds no
+  field describing the optics downstream). Both read their setpoint back and
+  record the request only after the controller confirmed it.
+  `pd.photocurrent_requested` holds the decoded setpoint the loop was actually
+  given. `setoutputpower!` refuses when the amplifier is over range, or under
+  range with the output on, or when the controller has left closed loop.
+- **`setlevel!(laser, frac)`**: unit-free, `frac` in 0..1 of the declared range,
+  linear in the regulated quantity; the same call works in both modes, so code
+  written against it survives a mode switch. `frac = 0` is the bottom of the
+  range, not off.
+- **Readbacks**: `measured_current` (mA), `measured_photocurrent` (A),
+  `indicated_output_power` (mW, closed loop; a conversion, not a measurement)
+  and `loop_status`, one snapshot of the status word, both readings and the
+  decoded flags, including `saturated` (at the current clamp) and
+  `below_threshold` (`missing` when the threshold is unknown, never a silent
+  pass). `initialize` starts Kinesis polling at 50 ms so these are cache reads.
+  New field `threshold_current` (mA, declared by the rig).
+- **Panels**: `gui(::DiodeLaser)` opens a current panel (slider in mA over the
+  enforced range) or a power panel (slider in mW at the laser output, the range
+  and the calibration basis shown). Opening issues no command and no read; the
+  readout fills on Read or a Poll toggle that starts off. The textbox accepts
+  only in-range values and turns red otherwise; an entry issues one command,
+  not two; the display changes only after a command succeeded, and a refusal
+  is shown in the panel instead of being thrown inside the event handler.
+- **`SimDiodeLaser{M}`**, a simulated twin on the same abstract type, with a
+  diode, photodiode and loop model, faults (blocked photodiode, responsivity
+  drift, TIA flags, key/interlock) and a log of every command and read.
+- **`CALIBRATION.md`** in the TCube driver folder: how to choose the TIA range,
+  measure the threshold and the W/A factor, build the laser in closed loop and
+  verify it, and the 642 nm rig's current calibration (224.2 W/A on the 1 mA
+  range, measured before the fibre, with its closed-loop verification table).
+
+### Changed
+- `setpower` is not defined for any `DiodeLaser`; it throws, naming the
+  replacements. There is no forwarder, on purpose: with a power mode available
+  a forwarded `setpower(laser, 80.0)` could have turned 80 mA into 80 mW.
+- `TCubeLaser`'s `properties.power_unit` defaults to `"mA"` in open loop, and
+  `properties.power` is no longer written.
+- `export_state(::TCubeLaser)` attributes: `regulation_mode`, `setpoint_unit`,
+  `min_current_mA`, `max_current_mA`, `threshold_current_mA` (were
+  `min_current`, `max_current`); closed loop adds `power_reference`,
+  `min_output_power_mW`, `max_output_power_mW`, `wa_calibration_W_per_A`,
+  `tia_range_A`, `tec_stabilised`, `max_current_clamp_mA`,
+  `output_power_requested_mW`, `photocurrent_requested_A`. `power` and
+  `power_unit` are gone.
+- `LD_GetLaserDiodeCurrentReading` is bound as signed (`Cshort`): a negative
+  reading used to decode to about 440 mA. Kinesis booleans are split by role:
+  arguments as zero-extended `Cuint` (`KBOOL_ARG`), returns as one byte
+  (`KBOOL_RET`), from `fix/revert-cppbool`.
+- The contract test and the API-map generator walk the type hierarchy to its
+  leaves: `subtypes` is one level deep and would have dropped `TCubeLaser` the
+  moment it moved under `DiodeLaser`. **Downstream code calling
+  `subtypes(MicroscopeControl.LightSource)` now sees `DiodeLaser` in place of
+  `TCubeLaser` and `SimDiodeLaser`.**
+
+### Removed
+- The deprecated `legacy_power` figure (`properties.power` on `TCubeLaser`).
+- The deprecated 2-argument `export_state(::TCubeLaser, x)`.
+- The 2-argument interface stub `light_on(::LightSource, ipower::Float64)`,
+  which no driver implemented; the stub is now `light_on(::LightSource)`.
+
+### Deferred
+- Renaming `properties.is_on` to `is_on_requested` across all lights, queued in
+  the plan for this release: it touches every light driver, which the same plan
+  otherwise leaves untouched, and is independent of the laser modes.
+- Defaulting `mode` to `ConstantPhotocurrent()`: after closed loop has run on the
+  rig.
+
 ### Fixed (documentation)
 - **Depending on this package needs more than pinning the tag, and the docs did
   not say so.** MicroscopeControl depends on the unregistered `DAQmx.jl` and

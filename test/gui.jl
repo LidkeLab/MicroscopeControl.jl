@@ -118,4 +118,33 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
             @test state_snapshot(stage) == before
         end
     end
+
+    # The DiodeLaser panels extend the no-commands-on-open rule to reads: a
+    # panel must issue neither a command nor a poll until the user asks.
+    # `SimDiodeLaser` logs reads as well as commands, and the fake Kinesis SDK
+    # records every call, so both halves are assertable on both.
+    @testset "Diode laser panels issue nothing on open" begin
+        cp_props() = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)
+        sims = (SimDiodeLaser(; mode=ConstantCurrent(), min_current=70.0, max_current=150.0),
+                SimDiodeLaser(; mode=ConstantPhotocurrent(), wa_calibration=224.2, tia_range=1e-3,
+                              tec_stabilised=missing, properties=cp_props()))
+        for sim in sims
+            initialize(sim)
+            empty!(sim.log)
+            before = state_snapshot(sim)
+            gui(sim)
+            GLMakie.closeall()
+            @test isempty(sim.log)
+            @test isequal(state_snapshot(sim), before)
+        end
+
+        FakeKinesis.reset!()
+        for laser in (TCubeLaser("00000000"; mode=ConstantCurrent()),
+                      TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
+                                 tia_range=1e-3, tec_stabilised=missing, properties=cp_props()))
+            gui(laser)
+            GLMakie.closeall()
+        end
+        @test isempty(FakeKinesis.calls)
+    end
 end
