@@ -11,6 +11,11 @@ on:
   push:
     branches:
       - main
+      # Release-candidate branches accumulate fixes between releases (see
+      # CLAUDE.md "Versioning"). A merge into one is an integration point, so
+      # it earns the full matrix once — pull requests INTO it still run the
+      # reduced set, like any other pull request.
+      - '[0-9]+.[0-9]+rc[0-9]+'
     tags: ['*']
   pull_request:
     paths-ignore:
@@ -82,7 +87,12 @@ jobs:
   version-bumped:
     name: Version bumped
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Only for pull requests into `main`, where a merge is tagged. Work
+    # accumulating on a release-candidate branch deliberately does not bump
+    # per merge — the version moves once, when the release is cut — and this
+    # check would otherwise reject every pull request into that branch, since
+    # it demands a plain X.Y.Z strictly greater than the base.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
     steps:
       - uses: actions/checkout@v6
         with:
