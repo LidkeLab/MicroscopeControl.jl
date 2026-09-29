@@ -8,6 +8,8 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
+## [Unreleased]
+
 ## [0.2.5] - 2026-09-29
 
 A non-breaking release. It brings the TCube laser's closed-loop (power) mode and
