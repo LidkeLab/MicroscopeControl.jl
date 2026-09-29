@@ -93,6 +93,15 @@ Resolving to a device-specific method is not the same as the operation working:
 - `getposition(::N472)` returns the SDK success code and stores positions in
   `stage.pos`; `move(::N472, pos::Vector{Float64})` takes a vector, not
   `x, y, z` (traced).
+- `stopmotion(::N472)` **[fixed in v0.2.4]**: before that release it passed
+  `stage.axes` (a `Vector{String}`) where the DLL wants one space-separated
+  string, so the halt never reached the controller (traced).
+- `initialize(::N472)` / `shutdown(::N472)` **[fixed in v0.2.4]**: `initialize`
+  now sets `connectionstatus` only after `PI_ConnectUSB` succeeds and leaves
+  the object retryable on failure; `shutdown` clears the flag so the same
+  object can be initialized again. Before 0.2.4 a failed connect was reported
+  as "Stage initialized" and both a retry and a re-initialize after `shutdown`
+  were refused (verified on the rig: init, stop, shutdown, init on one object).
 - `capture` returns the `SINGLE_FRAME` enum on `SimCamera` and the frame on the
   hardware cameras, and `getdata` after `capture` is valid **only** on
   `SimCamera` (DCAM4 and DCX release their buffers before `capture` returns).

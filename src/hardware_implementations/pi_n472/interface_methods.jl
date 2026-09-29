@@ -1,3 +1,12 @@
+"""
+    _cstring(buf) -> String
+
+The bytes of `buf` up to its first NUL, as a `String`.
+"""
+function _cstring(buf::Vector{UInt8})
+    i = findfirst(==(0x00), buf)
+    return String(buf[1:(i === nothing ? end : i - 1)])
+end
 
 function initialize(stage::N472)
     if stage.connectionstatus == true
@@ -5,28 +14,40 @@ function initialize(stage::N472)
         return
     end
 
-    # Create a buffer string
-    buffersize = 128
-    devstring = zeros(UInt8, buffersize)
+    # Enumerate the C-885 controllers the GCS2 DLL can see. The DLL lists only
+    # controllers nobody has open: one that Device Manager still shows but is
+    # missing here is held by another process (a second Julia, PIMikroMove, an
+    # open COM port).
+    buffersize = 1024
+    buffer = zeros(UInt8, buffersize)
     controllername = "C-885"
-    numdevice = PI_EnumerateUSB(devstring, buffersize, controllername)
-    devstring = filter(x -> x != 0x00, devstring)
-    
-
-
-    #Set connection status to true
-    if numdevice > 0
-        stage.connectionstatus = true
-    else
-        @error "No devices connected"
+    numdevice = PI_EnumerateUSB(buffer, buffersize, controllername)
+    if numdevice <= 0
+        @error "No PI C-885 found by the GCS2 library — controller absent, or held by another process"
         stage.connectionstatus = false
         return
     end
 
+    # The buffer holds one NUL-terminated description per line. Pass the first
+    # line as a `String`: Julia strings are always NUL-terminated for
+    # `Ptr{Cchar}`, whereas the old code stripped every 0x00 byte and handed
+    # the DLL a bare `Vector{UInt8}`, terminated only by whatever happened to
+    # follow it in memory (usually a zero, so it usually worked).
+    devstring = String(first(split(_cstring(buffer), '\n')))
+    @info "PI device: " * devstring
+
     #Connect to usb device
     stage.id = PI_ConnectUSB(devstring)
-    @info "PI device: " * String(devstring)
     @info "Device ID: " * string(stage.id)
+    if stage.id < 0
+        # The connect itself failed (id -1): typically another process already
+        # holds the controller. Leave the flag cleared so `initialize` can be
+        # retried on the same object.
+        stage.connectionstatus = false
+        @error "PI_ConnectUSB failed for \"$devstring\" (init error $(PI_GetInitError())) — the controller is probably held by another process"
+        return
+    end
+    stage.connectionstatus = true
 
     #Query the unit of the physical position
     axes = join(stage.axes, " ")
@@ -67,6 +88,9 @@ function shutdown(stage::N472)
     else
         @info "Stage not connected"
     end
+    # Clear the flag so the same object can be initialized again; before this
+    # a second `initialize` after `shutdown` was refused as "already initialized".
+    stage.connectionstatus = false
     return
 end
 
@@ -95,7 +119,11 @@ function StageInterface.home(stage::N472)
 end
 
 function StageInterface.stopmotion(stage::N472)
-    success = PI_HLT(stage.id, stage.axes)
+    # Every GCS2 axes argument is one space-separated string. `stage.axes` is a
+    # Vector{String}; passing it as Ptr{Cchar} handed the DLL a pointer to
+    # string references, not characters, so the halt never reached the axes.
+    axes = join(stage.axes, " ")
+    success = PI_HLT(stage.id, axes)
     return success
 end
 

@@ -119,6 +119,21 @@ Hardware implementations use `ccall` for vendor SDKs:
 - `mcl_stage/*.jl` - Mad City Labs NanoDrive
 - Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
 
+Rules at the `ccall` boundary, each learned from a bug that "usually worked"
+(C-867 servo, v0.1.1; N-472 initialize, v0.2.4):
+- A `Ptr{Cchar}` argument (GCS2 axes lists, USB descriptions) gets a Julia
+  `String`, which is always NUL-terminated. Never a `Vector{UInt8}` with the
+  zeros filtered out, and never a `Vector{String}`; join axes with a space first.
+- A `BOOL*` argument is 32-bit (`Cuint`/`Cint`), one element per axis, never `UInt8`.
+- Set a driver's `connectionstatus` only after the connect call's return value
+  is checked, and clear it in `shutdown`, so a failed or closed object can be
+  initialized again.
+
+The test suite must never command attached hardware. Driver tests that touch a
+vendor DLL run only its failure paths, and skip when the device enumerates
+(see the "PI N472 (no hardware)" testset: on the rig, the C-885 is plugged in
+and `initialize` would turn its servos on).
+
 ### Camera Image Data Convention
 
 **Convention:** Image data is stored and displayed as column-major `(H, W, N)` arrays where `data[row, col]` = `data[y, x]`.

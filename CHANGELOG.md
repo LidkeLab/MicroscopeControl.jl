@@ -9,6 +9,35 @@ and `y` is the non-breaking one (every merge to `main` is tagged).
 
 ## [Unreleased]
 
+### Fixed
+
+PI N-472 actuator driver (`PI_N472`), initialize/shutdown/stop. Same family
+as the v0.1.1 C-867 fix: memory-layout accidents at the GCS2 boundary that
+work most of the time. **Hardware verification: NOT DONE** on the actuator
+itself; the no-controller path is exercised by the new "PI N472 (no
+hardware)" testset against the installed DLL, and the rest is traced from the
+source.
+
+- **`initialize` handed `PI_ConnectUSB` a description with no NUL
+  terminator.** The enumeration buffer was stripped of every `0x00` byte and
+  passed as a bare `Vector{UInt8}`, so the DLL read past its end until it met
+  a zero by chance. That explains an initialize that "usually works". It now
+  passes the first enumerated line as a Julia `String`, which is always
+  NUL-terminated at the `Ptr{Cchar}` boundary. The buffer grew from 128 to
+  1024 bytes to match the C-867 driver.
+- **A failed connect was silent and poisoned the object.** `connectionstatus`
+  was set before `PI_ConnectUSB` was called and its `-1` return never checked,
+  so every later GCS call failed quietly, "Stage initialized" was still logged,
+  and a retry was refused as "already initialized". The flag is now set only
+  after a successful connect; a failure logs the description and
+  `PI_GetInitError()` and leaves the object retryable.
+- **`shutdown` never cleared `connectionstatus`**, so re-initializing the same
+  object in one session was always refused. It now clears the flag.
+- **`stopmotion` could not reach the controller.** It passed `stage.axes`, a
+  `Vector{String}`, where the DLL wants one space-separated `Ptr{Cchar}`
+  string; the pointer handed over pointed at string references, not
+  characters. It now joins the axes like every other call in the driver.
+
 ### Fixed (documentation)
 - **Depending on this package needs more than pinning the tag, and the docs did
   not say so.** MicroscopeControl depends on the unregistered `DAQmx.jl` and
