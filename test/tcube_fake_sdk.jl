@@ -134,6 +134,12 @@ const KEY, CLOSED, INTERLOCK, ENABLED = 0x00000002, 0x00000004, 0x00000008, 0x00
 const TIA_1mA, TIA_10mA, PSU_OK = 0x00000040, 0x00000080, 0x00001000
 const TIA_OVER, TIA_UNDER = 0x00002000, 0x00004000
 
+"While `true`, `LD_SetOpenLoopMode` records the call and returns success but leaves the closed-loop bit set."
+const open_loop_ignored = Ref(false)
+
+"While `true`, the captured status word has the current-limit bit (`LIMIT`, 0x400) set whatever the model says."
+const force_limit_bit = Ref(false)
+
 "The status word: key, interlock, PSU OK and the 1 mA range by default."
 const bits = Ref{UInt32}(KEY | INTERLOCK | PSU_OK | TIA_1mA)
 
@@ -209,6 +215,8 @@ function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     pd_words_per_mA[] = 145.0
     bits[] = KEY | INTERLOCK | PSU_OK | TIA_1mA
     closed_loop_takes[] = true
+    open_loop_ignored[] = false
+    force_limit_bit[] = false
     setpoint_held[] = stored
     setpoint_readback[] = nothing
     digpot[] = 204
@@ -259,7 +267,7 @@ function photocurrent_now()
     return pd_word_at(min(closed() ? needed_mA() : setpoint_mA(), limit_mA_live()))
 end
 function capture(kind::Symbol)
-    kind === :status && return bits[] | (saturated_now() ? LIMIT : 0x00000000)
+    kind === :status && return bits[] | (saturated_now() || force_limit_bit[] ? LIMIT : 0x00000000)
     kind === :readings && return (current = something(current_raw[], diode_limit_raw[]), photocurrent = photocurrent_now())
     kind === :limit && return (isempty(limit_raw_queue) ? (limit_follows_pot[] ?
         floor(Int, limit_mA_for(digpot[]) / 220 * 32767) : diode_limit_raw[]) : popfirst!(limit_raw_queue))
@@ -281,7 +289,7 @@ end
     LD_Close(serialNo) = (Main.FakeKinesis.record!("LD_Close"); nothing)
     function LD_SetOpenLoopMode(serialNo)
         s = Main.FakeKinesis.record!("LD_SetOpenLoopMode")
-        s == 0 && Main.FakeKinesis.setbits!(Main.FakeKinesis.CLOSED; on=false)
+        (s == 0 && !Main.FakeKinesis.open_loop_ignored[]) && Main.FakeKinesis.setbits!(Main.FakeKinesis.CLOSED; on=false)
         return s
     end
     function LD_SetClosedLoopMode(serialNo)

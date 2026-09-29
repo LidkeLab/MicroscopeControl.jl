@@ -82,7 +82,7 @@ rig's TLD001, serial `64849775`). Facts the driver's docstrings already state
 are marked with where.
 
 - A plain `LD_SetMaxCurrentDigPot` is ignored: adjust mode (`LD_EnableMaxCurrentAdjust`) and a pause before leaving it are needed, 2026-09-28 (driver: `set_digpot!`, `CLAMP_WAIT_S`).
-- The header's potentiometer scale (`position * 220 / 255` mA) is wrong for this unit: position 204 gave 160.74 mA and 194 gave 152.43 mA, 2026-09-28; the manual gives about 0.7 mA per step (p.28, p.38); position 203 read 159.9 mA, and the limit readback is stable across fresh reads, 2026-09-29 (driver: `DIGPOT_STEP_ESTIMATE_mA`).
+- The header's potentiometer scale (`position * 220 / 255` mA) is wrong for this unit: position 204 gave 160.74 mA and 194 gave 152.43 mA, 2026-09-28; the manual gives about 0.7 mA per step (p.28, p.38); position 203 read 159.9 mA, and the limit readback is stable across fresh reads, 2026-09-29. The limit readback is what the driver trusts; `DIGPOT_STEP_ESTIMATE_mA` keeps the header's 220/255 mA, the larger step, only to choose the next position, so moves approach `max_current` from below.
 - The potentiometer position does not survive a controller power cycle, 2026-09-29; `initialize` re-programs it every time and power-mode `light_on` re-checks it.
 - The controller ignores a setpoint sent while its output is off and then runs on a stale stored setpoint (on this rig the diode went to its ~160 mA limit); the setpoint read-back is stale with the output off (65530), 2026-09-28 (driver: `send_setpoint`).
 - The photodiode UNDER-range flag was set at 1 mW (4.5 uA on the 1 mA range) while the loop regulated correctly, 2026-09-29; the driver warns and does not refuse.

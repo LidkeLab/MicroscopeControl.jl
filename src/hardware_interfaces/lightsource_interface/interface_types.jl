@@ -85,9 +85,9 @@ struct ConstantPhotocurrent <: RegulationMode end
 """
     LOCK_CHECK_MIN_S
 
-The shortest `lock_check_s` a [`PhotodiodeLoop`](@ref) accepts, in s: 0.1, twice the TCube
-driver's 50 ms polling period. Below it the photodiode is read before the loop has answered a
-new setpoint. At 0, before 0.2.6, the lock check read the polled cache before the loop moved
+The shortest `lock_check_s` a [`PhotodiodeLoop`](@ref) accepts, in s: 0.1. The floor gives the
+loop time to settle before `check_lock` reads; `check_lock` makes its own reads and does not
+depend on polling. Below it the photodiode is read before the loop has answered a new setpoint. At 0, before 0.2.6, the lock check read the polled cache before the loop moved
 and could never trip; with the two-sided check it would trip on every upward step.
 """
 const LOCK_CHECK_MIN_S = 0.1
@@ -165,8 +165,10 @@ delivered power drifts while photocurrent is held steady. That is why
   ordinary drift. Choose the reference at least 20 mA above threshold.
 - `scale_checked::Bool`: state, `true` once this initialize's re-check passed or
   was skipped for want of a reference.
+- `scale_refused::Bool`: state, `true` once this initialize's re-check found a mismatch.
+  Every later power-mode `light_on` refuses without lighting the diode until the next `initialize`.
 
-Construct it with the keyword form, which fills the last eleven fields.
+Construct it with the keyword form, which fills the last twelve fields.
 """
 mutable struct PhotodiodeLoop
     wa_calibration::Float64
@@ -183,6 +185,7 @@ mutable struct PhotodiodeLoop
     ref_photocurrent_A::Float64
     ref_ratio::Float64
     scale_checked::Bool
+    scale_refused::Bool
 end
 
 """
@@ -221,6 +224,6 @@ function PhotodiodeLoop(; wa_calibration::Real, tia_range::Real, tec_stabilised:
                           Float64(ramp_step_mW), Float64(ramp_step_s), Float64(lock_check_s), Float64(lock_ratio),
                           ref_current_mA === nothing ? NaN : Float64(ref_current_mA),
                           ref_photocurrent_A === nothing ? NaN : Float64(ref_photocurrent_A),
-                          Float64(ref_ratio), false)
+                          Float64(ref_ratio), false, false)
 end
 

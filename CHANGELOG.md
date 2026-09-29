@@ -29,6 +29,11 @@ the next version with `-DEV`).
   disabled the lock check. A construction passing a smaller value now throws.
 - `TCubeLaser`: `measured_current` (and so `loop_status`) accepts the raw reading -32768, which
   the Kinesis header defines as -220 mA, instead of throwing.
+- `TCubeLaser`: the calibration-reference re-check latches a mismatch until `initialize`, and does not
+  re-light the diode on every retried `light_on`.
+- `TCubeLaser` power mode: `check_lock` also runs the current-limit test (`0x400`) at a zero request.
+- `TCubeLaser` power mode: `setoutputpower!` decides on fresh status and photocurrent reads, and
+  `light_on` and `setoutputpower!` refuse a photodiode range that no longer matches `tia_range`.
 - `TCubeLaser`: the header's potentiometer floor, 17.25 mA, no longer gates anything. Open-loop
   `initialize` lowers the potentiometer for any `max_current` below the controller's limit, and
   power-mode construction no longer refuses a `max_current` under 17.25 mA; the limit the
@@ -39,19 +44,29 @@ the next version with `-DEV`).
 - A calibration reference for power mode: `ref_current_mA`, `ref_photocurrent_A` and `ref_ratio`
   (default 1.5) on `PhotodiodeLoop`, `TCubeLaser` and `SimDiodeLaser` (which stores them and does
   not check). With a reference, the first power-mode `light_on` after each `initialize` runs the
-  diode in open loop at `ref_current_mA`, reads the photodiode, and refuses unless the photocurrent
-  is within a factor `ref_ratio` of `ref_photocurrent_A`; the output is off after the check either
-  way. Without one, that `light_on` warns once that the check is skipped. See `CALIBRATION.md`.
+  diode in open loop at `ref_current_mA` for `REFERENCE_DWELL_S` (0.1 s) before reading the photodiode,
+  and refuses unless the photocurrent is within a factor `ref_ratio` of `ref_photocurrent_A`; the
+  output is off after the check either way, and a mismatch refuses every later `light_on` until the
+  next `initialize`. Without one, that `light_on` warns once that the check is skipped. See `CALIBRATION.md`.
   **Every rig that uses power mode should record one** (`ref_current_mA`, `ref_photocurrent_A`),
   with its next W/A measurement; `CALIBRATION.md` step 3b says how.
 
 ### Changed
 
-- `TCubeLaser` power mode: `light_on` and `setoutputpower!` each take about 0.4 s longer (the
-  doubled requests and `check_lock`'s own reads).
-- `TCubeLaser`: the potentiometer search steps by the manual's ~0.7 mA per position instead of the
-  header's 220/255 mA, and may take one more setting to settle. The controller's readback still
-  decides every position.
+- `TCubeLaser` timings, against 0.2.5, at the default `lock_check_s` (0.2 s) and `REQUEST_WAIT_S`
+  (0.1 s; a fresh read now sends its request twice, 0.2 s, where it was 0.1 s):
+  - a power-mode `light_on` takes about 0.6 s longer (`require_clamp` two fresh reads, +0.2 s; `check_lock`
+    adds its photocurrent and status reads, +0.4 s);
+  - a power-mode `setoutputpower!` with the output on takes about 0.8 s longer for a request above zero
+    and about 0.6 s for a zero request (`require_clamp` +0.2 s, the fresh photocurrent read +0.2 s,
+    `check_lock` +0.4 s, or +0.2 s at zero); with the output off, about 0.2 s longer;
+  - an open-loop `light_on` takes about 0.1 s longer (one fresh limit read), and a `setcurrent!` with
+    the output off about 0.1 s longer (one fresh status read);
+  - `initialize` takes about 0.8 s longer in power mode (eight fresh reads: status 2, potentiometer 2, limit 3,
+    W/A 1, for one potentiometer setting; each further setting adds 0.2 s) and about 0.1 s in open loop
+    (one limit read, more if the potentiometer is lowered);
+  - the first power-mode `light_on` after `initialize` also runs the calibration-reference re-check:
+    `REFERENCE_DWELL_S` (0.1 s), three fresh reads (0.6 s) and the setpoint confirm, about 0.7 s plus the confirm.
 
 ## [0.2.5] - 2026-09-29
 
