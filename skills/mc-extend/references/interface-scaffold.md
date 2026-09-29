@@ -115,7 +115,7 @@ What the run showed:
 | `initialize(SimShutter()); open_shutter!(sh); is_open(sh)` | `true`; `export_state(sh)[1]["is_open"] == true` |
 | `has_specific` for `initialize, shutdown, export_state, open_shutter!, close_shutter!, is_open` on `SimShutter` | all `true` |
 | `SimulatedShutter.open_shutter! === ShutterInterface.open_shutter!`, `SimulatedShutter.export_state === MicroscopeControl.export_state` | `true`, `true`: no shadow bindings |
-| `subtypes(Shutter)` | `[NoMethodsShutter, SimShutter]`: this is how the contract test and the API map will find your devices |
+| `subtypes(Shutter)` | `[NoMethodsShutter, SimShutter]`: the contract test and the API map find your devices from this, walking on through any abstract intermediate to the non-abstract leaves (from 0.2.5; `subtypes` alone is one level deep) |
 
 ## Writing the contract, not just the stubs
 

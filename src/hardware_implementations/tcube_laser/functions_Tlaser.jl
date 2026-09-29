@@ -218,16 +218,22 @@ function LD_RequestStatusBits(serialNo)
     ccall((:LD_RequestStatusBits, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar},), serialNo)
 end
 
+# Signed in practice, whatever the header says: on the 642 nm rig's TLD001
+# (64849775, 2026-09-28) the reading with the output off was 65533 as a WORD,
+# i.e. -3, a small negative offset. Read unsigned it decoded to twice full scale.
 function LD_GetPhotoCurrentReading(serialNo)
-    ccall((:LD_GetPhotoCurrentReading, Thorlabs_Tcube_laser), WORD, (Ptr{Cchar},), serialNo)
+    ccall((:LD_GetPhotoCurrentReading, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar},), serialNo)
 end
 
 function LD_GetVoltageReading(serialNo)
     ccall((:LD_GetVoltageReading, Thorlabs_Tcube_laser), WORD, (Ptr{Cchar},), serialNo)
 end
 
+# Signed, unlike the other readings: the vendor header gives the diode current
+# as ±32767 = ±220 mA. Read as an unsigned WORD, a negative reading decoded to
+# roughly 440 mA -- twice full scale, reported as a plausible-looking number.
 function LD_GetLaserDiodeCurrentReading(serialNo)
-    ccall((:LD_GetLaserDiodeCurrentReading, Thorlabs_Tcube_laser), WORD, (Ptr{Cchar},), serialNo)
+    ccall((:LD_GetLaserDiodeCurrentReading, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar},), serialNo)
 end
 
 function LD_RequestLaserDiodeMaxCurrentLimit(serialNo)

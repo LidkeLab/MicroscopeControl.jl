@@ -33,7 +33,10 @@ your own type, extend freely (steps 3 and 4); an MC type, report and work
 around from outside (step 2).
 
 **[limitation]** The collision is worse than "diverge silently", and this has
-happened. A rig repo defined `export_state(::TCubeLaser)` itself, because
+happened (historical: the case below is v0.2.1 to v0.2.3; at 0.2.5 the 1-arg
+method is upstream and the 2-arg form it replaced is a deprecated forwarder, so a rig still carrying
+a shim or a 2-arg call from that period should delete it; the pattern, and the
+guard, apply to any future gap). A rig repo defined `export_state(::TCubeLaser)` itself, because
 v0.2.1 shipped only a 2-argument form and the 1-argument call fell through to
 the throwing stub. When v0.2.3 added that method upstream, Julia failed
 **precompilation** on the overwrite; in the environment that reported it the
@@ -87,7 +90,7 @@ defects; a report needs the rig, in a fresh session with nothing else attached.
 
 ## 2. Report against the pinned tag, and work around from outside
 
-The rig pins a tag (`Pkg.add(url=..., rev="v0.2.0")`) and the fix ships as a new
+The rig pins a tag (`Pkg.add(url=..., rev="v0.2.5")`) and the fix ships as a new
 tag, so the report must say which tag, from the environment:
 `pkgversion(MicroscopeControl)`, `VERSION`, `Sys.KERNEL`. Template:
 
@@ -148,9 +151,10 @@ closed link** (no silent no-op); a **pure constructor**; `initialize` that opens
 the link only if it is not already open; `shutdown` that closes it only if
 `owns_port`; interface operations that range-check and cache the *requested*
 value; a 1-arg `export_state` whose attribute names say which kind of state
-they hold (`power_requested`). **[limitation]** the interface also declares
-`light_on(::LightSource, ipower::Float64)`, which no driver implements and
-upstream tracks as `@test_broken`; implement the 1-arg form.
+they hold (`power_requested`). **[guarantee]** the interface declares
+`light_on(::LightSource)` only; implement that. (Up to v0.2.4 it declared a 2-arg
+`light_on(::LightSource, ipower::Float64)` that no driver implemented; 0.2.5
+removed it, so a 2-arg call is a `MethodError`.)
 
 ### Binding identity: import to extend, never rely on `using`
 
@@ -220,6 +224,33 @@ carry:
   The slider and toggle are now wired with `on`, which fires only on a later
   change, and initialised from the device's current `properties.power`/
   `properties.is_on`.
+- **DiodeLaser** (0.2.5; a laser on a controller that regulates drive current or
+  monitor photocurrent; a light that is only voltage-modulated stays a plain
+  `LightSource`): **[guarantee]** the shared `current_panel`/`power_panel` and
+  `setlevel!` read `unique_id`, `properties` (`is_on`; `min_power`/`max_power` as
+  the enforced mW bounds at the laser output in `ConstantPhotocurrent` mode),
+  `min_current`, `max_current`, `threshold_current` (mA, `NaN` unknown),
+  `drive_current` (mA requested, `NaN` before the first and always in
+  `ConstantPhotocurrent`) and `pd::Union{Nothing,PhotodiodeLoop}` (a
+  `PhotodiodeLoop` exactly in `ConstantPhotocurrent`). Beyond fields, the driver
+  is parametric, `MyLaser{M<:RegulationMode} <: DiodeLaser`, and defines
+  `supported_modes(::Type{<:MyLaser})` (a tuple of mode types; the contract test
+  expands the device through it) and `regulation_mode(::Type{MyLaser{M}}) where
+  {M} = M()`; its inner constructor rejects a mode not in `supported_modes` and
+  calls `LightSourceInterface.check_diode_config`. Do not define `setpower`: the
+  `DiodeLaser` method (a deprecated forwarder in open loop, a refusal in closed loop) must answer. `TCubeLaser` and `SimDiodeLaser` are the two
+  templates.
+
+**[guarantee]** Mode-shared methods (`initialize`, `shutdown`, `export_state`,
+`light_on`, `light_off`, `measured_current`, `measured_photocurrent`,
+`loop_status`) are written against the bare type (`TCubeLaser`); mode-specific
+ones against the instantiation (`setcurrent!(::TCubeLaser{ConstantCurrent},
+::Float64)`, `setoutputpower!`/`indicated_output_power` on
+`TCubeLaser{ConstantPhotocurrent}`). `test/contract.jl` checks exactly those
+signatures, so **[policy]** never write a `where M` method on a generic the
+contract test checks: its signature matches neither the bare type nor an
+instantiation, and the gate fails. Dispatch on the mode inside a mode-shared method
+with a helper (`enter_mode!(regulation_mode(l), l)`), as `TCubeLaser` does.
 
 **[policy]** carry the fields rather than writing your own panel: the fields are
 what make the Sim-for-hardware swap in `mc-testing` work.
@@ -241,7 +272,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 | Calibration | table in the device (`AttenuatorProperties.cal_*`); values from the rig | `LCC1620.settransmission` `@error`s and returns when uncalibrated |
 | Cached versus measured | name it (`power_requested`); update `real_*` only from a readback | Sim stages copy `targ_*` into `real_*`; `getposition(::SimStage3d)` returns a scalar, not the documented tuple (executed) |
 | Image axis convention | `(H, W)` per frame, `(H, W, N)` per stack; at a row-major SDK boundary `permutedims(reshape(buf, (W, H)), (2, 1))` | DCAM4 does this in `dcambuf.jl`; `SimCamera` returns `(roi.height, roi.width[, N])` (executed); `save_h5` stamps `dimension_order` assuming it |
-| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `Triggerscope4` has none (`MethodError`). `TCubeLaser` had only a 2-arg method until **v0.2.3**, so the contract call threw; the 1-arg method was added there and the 2-arg one kept as a deprecated forwarder |
+| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `Triggerscope4` has none (`MethodError`). `TCubeLaser` had only a 2-arg method until **v0.2.3**, so the contract call threw; the 1-arg method was added there, the 2-arg one kept as a deprecated forwarder, and **0.2.5 removed the forwarder** (contract test asserts `!hasmethod(export_state, Tuple{TCubeLaser,Any})`) |
 | Unsupported operations | do not define the method; let the throwing stub answer | `stopmotion(::MCLStage)` is a concrete method whose body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed), so `hasmethod` and the API map count it as implemented |
 
 ## 4. Define a new interface (rare, consequential)
@@ -273,7 +304,9 @@ completion, required versus optional) are in `references/interface-scaffold.md`.
 
 **[policy]** the simulated implementation is mandatory and ships with the
 interface: the stubs all throw (write them so), so nothing exercises the contract without it;
-upstream's contract test iterates `subtypes`; downstream tests put it in the
+upstream's contract test iterates the interface's non-abstract leaves (from 0.2.5
+`device_types` walks through abstract intermediates such as `DiodeLaser`;
+**[limitation]** a plain `subtypes(iface)` is one level deep and misses them); downstream tests put it in the
 interface-typed field; a shared panel is developed against it. Make it honest
 about what it does not model. **[limitation]** upstream CLAUDE.md calls interface
 GUIs optional while `test/contract.jl` requires every non-exempt device to
@@ -325,8 +358,14 @@ An interface missing from either tuple loads fine and is invisible to both gates
 What upstream's `test/contract.jl` runs for **every** subtype: items 1 to 3
 (method specificity for the lifecycle and the interface operations, function
 identity for every generic a submodule defines, and `gui` dispatch off the
-`AbstractInstrument` stub), plus, per `LightSource` subtype, a `@test_broken` on
-the 2-arg `light_on`. Item 4 is **not** run per subtype: the only stub-throws
+`AbstractInstrument` stub), plus a "LightSource contract" testset: every light
+has `light_on`/`light_off` on its own type and **no** 2-arg `light_on` (the
+`@test_broken` of v0.2.x is gone with the stub); a `DiodeLaser` must have a
+non-empty `supported_modes`, per mode a `regulation_mode` of that mode, the
+mode-specific setter on the instantiation and not the other one, `setlevel!` and
+`setpower` landing on the `DiodeLaser` method, and `measured_current`,
+`measured_photocurrent`, `loop_status` on its own type; any other light must have
+its own `setpower`. Item 4 is **not** run per subtype: the only stub-throws
 checks are three assertions on two test fixture types (`_ContractDummyStage`,
 `_ContractDummyInstrument`), so write your own
 `@test_throws` for the operations you leave unimplemented. Items 5 and 6 are

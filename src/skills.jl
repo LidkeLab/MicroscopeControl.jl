@@ -44,6 +44,27 @@ end
 # with.
 _sig_parameters(m::Method) = Base.unwrap_unionall(m.sig).parameters
 
+# Devices are the non-abstract leaves. `subtypes` is one level deep, so an
+# abstract intermediate such as `DiodeLaser` would hide every driver beneath it
+# from the map. `isabstracttype`, not `isconcretetype`: a parametric driver
+# (`TCubeLaser`, a `UnionAll`) must be kept.
+function _device_types(T)
+    out = Any[]
+    for S in InteractiveUtils.subtypes(T)
+        isabstracttype(S) ? append!(out, _device_types(S)) : push!(out, S)
+    end
+    return out
+end
+
+# A method belongs to device `T` if it is written against `T` itself or, for a
+# parametric device, against one of its instantiations (`TCubeLaser{ConstantCurrent}`).
+_is_device_param(p, T) = p === T ||
+    (T isa UnionAll && p isa DataType && p.name === Base.unwrap_unionall(T).name)
+
+# `TCubeLaser`, or `TCubeLaser{ConstantPhotocurrent}` for an instantiation.
+_type_label(p) = p isa DataType && !isempty(p.parameters) && all(x -> x isa Type, p.parameters) ?
+    string(nameof(p), "{", join(nameof.(p.parameters), ", "), "}") : string(nameof(p))
+
 # ---- Path containment -----------------------------------------------------
 #
 # A skill name or relative file path can come from data this package does
@@ -254,7 +275,7 @@ function _generate_api_map()
         println(io)
         println(io, "## $(nameof(iface))")
 
-        devtypes = [T for T in InteractiveUtils.subtypes(iface)
+        devtypes = [T for T in _device_types(iface)
                     if nameof(T) !== :StageFormat && !startswith(String(nameof(T)), "_")]
 
         for T in devtypes
@@ -267,7 +288,7 @@ function _generate_api_map()
             inherited_method = Dict{Symbol,Method}()
             for fname in exported_functions
                 f = getfield(MC, fname)
-                if any(m -> length(_sig_parameters(m)) >= 2 && _sig_parameters(m)[2] === T, methods(f))
+                if any(m -> length(_sig_parameters(m)) >= 2 && _is_device_param(_sig_parameters(m)[2], T), methods(f))
                     push!(device_specific, fname)
                 elseif hasmethod(f, Tuple{T})
                     m = which(f, Tuple{T})
@@ -278,7 +299,9 @@ function _generate_api_map()
                     # "not this device's own code" and worth surfacing, so a
                     # missing lifecycle method (e.g. ThorCamCSCCamera's
                     # `initialize`) is visible instead of silently absent.
-                    if length(params) >= 2 && (params[2] === iface || params[2] === MC.AbstractInstrument)
+                    # An intermediate abstract type (`DiodeLaser`) counts as the interface too.
+if length(params) >= 2 && (params[2] === iface || params[2] === MC.AbstractInstrument ||
+                           (params[2] isa Type && params[2] <: iface && T <: params[2] && params[2] !== T))
                         inherited_method[fname] = m
                         push!(_is_contract_stub_file(String(m.file)) ? stub : shared, fname)
                     end
@@ -295,9 +318,9 @@ function _generate_api_map()
                     f = getfield(MC, fname)
                     for m in methods(f)
                         params = _sig_parameters(m)
-                        (length(params) >= 2 && params[2] === T) || continue
+                        (length(params) >= 2 && _is_device_param(params[2], T)) || continue
                         args = join(params[3:end], ", ")
-                        println(io, "- `$(fname)($(nameof(T))$(isempty(args) ? "" : ", " * args))`")
+                        println(io, "- `$(fname)($(_type_label(params[2]))$(isempty(args) ? "" : ", " * args))`")
                     end
                 end
             end
