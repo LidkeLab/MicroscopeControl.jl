@@ -49,7 +49,7 @@ What CI actually runs, deliberately thin (`.github/workflows/CI.yml`):
 Batch fixups into one push rather than pushing each review round separately;
 every push to an open pull request starts a fresh run.
 
-Tests use simulated devices only (`SimCamera`, `SimStage3d`/`SimStage2d`/`SimStage1d`, `SimLight`) - no hardware required. GLMakie needs a display: run under `xvfb-run -a` on a headless Linux box (CI does this). Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
+Tests use simulated devices only (`SimCamera`, `SimStage3d`/`SimStage2d`/`SimStage1d`, `SimLight`, `SimDiodeLaser`) plus a fake Kinesis SDK (`test/tcube_fake_sdk.jl`) that the real `TCubeLaser` driver runs against - no hardware required. GLMakie needs a display: run under `xvfb-run -a` on a headless Linux box (CI does this). Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
 
 ## Architecture
 
@@ -64,7 +64,8 @@ MicroscopeControl.jl uses a **three-layer architecture** leveraging Julia's mult
 │  Abstract types + contracts    │  Concrete device drivers   │
 │  - CameraInterface             │  - SimulatedCamera, DCAM4  │
 │  - StageInterface              │  - SimulatedStage, PI, MCL │
-│  - LightSourceInterface        │  - SimulatedLight, TCube   │
+│  - LightSourceInterface        │  - SimulatedLight, TCube,  │
+│    (+ DiodeLaser)              │    SimDiodeLaser           │
 │  - DAQInterface                │  - NIDAQcard               │
 │  - SLMInterface                │  - OK_XEM (FPGA)           │
 │  - AttenuatorInterface         │  - LCC1620                 │
@@ -100,6 +101,8 @@ Interfaces define method signatures with throwing `error("<name> not implemented
 **Stage**: `move`, `getposition`, `getrange`, `stopmotion`
 
 **LightSource**: `setpower`, `light_on`, `light_off`
+
+**DiodeLaser** (`<: LightSource`; `TCubeLaser{M}`, `SimDiodeLaser{M}` with `M` = `ConstantCurrent` or `ConstantPhotocurrent`, fixed at construction, `mode=` required): `setcurrent!` (mA, `ConstantCurrent` only), `setoutputpower!` (mW at the laser output, `ConstantPhotocurrent` only), `setlevel!` (0..1 of the declared range, both), `measured_current`, `measured_photocurrent`, `indicated_output_power`, `loop_status`, `regulation_mode`, `supported_modes`. `setpower` throws on a `DiodeLaser`. Mode-shared methods are written against the bare `TCubeLaser`, mode-specific ones against `TCubeLaser{ConstantCurrent}` / `{ConstantPhotocurrent}`; never a `where M` method on a generic `test/contract.jl` checks. `subtypes` is one level deep, so the contract test and API map walk to the leaves (`device_types`). Closed-loop calibration and the 642 nm rig's measured facts: `src/hardware_implementations/tcube_laser/CALIBRATION.md`.
 
 **DAQ**: `showdevices`, `showchannels`, `createtask`, `setvoltage`, `readvoltage`, `deletetask`
 
