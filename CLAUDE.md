@@ -119,8 +119,9 @@ Hardware implementations use `ccall` for vendor SDKs:
 - `mcl_stage/*.jl` - Mad City Labs NanoDrive
 - Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
 
-Rules at the `ccall` boundary, each learned from a bug that "usually worked"
-(C-867 servo, v0.1.1; N-472 stopmotion):
+Rules at the `ccall` boundary, learned from the C-867 servo bug (v0.1.1), the
+N-472 connect string that worked only by accident of `filter`, and the N-472
+`stopmotion` that never worked:
 - A `Ptr{Cchar}` argument (GCS2 axes lists, USB descriptions) gets a Julia
   `String`, which is always NUL-terminated. Never a `Vector{UInt8}` with the
   zeros filtered out, and never a `Vector{String}`; join axes with a space first.

@@ -75,5 +75,5 @@ function setvel(stage::N472,vel::Vector{Float64})
     if qsuccess == FALSE
         @error "Failed to query velocity"
     end
-    return (success == FALSE || qsuccess == FALSE) ? FALSE : qsuccess
+    return success == FALSE ? FALSE : qsuccess
 end
