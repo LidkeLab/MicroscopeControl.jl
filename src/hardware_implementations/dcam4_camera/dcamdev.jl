@@ -46,7 +46,7 @@ end
 function dcamdev_open(i::Int)
     dco = DCAMDEV_OPEN()
     dco.index = Int32(i)
-    err = @ccall "dcamapi.dll".dcamdev_open(dco::Ref{DCAMDEV_OPEN})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamdev_open(dco::Ref{DCAMDEV_OPEN})::DCAMERR
     if is_failed(err)
         display(err)
         @error "DCAM Failed to Open Camera"
@@ -55,7 +55,7 @@ function dcamdev_open(i::Int)
 end
 
 function dcamdev_close(hdcam::Ptr{Cvoid})
-    err = @ccall "dcamapi.dll".dcamdev_close(hdcam::Ptr{Cvoid})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamdev_close(hdcam::Ptr{Cvoid})::DCAMERR
     if is_failed(err)
         display(err)
         @error "DCAM Failed to Close"
@@ -71,7 +71,7 @@ function dcamdev_getstring(hdcam::Ptr{Cvoid}, strid::DCAM_IDSTR)
     dcs.text = pointer(textbuf)
     dcs.textbytes = sizeof(textbuf)
 
-    err = @ccall "dcamapi.dll".dcamdev_getstring(hdcam::Ptr{Cvoid},dcs::Ref{DCAMDEV_STRING})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamdev_getstring(hdcam::Ptr{Cvoid},dcs::Ref{DCAMDEV_STRING})::DCAMERR
     if is_failed(err)
         display(err)
         @error "DCAM Failed to Get String"

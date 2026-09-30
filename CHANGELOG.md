@@ -10,6 +10,12 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in per-call trace of the DCAM library calls (`DCAM4.dcam_trace!(path)`, or ENV `MC_DCAM4_TRACE=<path>`
+  at load): a flushed BEGIN and END line per call with arguments, elapsed time, return value and cumulative GC
+  time, to name a call that hangs. Off by default; one `Ref{Bool}` check per call.
+
 ### Fixed
 
 - `DCAM4Camera` `capture` could hang, or leave the camera unusable after a missed frame. Its frame wait is now

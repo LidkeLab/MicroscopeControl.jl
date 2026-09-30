@@ -17,7 +17,7 @@ end
 
 function dcamapi_init()
     dci = DCAMAPI_INIT()
-    err = @ccall "dcamapi.dll".dcamapi_init(dci::Ref{DCAMAPI_INIT})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamapi_init(dci::Ref{DCAMAPI_INIT})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Initialize"
     end
@@ -25,7 +25,7 @@ function dcamapi_init()
 end
 
 function dcamapi_uninit()
-    err = @ccall "dcamapi.dll".dcamapi_uninit()::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamapi_uninit()::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Un-Initialize"
     end
