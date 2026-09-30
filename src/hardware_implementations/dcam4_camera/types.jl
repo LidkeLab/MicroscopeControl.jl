@@ -27,6 +27,8 @@ mutable struct DCAM4Camera <: Camera
     is_running::Bool
     camerastate
     data::Array{UInt16}
+    readout_s::Float64
+    capture_generation::Int
 end
 
 function DCAM4Camera(dev_id::Int = 0;
@@ -64,5 +66,5 @@ function DCAM4Camera(dev_id::Int = 0;
     err, exposure_time = dcamprop_getvalue(dco.hdcam, DCAM_IDPROP_EXPOSURETIME)
     data = zeros(UInt16, im_width, im_height)
 
-    DCAM4Camera(unique_id, camera_format, dco.hdcam, exposure_time, frame_rate, roi, capture_mode, trigger_mode, sequence_length, last_error, is_running, camerastate,data)
+    DCAM4Camera(unique_id, camera_format, dco.hdcam, exposure_time, frame_rate, roi, capture_mode, trigger_mode, sequence_length, last_error, is_running, camerastate, data, NaN, 0)
 end
