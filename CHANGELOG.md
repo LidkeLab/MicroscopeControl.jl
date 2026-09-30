@@ -11,10 +11,11 @@ the next version with `-DEV`).
 ## [0.2.6] - 2026-09-29
 
 A non-breaking release in three parts. None of it has run on hardware yet; the rig
-checks are listed in #74 and #75.
+checks are listed in #73 (the C-867 startup check), #74 and #75.
 
-- **PI stage (#73).** `PIStage.initialize` checks every status return, bounds its
-  wait for motion to stop, and reclaims its own earlier connection. The stage,
+- **PI stage (#73).** `PIStage.initialize` checks the travel-range, velocity and
+  motion-stop returns, bounds its wait for motion to stop, and reclaims its own
+  earlier connection. The stage,
   Triggerscope and objective-positioner panels log a failed `initialize` instead of
   throwing.
 - **TCube laser safety (#74).** Fixes from the 642 nm rig's controller facts. Fresh
@@ -23,11 +24,11 @@ checks are listed in #74 and #75.
   zeroes and disables it first. Power mode gains an optional calibration reference,
   which every power-mode rig should record. Several calls take longer (see Changed).
 - **DCAM4 capture (#75).** Every frame wait is bounded and armed before the capture
-  starts, and every exit cleans up. This fixes the quickbeam rig's full-frame
-  `capture` hang. `capture` now refuses while a live view or sequence runs.
+  starts, and every exit cleans up. That addresses the likely cause of the quickbeam
+  rig's full-frame `capture` hang, pending the rig check. `capture` now refuses while
+  a live view or sequence runs.
 
 ### Fixed
-
 
 - `PIStage`: `shutdown` could close another object's connection. `id` defaulted to `0`, a valid GCS id, and was never reset; it now defaults to `-1` and `shutdown` resets it.
 - `PIStage.initialize` reported the stage connected before it was: `connectionstatus` was set before the connect, and a failed close after a failed reference left it `true`, so a retry answered "already initialized". It is now set only after the whole sequence succeeds, and every step after the connect is inside the cleanup.
