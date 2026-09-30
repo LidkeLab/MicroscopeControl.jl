@@ -12,6 +12,7 @@ the next version with `-DEV`).
 
 ### Fixed
 
+
 - `PIStage`: `shutdown` could close another object's connection. `id` defaulted to `0`, a valid GCS id, and was never reset; it now defaults to `-1` and `shutdown` resets it.
 - `PIStage.initialize` reported the stage connected before it was: `connectionstatus` was set before the connect, and a failed close after a failed reference left it `true`, so a retry answered "already initialized". It is now set only after the whole sequence succeeds, and every step after the connect is inside the cleanup.
 - `PIStage.initialize` ignored a FALSE from reading the travel range (`PI_qTMN`/`PI_qTMX`) or setting the velocity, and came up connected with an unset range. Each is now checked; a failure closes the connection and throws. A failed range query no longer writes an uninitialized buffer into `range_x`/`range_y`.
@@ -49,6 +50,29 @@ the next version with `-DEV`).
   `initialize` lowers the potentiometer for any `max_current` below the controller's limit, and
   power-mode construction no longer refuses a `max_current` under 17.25 mA; the limit the
   controller reports decides (the 642 nm rig's unit reads 16.74 mA at the lowest position).
+- `DCAM4Camera` `capture` could hang, or leave the camera unusable after a missed frame. Its frame wait is now
+  bounded by 2 x (exposure + readout) + 1 s, with the readout read from the camera
+  (`DCAM_IDPROP_TIMING_READOUTTIME`); the wait is armed before the capture starts; the wait's parameter struct
+  carries its size (it was sent as 0); and every exit stops the capture, releases the buffer and closes the wait.
+  A timeout or failed wait logs, sets `last_error` and throws a clear error (it threw a MethodError before).
+  Reported from the quickbeam rig: full frame at 12.5 ms and at 100 ms, including the first capture in a fresh
+  session.
+- `DCAM4Camera` `getlastframe`: a timeout or failed wait no longer throws a MethodError. It logs, sets `last_error`
+  and returns `nothing`, as the code intended. Its wait is bounded the same way, with the readout time read once per
+  `live`, `sequence` or `capture` and cached. A frame that cannot be copied, here or in `capture`, sets `last_error`.
+- `DCAM4Camera` `getdata` in SEQUENCE mode polls the capture status against a deadline of
+  2 x N x (exposure + readout) + 1 s instead of waiting for the end-of-cycle event. A sequence that has already
+  ended cannot be missed, a full-frame sequence of short exposures no longer times out, and an interrupt can land
+  while it waits. A frame that cannot be read returns `nothing` with `last_error` set (it threw a MethodError).
+  Every exit stops the capture and releases the buffer. A sequence that transferred fewer frames than requested (or
+  never ran) returns `nothing` with `last_error` set to `DCAMERR_LOSTFRAME`. In LIVE mode `getdata` returns the
+  newest frame at once and leaves the live view running; it used to clear `is_running` while the view ran on.
+- `DCAM4Camera` `sequence`: the task that marks the sequence finished gives up at the same deadline and stops a
+  capture stuck running, so `is_running` can no longer stay true forever. It acts only while its sequence is
+  current, so it never stops or marks finished a newer live view or sequence, and a failed status read is retried
+  until the deadline.
+- `DCAM4Camera`: clearing a leftover capture handles every state (a capture in the ERROR state was neither stopped
+  nor released), and `abort` now does exactly that.
 
 ### Changed
 
@@ -67,6 +91,10 @@ the next version with `-DEV`).
     (one limit read, more if the potentiometer is lowered, plus 0.2 s for the open-loop confirm);
   - the first power-mode `light_on` after `initialize` also runs the calibration-reference re-check:
     `REFERENCE_DWELL_S` (0.1 s), three fresh reads (0.6 s) and the setpoint confirm, about 0.7 s plus the confirm.
+- `DCAM4Camera` `capture` refuses (throws "Stop the live view or sequence first") while a live view or sequence is
+  running (`is_running`), instead of failing at the buffer allocation and returning `nothing`. It never releases a
+  buffer another task may be waiting on. A leftover from an earlier call (a failed capture, or a sequence that
+  ended and was never read) is stopped and released first.
 
 ### Added
 
