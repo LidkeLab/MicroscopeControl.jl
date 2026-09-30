@@ -132,7 +132,7 @@ end
 # end
 
 
-function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
+function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
     err, height = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_HEIGHT))
     err, rowbytes = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_ROWBYTES))
@@ -146,7 +146,7 @@ function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
         bytes_per_pixel = 1
     else
         @error "Unsupported pixel type"
-        return nothing
+        return DCAMERR_INVALIDPIXELTYPE, nothing
     end
 
     stride_elements = Int(rowbytes) ÷ bytes_per_pixel
@@ -165,15 +165,18 @@ function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
 
     err = @ccall "dcamapi.dll".dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
-        @error "DCAM Failed to Copy Frame"
-        return nothing
+        @error "DCAM Failed to Copy Frame $(iFrame): $(err)"
+        return err, nothing
     end
 
     # Reshape from row-major C buffer and permute to column-major Julia (H, W)
     data = permutedims(reshape(temp_buffer, (Int(width), Int(height))), (2, 1))
 
-    return data
+    return DCAMERR_SUCCESS, data
 end
+
+# The data only (`nothing` on a failure, which is logged); `dcambuf_getframe_err` also returns the DCAMERR.
+dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32) = dcambuf_getframe_err(hdcam, iFrame)[2]
 
 function dcambuf_getlastframe(hdcam::Ptr{Cvoid})
     return dcambuf_getframe(hdcam::Ptr{Cvoid}, Int32(-1))

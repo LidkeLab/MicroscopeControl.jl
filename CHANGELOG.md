@@ -12,24 +12,35 @@ the next version with `-DEV`).
 
 ### Fixed
 
-- `DCAM4Camera` `capture` could hang or leave the camera unusable after a missed frame. Every frame wait is now
+- `DCAM4Camera` `capture` could hang, or leave the camera unusable after a missed frame. Its frame wait is now
   bounded by 2 x (exposure + readout) + 1 s, with the readout read from the camera
   (`DCAM_IDPROP_TIMING_READOUTTIME`); the wait is armed before the capture starts; the wait's parameter struct
   carries its size (it was sent as 0); and every exit stops the capture, releases the buffer and closes the wait.
-  A timeout or failed wait in `capture` now logs, sets `last_error` and throws a clear error (it threw a MethodError
-  before). `capture` also stops a running live view or sequence before it starts. Reported from the quickbeam rig:
-  full frame at 12.5 ms.
-- `DCAM4Camera` `getlastframe` and `getdata`: a timeout or failed wait no longer throws a MethodError. It logs,
-  sets `last_error` and returns `nothing`, as the code intended. `getdata`'s wait for the end of a sequence now
-  includes the readout (2 x N x (exposure + readout) + 1 s; before, a full-frame sequence of short exposures timed
-  out). A sequence that has already ended is read without waiting. Every exit stops the capture, releases the
-  buffer and closes the wait.
+  A timeout or failed wait logs, sets `last_error` and throws a clear error (it threw a MethodError before).
+  Reported from the quickbeam rig: full frame at 12.5 ms and at 100 ms, including the first capture in a fresh
+  session.
+- `DCAM4Camera` `getlastframe`: a timeout or failed wait no longer throws a MethodError. It logs, sets `last_error`
+  and returns `nothing`, as the code intended. Its wait is bounded the same way, with the readout time read once per
+  `live`, `sequence` or `capture` and cached.
+- `DCAM4Camera` `getdata` in SEQUENCE mode polls the capture status against a deadline of
+  2 x N x (exposure + readout) + 1 s instead of waiting for the end-of-cycle event. A sequence that has already
+  ended cannot be missed, a full-frame sequence of short exposures no longer times out, and an interrupt can land
+  while it waits. A frame that cannot be read returns `nothing` with `last_error` set (it threw a MethodError).
+  Every exit stops the capture and releases the buffer.
+- `DCAM4Camera` `sequence`: the task that marks the sequence finished gives up at the same deadline and stops a
+  capture stuck running, so `is_running` can no longer stay true forever.
+- `DCAM4Camera`: clearing a leftover capture handles every state (a capture in the ERROR state was neither stopped
+  nor released), and `abort` now does exactly that.
 
 ### Changed
 
-- `DCAM4Camera` `getdata` in LIVE mode now ends the live view, because every exit stops the capture and releases
-  the buffer. It already marked the camera not running, but DCAM refused the buffer release while capturing, so the
-  live view went on. No known rig code calls `getdata` during a live view.
+- `DCAM4Camera` `capture` refuses (throws "Stop the live view or sequence first") while a live view or sequence is
+  running (`is_running`), instead of failing at the buffer allocation and returning `nothing`. It never releases a
+  buffer another task may be waiting on. A leftover from an earlier call (a failed capture, or a sequence that
+  ended and was never read) is stopped and released first.
+- `DCAM4Camera` `getdata` in LIVE mode returns the newest frame at once and ends the live view, because every exit
+  stops the capture and releases the buffer. It already marked the camera not running, but DCAM refused the buffer
+  release while capturing. No known rig code calls `getdata` during a live view.
 
 ## [0.2.5] - 2026-09-29
 
