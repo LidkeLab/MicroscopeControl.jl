@@ -146,7 +146,7 @@ function dcamprop_getattr(hdcam::Ptr{Cvoid}, iProp::Int32)
     dca = DCAMPROP_ATTR()
     dca.iProp = iProp
     ptr_dca = Ref(dca)
-    err = @ccall "dcamapi.dll".dcamprop_getattr(hdcam::Ptr{Cvoid},ptr_dca::Ref{DCAMPROP_ATTR})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_getattr(hdcam::Ptr{Cvoid},ptr_dca::Ref{DCAMPROP_ATTR})::DCAMERR
     return err, dca
 end
 
@@ -156,7 +156,7 @@ end
 
 function dcamprop_getvalue(hdcam::Ptr{Cvoid},iProp::Int32)
     pValue = Ref{Float64}(0.0)
-    err = @ccall "dcamapi.dll".dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32, pValue::Ref{Float64})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32, pValue::Ref{Float64})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to get Value"
     end
@@ -169,7 +169,7 @@ end
 
 
 function dcamprop_setvalue(hdcam::Ptr{Cvoid}, iProp::Int32, fValue::Float64)
-    err = @ccall "dcamapi.dll".dcamprop_setvalue(hdcam::Ptr{Cvoid}, iProp::Int32, fValue::Float64)::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_setvalue(hdcam::Ptr{Cvoid}, iProp::Int32, fValue::Float64)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to set value of $(fValue) for: $(DCAM_IDPROP(iProp))"
         display(err)
@@ -184,7 +184,7 @@ end
 function dcamprop_setgetvalue(hdcam::Ptr{Cvoid}, iProp::Int32)
     pValue = Ref{Float64}(0.0)
     option - 0
-    err = @ccall "dcamapi.dll".dcamprop_setgetvalue(hdcam::Ptr{Cvoid}, iProp::Int32, pValue::Ref{Float64}, option::Int32)::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_setgetvalue(hdcam::Ptr{Cvoid}, iProp::Int32, pValue::Ref{Float64}, option::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to set/get value"
     end
@@ -199,7 +199,7 @@ DCAMPROP_OPTION_NEXT	return value is the next value
 """
 function dcamprop_queryvalue(hdcam::Ptr{Cvoid}, iProp::Int32, option::Int32)
     pValue = Ref{Float64}(0.0)
-    err = @ccall "dcamapi.dll".dcamprop_queryvalue(hdcam::Ptr{Cvoid}, iProp::Int32, pValue::Ref{Float64}, option::Int32)::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_queryvalue(hdcam::Ptr{Cvoid}, iProp::Int32, pValue::Ref{Float64}, option::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to query value"
     end
@@ -208,7 +208,7 @@ end
 
 function dcamprop_getnextid(hdcam::Ptr{Cvoid}, idprop::Int32, option::DCAMPROP_OPTION)
     pProp = Ref(idprop)
-    err = @ccall "dcamapi.dll".dcamprop_getnextid(hdcam::Ptr{Cvoid}, pProp::Ref{Int32}, option::Int32)::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_getnextid(hdcam::Ptr{Cvoid}, pProp::Ref{Int32}, option::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to get next ID"
         pProp[] = 0
@@ -219,7 +219,7 @@ end
 function dcamprop_getname(hdcam::Ptr{Cvoid}, iProp::Int32)
     textbytes = 256
     text = Vector{Cchar}(undef, textbytes)
-    err = @ccall "dcamapi.dll".dcamprop_getname(hdcam::Ptr{Cvoid}, iProp::Int32, text::Ptr{Cchar}, textbytes::Int32)::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_getname(hdcam::Ptr{Cvoid}, iProp::Int32, text::Ptr{Cchar}, textbytes::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to get name"
     end
@@ -243,7 +243,7 @@ end
 
 function dcamprop_getvaluetext(hdcam::Ptr{Cvoid}, param::DCAMPROP_VALUETEXT)
     ptr_param = Ref(param)
-    err = @ccall "dcamapi.dll".dcamprop_getvaluetext(hdcam::Ptr{Cvoid}, ptr_param::Ref{DCAMPROP_VALUETEXT})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamprop_getvaluetext(hdcam::Ptr{Cvoid}, ptr_param::Ref{DCAMPROP_VALUETEXT})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to get value text"
         return err, ""
