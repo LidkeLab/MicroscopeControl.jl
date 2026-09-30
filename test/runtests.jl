@@ -134,7 +134,7 @@ lab_summary("Core") do
         cp_props() = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)
         cp(; kw...) = TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
                                  tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), max_current=160.0,
-                                 lock_check_s=0.0, ramp_step_s=0.0, kw...) # no sleeping in the suite
+                                 lock_check_s=0.1, ramp_step_s=0.0, kw...) # the shortest allowed (LOCK_CHECK_MIN_S)
 
         @testset "Constructor defaults" begin
             # Closed loop has no default clamp: it is the only real protection.
@@ -240,8 +240,9 @@ lab_summary("Core") do
             # 224.2 W/A x 1 mA is 224.2 mW of full scale, so 300 mW is not reachable.
             @test occursin("full scale", msg(() -> cp(; properties=LightSourceProperties("mW", 0.0, false, 1.0, 300.0))))
             @test occursin("min_power", msg(() -> cp(; properties=LightSourceProperties("mW", 0.0, false, 5.0, 5.0))))
-            # A ceiling below the potentiometer's lowest position cannot be clamped.
-            @test occursin("potentiometer", msg(() -> cp(; max_current=10.0)))
+            # The potentiometer's floor is the controller's readback, which
+            # `initialize` checks; construction no longer refuses on the header's 17.25 mA.
+            @test msg(() -> cp(; max_current=10.0)) == ""
             # A requested drive current would be a fiction in closed loop.
             @test occursin("drive_current", msg(() -> cp(; drive_current=40.0)))
             @test_throws ArgumentError PhotodiodeLoop(; wa_calibration=-1.0, tia_range=1e-3, tec_stabilised=true)
@@ -361,7 +362,8 @@ lab_summary("Core") do
             # The output is zeroed and disabled BEFORE the mode command.
             @test FakeKinesis.calls[1:7] == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize",
                 "LD_Open", "LD_StartPolling", "LD_SetLaserSetPoint", "LD_DisableOutput", "LD_SetOpenLoopMode"]
-            @test FakeKinesis.calls[8:9] == ["LD_RequestReadings", "LD_RequestLaserDiodeMaxCurrentLimit"]
+            @test FakeKinesis.calls[8:10] == ["LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits"] # open loop confirmed by a fresh status read
+            @test FakeKinesis.calls[11:13] == ["LD_RequestLaserDiodeMaxCurrentLimit", "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"]
             @test laser.max_current == 80.0 # survived initialize
             @test laser.controller_max_current <= 80.0 # lowered, never above the caller's ceiling
             @test TCube.effective_max_current(laser) == laser.controller_max_current # the lowered limit is now the tighter one
@@ -377,13 +379,13 @@ lab_summary("Core") do
             empty!(FakeKinesis.calls)
             setcurrent!(laser, 40.0)
             @test isempty(FakeKinesis.setpoints)
-            @test FakeKinesis.calls == ["LD_RequestStatusBits", "LD_GetStatusBits"] # a fresh read: the output was recorded off
+            @test FakeKinesis.calls == ["LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits"] # a fresh read: the output was recorded off
             @test laser.drive_current == 40.0 # the accepted current, in mA
             # light_on enables, THEN sends it, and confirms it.
             empty!(FakeKinesis.calls)
             light_on(laser)
             # A fresh read of the stored current limit first (Codex C1): the enable is refused above max_current.
-            @test FakeKinesis.calls == ["LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit",
+            @test FakeKinesis.calls == ["LD_RequestLaserDiodeMaxCurrentLimit", "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit",
                                         "LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint"]
             @test FakeKinesis.setpoints == [UInt16(5957)]
             @test FakeKinesis.setpoint_held[] == 5957
@@ -521,26 +523,27 @@ lab_summary("Core") do
             laser.properties.is_on = true
             initialize(laser)
 
-            clamp_read = "LD_RequestMaxCurrentDigPot", "LD_GetMaxCurrentDigPot"
-            limit_read = "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"
+            clamp_read = "LD_RequestMaxCurrentDigPot", "LD_RequestMaxCurrentDigPot", "LD_GetMaxCurrentDigPot"
+            limit_read = "LD_RequestLaserDiodeMaxCurrentLimit", "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"
+            status_read = "LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits"
+            pot_set = ("LD_EnableMaxCurrentAdjust", "LD_SetMaxCurrentDigPot", clamp_read..., "LD_EnableMaxCurrentAdjust", limit_read...)
             @test FakeKinesis.calls == ["TLI_BuildDeviceList", "TLI_GetDeviceListSize", "LD_Open",
                 # polling first: the setpoint read-back only refreshes through it
                 "LD_StartPolling",
                 # the output left on is zeroed, then disabled, before any mode command
                 "LD_SetLaserSetPoint", "LD_DisableOutput",
                 # 1-2: key, interlock and the amplifier range, from a fresh read
-                "LD_RequestStatusBits", "LD_GetStatusBits",
+                status_read...,
                 # 3: the clamp. At position 204 the controller reports 160.74 mA,
                 # over the 160 mA ceiling, so it steps to 203 (159.91 mA) and stops.
                 clamp_read..., limit_read...,
-                "LD_EnableMaxCurrentAdjust", "LD_SetMaxCurrentDigPot", clamp_read..., "LD_EnableMaxCurrentAdjust",
-                limit_read...,
+                pot_set...,
                 # 4: closed loop, confirmed from the status word
-                "LD_SetClosedLoopMode", "LD_RequestStatusBits", "LD_GetStatusBits",
+                "LD_SetClosedLoopMode", status_read...,
                 # 5: the display calibration, confirmed
-                "LD_SetWACalibFactor", "LD_RequestWACalibFactor", "LD_GetWACalibFactor",
+                "LD_SetWACalibFactor", "LD_RequestWACalibFactor", "LD_RequestWACalibFactor", "LD_GetWACalibFactor",
                 # shared tail: the controller's limit
-                "LD_RequestReadings", limit_read...]
+                limit_read...]
             @test "LD_EnableOutput" ∉ FakeKinesis.calls  # initialize never emits
             @test FakeKinesis.bits[] & FakeKinesis.ENABLED == 0
             @test laser.properties.is_on == false
@@ -706,7 +709,6 @@ lab_summary("Core") do
             # PREVIOUS request's code: neither 0 nor the stale 65530.
             laser = ready(; ramp_step_mW=3.0)
             setoutputpower!(laser, 10.0); light_on(laser)
-            FakeKinesis.photocurrent_raw[] = 0
             prev = code_for(laser, 10.0)
             step = round(Int, 3.0 / 1000 / 224.2 / 1e-3 * 32767)
             empty!(FakeKinesis.setpoints)
@@ -719,16 +721,275 @@ lab_summary("Core") do
             @test cp().pd.lock_ratio == 1.5 && cp().pd.ramp_step_mW == Inf
         end
 
+        @testset "fresh reads request twice: the fake answers one request behind (fake SDK)" begin
+            FK = FakeKinesis
+            LSI = MicroscopeControl.HardwareInterfaces.LightSourceInterface
+            ready_cp(; kw...) = (FK.reset!(); FK.limit_follows_pot[] = true; l = cp(; kw...); initialize(l); l)
+            enabled() = FK.bits[] & FK.ENABLED != 0
+            # N1: the fake models fact 2, and readings are signed.
+            FK.reset!()
+            TCube.LD_RequestStatusBits("0")
+            FK.setbits!(FK.ENABLED)
+            TCube.LD_RequestStatusBits("0")
+            @test TCube.LD_GetStatusBits("0") & FK.ENABLED == 0   # one behind
+            TCube.LD_RequestStatusBits("0")
+            @test TCube.LD_GetStatusBits("0") & FK.ENABLED != 0
+            FK.reset!()
+            @test TCube.read_photocurrent_word(cc()) == FK.PD_DARK_RAW   # -4: dark, signed
+            # N2 (open loop): a pot raised between two `light_on`s makes the second refuse.
+            FK.reset!(limit_raw = floor(Int, 90 / 220 * 32767))
+            l = cc(; max_current=100.0)
+            initialize(l)
+            setcurrent!(l, 10.0); light_on(l); light_off(l)
+            FK.diode_limit_raw[] = 23830   # the pot raised to 160 mA at the front panel
+            n = count(==("LD_EnableOutput"), FK.calls)
+            m = length(FK.calls)
+            @test_throws r"current limit stored in the controller" light_on(l)
+            @test count(==("LD_EnableOutput"), FK.calls) == n && !enabled() && !l.properties.is_on
+            @test "LD_DisableOutput" ∉ FK.calls[m+1:end]   # M1: a refusal with the output off makes no disable
+            # M1: clamp drift while lit, open loop: the refusal also turns the diode off.
+            FK.reset!(limit_raw = floor(Int, 90 / 220 * 32767))
+            l = cc(; max_current=100.0)
+            initialize(l)
+            setcurrent!(l, 50.0); light_on(l)
+            @test enabled() && l.properties.is_on
+            FK.diode_limit_raw[] = 23830
+            @test_throws r"current limit stored in the controller" light_on(l)
+            @test !enabled() && !l.properties.is_on
+            # N3: the same in power mode.
+            l = ready_cp()
+            setoutputpower!(l, 10.0); light_on(l); light_off(l)
+            FK.digpot[] = 204
+            n = count(==("LD_EnableOutput"), FK.calls)
+            @test_throws "clamp" light_on(l)
+            @test count(==("LD_EnableOutput"), FK.calls) == n
+            # N4: `initialize` records a limit that changed just before it.
+            FK.reset!()
+            l = cc()
+            TCube.LD_RequestLaserDiodeMaxCurrentLimit("0")   # the cache now holds 160 mA
+            FK.diode_limit_raw[] = floor(Int, 90 / 220 * 32767)
+            initialize(l)
+            @test l.controller_max_current ≈ 90.0 atol = 0.01
+        end
+
+        @testset "check_lock is two-sided and makes its own reads (fake SDK)" begin
+            FK = FakeKinesis
+            LSI = MicroscopeControl.HardwareInterfaces.LightSourceInterface
+            ready_cp(; kw...) = (FK.reset!(); FK.limit_follows_pot[] = true; l = cp(; kw...); initialize(l); l)
+            enabled() = FK.bits[] & FK.ENABLED != 0
+            code50(l) = Int(TCube.photocurrent_code(l, 50.0 / 1000 / 224.2))
+            # N5: a photodiode scale drop between two `light_on`s trips `check_lock`.
+            l = ready_cp(); setoutputpower!(l, 50.0); light_on(l)
+            FK.pd_scale[] = 0.2
+            @test_throws r"0x400" light_on(l)
+            @test !enabled() && !l.properties.is_on
+            i = findlast(==("LD_DisableOutput"), FK.calls)
+            @test FK.calls[i-1] == "LD_SetLaserSetPoint" && FK.setpoints[end] == 0
+            # N6: the limit reached alone (0x400, photocurrent above 1/lock_ratio of the request).
+            l = ready_cp(); setoutputpower!(l, 50.0)
+            FK.pd_scale[] = 0.5
+            @test_throws r"0x400" light_on(l)
+            @test !enabled()
+            # N7: the low side alone, by ratio.
+            l = ready_cp(); setoutputpower!(l, 50.0)
+            FK.photocurrent_raw[] = code50(l) ÷ 2
+            @test_throws r"below 1/" light_on(l)
+            @test !enabled()
+            # N8: the low side for a dark photodiode.
+            l = ready_cp(); setoutputpower!(l, 50.0)
+            FK.photocurrent_raw[] = FK.PD_DARK_RAW
+            @test_throws r"below 1/" light_on(l)
+            @test !enabled()
+            # N9: 1.2x and 1/1.2x of the request pass.
+            l = ready_cp(); setoutputpower!(l, 50.0)
+            c = code50(l)
+            for w in (round(Int, 1.2c), round(Int, c / 1.2))
+                FK.photocurrent_raw[] = w
+                light_on(l)
+                @test enabled() && l.properties.is_on
+                light_off(l)
+            end
+            # N10: at code 0 `check_lock` reads no photocurrent.
+            l = ready_cp(); empty!(FK.calls)
+            @test_logs (:warn, r"no calibration reference") (:warn, r"before any setpoint") match_mode = :any light_on(l)
+            @test "LD_RequestReadings" ∉ FK.calls[findfirst(==("LD_EnableOutput"), FK.calls):end]
+            # N11: the floor.
+            @test_throws ArgumentError PhotodiodeLoop(; wa_calibration=224.2, tia_range=1e-3, tec_stabilised=missing, lock_check_s=0.0)
+            @test_throws ArgumentError PhotodiodeLoop(; wa_calibration=224.2, tia_range=1e-3, tec_stabilised=missing, lock_check_s=0.099)
+            @test PhotodiodeLoop(; wa_calibration=224.2, tia_range=1e-3, tec_stabilised=missing, lock_check_s=0.1).lock_check_s == 0.1
+            @test_throws ArgumentError cp(; lock_check_s=0.0)
+            FK.reset!()
+        end
+
+        @testset "the calibration reference (fake SDK)" begin
+            FK = FakeKinesis
+            LSI = MicroscopeControl.HardwareInterfaces.LightSourceInterface
+            ready_cp(; kw...) = (FK.reset!(); FK.limit_follows_pot[] = true; l = cp(; kw...); initialize(l); l)
+            enabled() = FK.bits[] & FK.ENABLED != 0
+            FK.reset!()
+            ref90A = FK.pd_word_at(90.0) / 32767 * 1e-3   # the fake's photocurrent at 90 mA, decoded with tia_range = 1 mA
+            cpr(; kw...) = cp(; ref_current_mA=90.0, ref_photocurrent_A=ref90A, kw...)
+            readyr(; kw...) = (FK.reset!(); FK.limit_follows_pot[] = true; l = cpr(; kw...); initialize(l);
+                               setoutputpower!(l, 10.0); empty!(FK.calls); empty!(FK.setpoints); empty!(FK.enable_log); l)
+            guard = ["LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits",
+                     "LD_RequestLaserDiodeMaxCurrentLimit", "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"]
+            lock_tail = ["LD_RequestReadings", "LD_RequestReadings", "LD_GetPhotoCurrentReading", "LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits"]
+            loopkw = (; wa_calibration=224.2, tia_range=1e-3, tec_stabilised=missing)
+            # N12: construction.
+            @test_throws ArgumentError cp(; ref_current_mA=90.0)
+            @test_throws ArgumentError cp(; ref_photocurrent_A=ref90A)
+            @test_throws ArgumentError PhotodiodeLoop(; loopkw..., ref_current_mA=90.0)
+            @test_throws ArgumentError PhotodiodeLoop(; loopkw..., ref_photocurrent_A=ref90A)
+            @test_throws ArgumentError cc(; ref_current_mA=90.0, ref_photocurrent_A=ref90A)
+            @test_throws r"max_current" cpr(; max_current=80.0)
+            for bad in (0.0, -1e-6, 2e-3, NaN)
+                @test_throws ArgumentError cpr(; ref_photocurrent_A=bad)
+            end
+            @test_throws ArgumentError cpr(; ref_ratio=1.0)
+            @test_throws r"max_power" cpr(; ref_photocurrent_A=0.5e-3)   # about 112 mW > 70
+            @test cpr().pd.ref_ratio == 1.5 && !cpr().pd.scale_checked
+            @test isnan(cp().pd.ref_current_mA)
+            @test SimDiodeLaser(; mode=ConstantPhotocurrent(), max_current=160.0, wa_calibration=224.2, tia_range=1e-3, tec_stabilised=missing,
+                                properties=LightSourceProperties("mW", 0.0, false, 1.0, 70.0),
+                                ref_current_mA=90.0, ref_photocurrent_A=ref90A).pd.ref_photocurrent_A == ref90A
+            # N13: a matching reference: the exact sequence, then closed-loop emission.
+            l = readyr(); light_on(l)
+            @test FK.calls == [guard..., "LD_SetLaserSetPoint", "LD_DisableOutput", "LD_SetOpenLoopMode", "LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits",
+                               "LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint",
+                               "LD_RequestReadings", "LD_RequestReadings", "LD_GetPhotoCurrentReading", "LD_SetLaserSetPoint", "LD_DisableOutput",
+                               "LD_SetClosedLoopMode", "LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits",
+                               "LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint", lock_tail...]
+            @test FK.setpoints == UInt16[0, TCube.setpoint_code(l, 90.0), 0, TCube.photocurrent_code(l, 10.0 / 1000 / 224.2)]
+            @test length(FK.enable_log) == 2 && last(FK.enable_log) == 0
+            @test enabled() && FK.bits[] & FK.CLOSED != 0 && l.properties.is_on && l.pd.scale_checked
+            # N14: once per initialize.
+            light_off(l); empty!(FK.calls); light_on(l)
+            @test "LD_SetOpenLoopMode" ∉ FK.calls
+            initialize(l); empty!(FK.calls); light_on(l)
+            @test "LD_SetOpenLoopMode" ∈ FK.calls
+            # N15: a mismatch low refuses, off and in closed loop, and latches until `initialize`.
+            l = readyr(); FK.pd_scale[] = 0.5
+            @test_throws r"calibration reference" light_on(l)
+            @test !enabled() && FK.bits[] & FK.CLOSED != 0 && !l.properties.is_on && !l.pd.scale_checked && l.pd.scale_refused
+            n = count(==("LD_SetOpenLoopMode"), FK.calls)
+            @test_throws r"not lit again" light_on(l)
+            @test count(==("LD_SetOpenLoopMode"), FK.calls) == n
+            FK.pd_scale[] = 1.0; initialize(l); light_on(l)
+            @test enabled() && l.pd.scale_checked
+            # N16: a mismatch high refuses too.
+            l = readyr(); FK.pd_scale[] = 2.0
+            @test_throws r"calibration reference" light_on(l)
+            @test !enabled()
+            # N17: a command failure during the re-check is cleaned up, and the laser needs `initialize`.
+            l = readyr(); FK.setpoint_readback[] = UInt16(3)
+            @test_logs (:error, r"calibration-reference re-check") match_mode = :any @test_throws ErrorException light_on(l)
+            @test !enabled() && !l.properties.is_on && !l.pd.scale_checked && FK.bits[] & FK.CLOSED == 0
+            FK.setpoint_readback[] = nothing
+            @test_throws "closed loop" light_on(l)
+            # N18: a reference above the programmed clamp refuses before anything is sent.
+            l = readyr(; ref_current_mA=159.95)
+            @test_throws ArgumentError light_on(l)
+            @test "LD_SetOpenLoopMode" ∉ FK.calls && "LD_EnableOutput" ∉ FK.calls
+            # N19: no reference: one warning per initialize, and no extra commands.
+            l = ready_cp(); setoutputpower!(l, 10.0)
+            @test_logs (:warn, r"no calibration reference") match_mode = :any light_on(l)
+            @test "LD_SetOpenLoopMode" ∉ FK.calls
+            light_off(l)
+            @test_logs light_on(l)
+            initialize(l)
+            @test_logs (:warn, r"no calibration reference") match_mode = :any light_on(l)
+            # Fact 6: a relabelled tia_range fails the re-check.
+            FK.reset!(); FK.limit_follows_pot[] = true
+            FK.bits[] = (FK.bits[] & ~FK.TIA_1mA) | FK.TIA_10mA   # the amplifier reports the 10 mA range; its words are unchanged
+            l = cpr(; tia_range=1e-2)   # the reference was recorded on 1 mA; the config now states 10 mA
+            initialize(l); setoutputpower!(l, 10.0)
+            @test_throws r"calibration reference" light_on(l)
+            @test !enabled() && !l.pd.scale_checked
+            # L7: a range change the words follow passes.
+            FK.reset!(); FK.limit_follows_pot[] = true
+            FK.bits[] = (FK.bits[] & ~FK.TIA_1mA) | FK.TIA_10mA
+            FK.pd_scale[] = 0.1   # ten times the range, a tenth of the words: the photocurrent in amps is the reference's
+            l = cp(; tia_range=1e-2, ref_current_mA=90.0, ref_photocurrent_A=ref90A)
+            initialize(l); setoutputpower!(l, 10.0)
+            light_on(l)
+            @test enabled() && l.pd.scale_checked && !l.pd.scale_refused
+            setoutputpower!(l, 10.0)
+            # L1: the re-check confirms open loop before it enables.
+            l = readyr(); FK.open_loop_ignored[] = true
+            @test_throws r"still reports closed loop" light_on(l)
+            @test "LD_EnableOutput" ∉ FK.calls && !l.properties.is_on && !l.pd.scale_checked && !enabled()
+            # L2: every initialize starts from a cleared clamp and re-check state, failed or not.
+            l = readyr(); light_on(l)
+            @test l.pd.scale_checked
+            FK.fail!("LD_Open")
+            @test_throws Exception initialize(l)
+            @test !l.pd.scale_checked && !l.pd.scale_refused && isnan(l.pd.max_current_clamp)
+            # L10: a mismatch latches until `initialize`, and the diode is not lit again to re-check it.
+            l = readyr(); FK.pd_scale[] = 0.2
+            @test_throws r"calibration reference" light_on(l)
+            @test l.pd.scale_refused
+            empty!(FK.calls)
+            @test_throws r"not lit again" light_on(l)
+            @test "LD_EnableOutput" ∉ FK.calls && "LD_SetOpenLoopMode" ∉ FK.calls
+            FK.pd_scale[] = 1.0; initialize(l); light_on(l)
+            @test l.pd.scale_checked && !l.pd.scale_refused
+            # M5: a refusal from set_open_loop! inside the re-check latches too.
+            l = readyr(); FK.open_loop_ignored[] = true
+            @test_throws r"still reports closed loop" light_on(l)
+            @test l.pd.scale_refused
+            empty!(FK.calls)
+            @test_throws r"not lit again" light_on(l)
+            @test "LD_SetOpenLoopMode" ∉ FK.calls && "LD_EnableOutput" ∉ FK.calls
+            # M2: open-loop initialize confirms open loop.
+            FK.reset!(); FK.bits[] |= FK.CLOSED; FK.open_loop_ignored[] = true
+            l = cc()
+            @test_throws r"still reports closed loop" initialize(l)
+            @test "LD_EnableOutput" ∉ FK.calls && "LD_SetOpenLoopMode" ∈ FK.calls
+            @test last(FK.calls, 2) == ["LD_StopPolling", "LD_Close"]
+            # L3: `light_on` checks the photodiode range against the fresh status word.
+            l = ready_cp(); setoutputpower!(l, 10.0)
+            FK.bits[] = (FK.bits[] & ~FK.TIA_1mA) | FK.TIA_10mA; empty!(FK.calls)
+            @test_throws r"photodiode range" light_on(l)
+            @test "LD_EnableOutput" ∉ FK.calls
+            # M1: DIP relabel while lit: the refusal zeroes and disables the output.
+            l = ready_cp(); setoutputpower!(l, 10.0); light_on(l); setoutputpower!(l, 10.0)
+            @test enabled() && l.properties.is_on
+            FK.bits[] = (FK.bits[] & ~FK.TIA_1mA) | FK.TIA_10mA; empty!(FK.calls); empty!(FK.setpoints)
+            @test_throws r"photodiode range" setoutputpower!(l, 10.0)
+            @test !enabled() && !l.properties.is_on
+            iD = findlast(==("LD_DisableOutput"), FK.calls)
+            @test iD !== nothing && findlast(==("LD_SetLaserSetPoint"), FK.calls[1:iD]) !== nothing && last(FK.setpoints) == 0
+            # L6: `setoutputpower!` decides on fresh reads: the polled word is healthy, the fresh one says over range.
+            l = ready_cp(); setoutputpower!(l, 10.0)
+            @test_logs (:warn, r"no calibration reference") match_mode = :any light_on(l)
+            FK.poll!(); FK.stale_bits[] = FK.bits[]; FK.setbits!(FK.TIA_OVER)
+            @test_throws r"OVER range" setoutputpower!(l, 20.0)
+            # L4: at code 0 `check_lock` still tests the current limit.
+            l = ready_cp(; properties=LightSourceProperties("mW", 0.0, false, 0.0, 70.0)); setoutputpower!(l, 10.0)
+            @test_logs (:warn, r"no calibration reference") match_mode = :any light_on(l)
+            setoutputpower!(l, 0.0)
+            setoutputpower!(l, 10.0)
+            FK.force_limit_bit[] = true
+            @test_throws r"0x400" setoutputpower!(l, 0.0)
+            # L5: a high-side trip makes no status request after its last photocurrent read.
+            l = readyr(); light_on(l)
+            FK.photocurrent_raw[] = 30000; empty!(FK.calls)
+            @test_throws r"loop lock" setoutputpower!(l, 20.0)
+            @test "LD_RequestStatusBits" ∉ FK.calls[findlast(==("LD_GetPhotoCurrentReading"), FK.calls):end]
+            FK.reset!()
+        end
+
         @testset "setoutputpower! (fake SDK)" begin
             # Refused before initialize: the clamp is not programmed, and it is
             # the only real protection in closed loop.
-            guard = ["LD_RequestStatusBits", "LD_GetStatusBits",
-                     "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"]
+            guard = ["LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits",
+                     "LD_RequestLaserDiodeMaxCurrentLimit", "LD_RequestLaserDiodeMaxCurrentLimit", "LD_GetLaserDiodeMaxCurrentLimit"]
+            lock_tail = ["LD_RequestReadings", "LD_RequestReadings", "LD_GetPhotoCurrentReading", "LD_RequestStatusBits", "LD_RequestStatusBits", "LD_GetStatusBits"]  # check_lock's own reads
             FakeKinesis.reset!()
             laser = cp()
             @test_throws "clamp" setoutputpower!(laser, 10.0)
             @test_throws "clamp" light_on(laser)
-            @test isempty(FakeKinesis.calls)
+            @test "LD_EnableOutput" ∉ FakeKinesis.calls && "LD_SetLaserSetPoint" ∉ FakeKinesis.calls # only the may-be-on status read
 
             initialize(laser)
             # Out of the declared [1, 70] mW is refused before anything is sent.
@@ -747,7 +1008,7 @@ lab_summary("Core") do
             setoutputpower!(laser, 50.0)
             i_pd = 50.0 / 1000 / 224.2
             # ... after the two fresh reads `require_clamp` makes before emitting.
-            @test FakeKinesis.calls == [guard..., "LD_GetStatusBits"]
+            @test FakeKinesis.calls == [guard...]
             @test isempty(FakeKinesis.setpoints)
             @test laser.pd.output_power_requested == 50.0
             empty!(FakeKinesis.calls)
@@ -756,7 +1017,7 @@ lab_summary("Core") do
             # tested): enable, read the held setpoint, one write, confirmed.
             @test isinf(laser.pd.ramp_step_mW)
             @test FakeKinesis.calls == [guard..., "LD_EnableOutput", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint",
-                                        "LD_GetPhotoCurrentReading"] # the last is check_lock's
+                                        lock_tail...] # then check_lock's own reads
             code = FakeKinesis.setpoints[end]
             @test code == UInt16(floor(i_pd / 1e-3 * 32767))
             @test FakeKinesis.setpoint_held[] == code
@@ -768,10 +1029,11 @@ lab_summary("Core") do
             try
                 empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
                 light_on(laser)
-                @test FakeKinesis.calls[1:5] == [guard..., "LD_EnableOutput"]
-                @test FakeKinesis.calls[end] == "LD_GetPhotoCurrentReading"
-                @test FakeKinesis.calls[end-1] == "LD_GetLaserSetPoint"
-                @test all(==("LD_SetLaserSetPoint"), FakeKinesis.calls[6:end-2])
+                g, t = length(guard), length(lock_tail)
+                @test FakeKinesis.calls[1:g+1] == [guard..., "LD_EnableOutput"]
+                @test FakeKinesis.calls[end-t+1:end] == lock_tail
+                @test FakeKinesis.calls[end-t] == "LD_GetLaserSetPoint"
+                @test all(==("LD_SetLaserSetPoint"), FakeKinesis.calls[g+2:end-t-1])
                 @test FakeKinesis.setpoints[end] == code
                 step = round(Int, 3.0 / 1000 / 224.2 / 1e-3 * 32767)
                 @test 15 <= length(FakeKinesis.setpoints) <= 18
@@ -784,8 +1046,8 @@ lab_summary("Core") do
             # checking the photodiode is not reading 0x8000, over range).
             empty!(FakeKinesis.calls)
             setoutputpower!(laser, 50.0)
-            @test FakeKinesis.calls == [guard..., "LD_GetStatusBits", "LD_GetPhotoCurrentReading", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint",
-                                        "LD_GetPhotoCurrentReading"]
+            @test FakeKinesis.calls == [guard..., "LD_RequestReadings", "LD_RequestReadings", "LD_GetPhotoCurrentReading", "LD_SetLaserSetPoint", "LD_GetLaserSetPoint",
+                                        lock_tail...]
             # Downward steps are sent directly, no ramp.
             empty!(FakeKinesis.calls); empty!(FakeKinesis.setpoints)
             setoutputpower!(laser, 10.0)
@@ -796,7 +1058,7 @@ lab_summary("Core") do
             @test_throws "OVER" setoutputpower!(laser, 20.0)
             @test measured_photocurrent(laser) == Inf
             @test loop_status(laser).tia_over
-            FakeKinesis.photocurrent_raw[] = 0
+            FakeKinesis.photocurrent_raw[] = nothing
             light_off(laser)
             # The DECODED setpoint: never above the request, within one code of it.
             @test laser.pd.photocurrent_requested == Float64(code) / 32767 * 1e-3
@@ -828,7 +1090,9 @@ lab_summary("Core") do
             # ... and a controller that left closed loop behind the driver's back.
             FakeKinesis.setbits!(FakeKinesis.CLOSED; on=false)
             @test_throws "closed loop" setoutputpower!(laser, 30.0)
+            @test !laser.properties.is_on && !FakeKinesis.enabled() # M1: the refusal turned the lit output off
             FakeKinesis.setbits!(FakeKinesis.CLOSED)
+            light_on(laser)                                          # lit again for the readback test below
             # A setpoint the controller does not confirm is not recorded.
             FakeKinesis.setpoint_readback[] = UInt16(3)
             @test_throws ErrorException setoutputpower!(laser, 30.0)
@@ -933,17 +1197,18 @@ lab_summary("Core") do
 
         @testset "open loop never newly fails and never raises the pot (fake SDK)" begin
             FK = FakeKinesis
-            # A ceiling below the potentiometer's floor: warns, leaves the pot alone.
+            # A ceiling no position reaches (the fake's limit is 160 mA at every position): the
+            # search walks the pot down, fails, and warns; the pot is only ever lowered.
             FK.reset!()
             laser = cc(; max_current=15.0)
-            @test_logs (:warn, r"software only") match_mode = :any initialize(laser)
-            @test !("LD_EnableMaxCurrentAdjust" in FK.calls) && !("LD_SetMaxCurrentDigPot" in FK.calls)
+            @test_logs (:warn, r"lowering the potentiometer.*software only") match_mode = :any initialize(laser)
+            @test FK.digpot[] == TCube.DIGPOT_MIN_POS && all(<=(204), FK.digpot_sets)
             @test laser.controller_max_current > 15.0
             # The search's first read differs from initialize's: it reads a limit under the ceiling
             # and would raise the pot to 215 if raising were allowed; it may not.
             FK.reset!()
             laser = cc(; max_current=100.0)
-            append!(FK.limit_raw_queue, [23830, floor(Int, 90 / 220 * 32767)])
+            append!(FK.limit_raw_queue, [23830, 23830, floor(Int, 90 / 220 * 32767), floor(Int, 90 / 220 * 32767)])  # each read is two requests and answers the first: every value twice
             initialize(laser)
             @test all(<=(204), FK.digpot_sets) && FK.digpot[] == 204
             @test isempty(FK.limit_raw_queue)
@@ -965,6 +1230,12 @@ lab_summary("Core") do
             @test_logs (:warn, r"lowering the potentiometer.*software only") match_mode = :any initialize(laser)
             @test FK.digpot[] == 204 && isempty(FK.digpot_sets)
             @test TCube.effective_max_current(laser) == 100.0
+            # A ceiling the removed 17.25 mA gate refused: on the fake's pot it settles at position 31 (~16.98 mA).
+            FK.reset!(); FK.limit_follows_pot[] = true
+            l = cc(; max_current=17.0); initialize(l)
+            @test l.controller_max_current <= 17.0
+            setcurrent!(l, 10.0); light_on(l)
+            @test l.properties.is_on
             FK.reset!()
         end
 
@@ -1035,8 +1306,8 @@ lab_summary("Core") do
             # The diode current reading is signed: -5957 is -40 mA, not ~440.
             FakeKinesis.current_raw[] = -5957
             @test measured_current(laser) ≈ -40.0 rtol = 1e-3
-            FakeKinesis.current_raw[] = 40000
-            @test_throws "protocol" measured_current(laser)
+            FakeKinesis.current_raw[] = -32768
+            @test measured_current(laser) == TCube.setpoint_current(laser, -32768)
             FakeKinesis.current_raw[] = 5957
             @test measured_current(laser) == TCube.setpoint_current(laser, 5957)
 

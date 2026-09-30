@@ -124,7 +124,7 @@ end
 """
     diode_loop_from_keywords(mode::RegulationMode, name; wa_calibration, tia_range,
         tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s,
-        lock_check_s, lock_ratio)
+        lock_check_s, lock_ratio, ref_current_mA, ref_photocurrent_A, ref_ratio)
 
 The keyword rules a [`DiodeLaser`](@ref) constructor applies, in one place so
 `TCubeLaser(serialNo; ...)` and `SimDiodeLaser(; ...)` cannot drift apart. Every
@@ -132,12 +132,13 @@ keyword is `nothing` when the caller did not pass it. In `ConstantPhotocurrent`
 mode `wa_calibration`, `tia_range`, `tec_stabilised`, `properties` and
 `max_current` are required and the [`PhotodiodeLoop`](@ref) is returned, built
 from them and from whichever of the loop keywords (`ramp_step_mW`, `ramp_step_s`,
-`lock_check_s`, `lock_ratio`) were passed. In any other mode passing a loop
+`lock_check_s`, `lock_ratio`, `ref_current_mA`, `ref_photocurrent_A`, `ref_ratio`) were passed. In any other mode passing a loop
 keyword throws and `nothing` is returned. Throws `ArgumentError`s prefixed with
 `name`.
 """
 function diode_loop_from_keywords(mode::RegulationMode, name; wa_calibration, tia_range,
-        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio)
+        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio,
+        ref_current_mA, ref_photocurrent_A, ref_ratio)
     if mode isa ConstantPhotocurrent
         absent = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
                                      :tec_stabilised => tec_stabilised, :properties => properties,
@@ -148,13 +149,16 @@ function diode_loop_from_keywords(mode::RegulationMode, name; wa_calibration, ti
             "tec_stabilised is true, false or missing; properties carries the enforced min_power/max_power in mW; " *
             "max_current is the clamp initialize programs into the controller, the only real protection in closed loop."))
         loop_kw = (; (kw => v for (kw, v) in (:ramp_step_mW => ramp_step_mW, :ramp_step_s => ramp_step_s,
-                                              :lock_check_s => lock_check_s, :lock_ratio => lock_ratio) if v !== nothing)...)
+                                              :lock_check_s => lock_check_s, :lock_ratio => lock_ratio,
+                                              :ref_current_mA => ref_current_mA, :ref_photocurrent_A => ref_photocurrent_A,
+                                              :ref_ratio => ref_ratio) if v !== nothing)...)
         return PhotodiodeLoop(; wa_calibration=wa_calibration, tia_range=tia_range, tec_stabilised=tec_stabilised, loop_kw...)
     end
     given = [kw for (kw, v) in (:wa_calibration => wa_calibration, :tia_range => tia_range,
                                 :tec_stabilised => tec_stabilised, :ramp_step_mW => ramp_step_mW,
                                 :ramp_step_s => ramp_step_s, :lock_check_s => lock_check_s,
-                                :lock_ratio => lock_ratio) if v !== nothing]
+                                :lock_ratio => lock_ratio, :ref_current_mA => ref_current_mA,
+                                :ref_photocurrent_A => ref_photocurrent_A, :ref_ratio => ref_ratio) if v !== nothing]
     isempty(given) || throw(ArgumentError(
         "$name: $(join(given, ", ")) describe a photodiode loop, which only a ConstantPhotocurrent laser has; " *
         "this one is $(nameof(typeof(mode)))"))
@@ -175,7 +179,9 @@ at fault:
   scale (`max_power / 1000 / wa_calibration <= tia_range`): a range the loop
   cannot reach is refused here rather than at the first command;
 - in that mode `max_current` is finite and positive, because it becomes the
-  clamp the loop is held under.
+  clamp the loop is held under;
+- in that mode a calibration reference, if given, has `ref_current_mA <= max_current`:
+  the re-check drives the diode at it in open loop.
 """
 function check_diode_config(::Type{M}, pd, properties, max_current::Float64, name) where {M<:RegulationMode}
     if M === ConstantPhotocurrent
@@ -191,6 +197,8 @@ function check_diode_config(::Type{M}, pd, properties, max_current::Float64, nam
             "$name: properties.max_power = $(hi) mW needs more photocurrent than the amplifier's full scale: " *
             "tia_range = $(pd.tia_range) A x wa_calibration = $(pd.wa_calibration) W/A is $(full_scale_mW) mW. " *
             "Lower max_power, or select a less sensitive range on the controller (the TLD001's rear-panel DIP switch) and state it in tia_range."))
+        isnan(pd.ref_current_mA) || pd.ref_current_mA <= max_current || throw(ArgumentError(
+            "$name: ref_current_mA = $(pd.ref_current_mA) mA is above max_current = $(max_current) mA; the reference re-check drives the diode at it in open loop"))
     else
         pd === nothing || throw(ArgumentError(
             "$name: only a ConstantPhotocurrent laser carries a PhotodiodeLoop; a $(nameof(M)) laser must have pd = nothing"))

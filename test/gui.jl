@@ -142,7 +142,7 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
         for laser in (TCubeLaser("00000000"; mode=ConstantCurrent()),
                       TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
                                  tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), max_current=160.0,
-                                 lock_check_s=0.0))
+                                 lock_check_s=0.1))
             gui(laser)
             GLMakie.closeall()
         end

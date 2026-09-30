@@ -11,18 +11,75 @@ the next version with `-DEV`).
 ## [Unreleased]
 
 ### Fixed
+
 - `PIStage`: `shutdown` could close another object's connection. `id` defaulted to `0`, a valid GCS id, and was never reset; it now defaults to `-1` and `shutdown` resets it.
 - `PIStage.initialize` reported the stage connected before it was: `connectionstatus` was set before the connect, and a failed close after a failed reference left it `true`, so a retry answered "already initialized". It is now set only after the whole sequence succeeds, and every step after the connect is inside the cleanup.
 - `PIStage.initialize` ignored a FALSE from reading the travel range (`PI_qTMN`/`PI_qTMX`) or setting the velocity, and came up connected with an unset range. Each is now checked; a failure closes the connection and throws. A failed range query no longer writes an uninitialized buffer into `range_x`/`range_y`.
 - `PIStage.initialize`'s wait for motion to stop after the reference move had no deadline and ignored `PI_IsMoving`'s return, so a failed query could spin forever. It now polls every 0.1 s, throws on a failed query, and gives up after `REFERENCE_TIMEOUT_S`.
 - A `PIStage.initialize` retried after a failed close reported the controller held by another process. The stage now closes its own earlier connection first, and does not reconnect if that close fails too.
 - The stage, Triggerscope and objective-positioner panels log a failed `initialize` instead of throwing out of the callback, through one helper, and a stage panel reads no position after an `initialize` that did not connect.
+- `TCubeLaser`: every fresh read of the controller (the status word, the current limit, the
+  potentiometer position, the W/A read-back, `initialize`'s limit read and `tcube_get_current`)
+  now sends its request twice before reading. The 642 nm rig's TLD001 answers one request behind
+  (2026-09-29), so a single request could let `light_on`'s current-limit gate pass a
+  potentiometer raised since the previous read, and the enable then ran above `max_current`
+  until the setpoint landed.
+- `TCubeLaser` power mode: `check_lock` makes its own readings and status requests and refuses
+  in both directions. Besides a photocurrent above `lock_ratio` times the request, it refuses when
+  the controller reports its current limit reached (status bit `0x400`) or the photocurrent is
+  below the request divided by `lock_ratio`; the output is then zeroed and disabled, as for a
+  suspected lock. It used to read the polled cache and test only the high side, so a loop driven
+  to the clamp -- by a request the clamp cannot reach, or by a photodiode giving fewer counts per
+  mW than at calibration -- went unnoticed.
+- `PhotodiodeLoop` refuses a `lock_check_s` below 0.1 s (`LOCK_CHECK_MIN_S`): 0 was accepted and
+  disabled the lock check. A construction passing a smaller value now throws.
+- `TCubeLaser`: `measured_current` (and so `loop_status`) accepts the raw reading -32768, which
+  the Kinesis header defines as -220 mA, instead of throwing.
+- `TCubeLaser`: any failure during the calibration-reference re-check (a mismatch, a mode refusal or a
+  command error) latches until the next `initialize`, and the diode is not re-lit on every retried `light_on`.
+- `TCubeLaser`: a safety check that refuses while the output may be on (the stored-limit
+  check, and in power mode also a mode, TIA-range or clamp change, or an over-range photodiode) now zeroes and disables
+  the output before it throws, instead of leaving the diode lit in the fault.
+- `TCubeLaser` open-loop `initialize` confirms open loop with a fresh status read after
+  `LD_SetOpenLoopMode`, and refuses if the controller stays in closed loop.
+- `TCubeLaser` power mode: `check_lock` also runs the current-limit test (`0x400`) at a zero request.
+- `TCubeLaser` power mode: `setoutputpower!` decides on fresh status and photocurrent reads, and
+  `light_on` and `setoutputpower!` refuse a photodiode range that no longer matches `tia_range`.
+- `TCubeLaser`: the header's potentiometer floor, 17.25 mA, no longer gates anything. Open-loop
+  `initialize` lowers the potentiometer for any `max_current` below the controller's limit, and
+  power-mode construction no longer refuses a `max_current` under 17.25 mA; the limit the
+  controller reports decides (the 642 nm rig's unit reads 16.74 mA at the lowest position).
 
 ### Changed
+
 - `PIStage.initialize` waits for `PI_IsControllerReady` after the reference move, before polling `PI_qFRF`, as PI's samples do. Not yet run on hardware; needs a rig check on the C-867.
+- `TCubeLaser` timings, against 0.2.5, at the default `lock_check_s` (0.2 s) and `REQUEST_WAIT_S`
+  (0.1 s; a fresh read now sends its request twice, 0.2 s, where it was 0.1 s):
+  - a power-mode `light_on` takes about 0.6 s longer (`require_clamp` two fresh reads, +0.2 s; `check_lock`
+    adds its photocurrent and status reads, +0.4 s);
+  - a power-mode `setoutputpower!` with the output on takes about 0.8 s longer for a request above zero
+    and about 0.6 s for a zero request (`require_clamp` +0.2 s, the fresh photocurrent read +0.2 s,
+    `check_lock` +0.4 s, or +0.2 s at zero); with the output off, about 0.2 s longer;
+  - an open-loop `light_on` takes about 0.1 s longer (one fresh limit read), and a `setcurrent!` with
+    the output off about 0.1 s longer (one fresh status read);
+  - `initialize` takes about 0.8 s longer in power mode (eight fresh reads: status 2, potentiometer 2, limit 3,
+    W/A 1, for one potentiometer setting; each further setting adds 0.2 s) and about 0.3 s in open loop
+    (one limit read, more if the potentiometer is lowered, plus 0.2 s for the open-loop confirm);
+  - the first power-mode `light_on` after `initialize` also runs the calibration-reference re-check:
+    `REFERENCE_DWELL_S` (0.1 s), three fresh reads (0.6 s) and the setpoint confirm, about 0.7 s plus the confirm.
 
 ### Added
+
 - Fake-GCS2 tests for `PIStage` (`test/pi_stage_fake_sdk.jl`, `test/pi_stage.jl`): `initialize`'s ordering and cleanup and `shutdown`'s id handling, the range, velocity and motion-stop checks, the reclaim after a failed close, and the GUI guard, with no hardware.
+- A calibration reference for power mode: `ref_current_mA`, `ref_photocurrent_A` and `ref_ratio`
+  (default 1.5) on `PhotodiodeLoop`, `TCubeLaser` and `SimDiodeLaser` (which stores them and does
+  not check). With a reference, the first power-mode `light_on` after each `initialize` runs the
+  diode in open loop at `ref_current_mA` for `REFERENCE_DWELL_S` (0.1 s) before reading the photodiode,
+  and refuses unless the photocurrent is within a factor `ref_ratio` of `ref_photocurrent_A`; the
+  output is off after the check either way, and a mismatch refuses every later `light_on` until the
+  next `initialize`. Without one, that `light_on` warns once that the check is skipped. See `CALIBRATION.md`.
+  **Every rig that uses power mode should record one** (`ref_current_mA`, `ref_photocurrent_A`),
+  with its next W/A measurement; `CALIBRATION.md` step 3b says how.
 
 ## [0.2.5] - 2026-09-29
 
