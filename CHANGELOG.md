@@ -10,6 +10,20 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Fixed
+- `PIStage`: `shutdown` could close another object's connection. `id` defaulted to `0`, a valid GCS id, and was never reset; it now defaults to `-1` and `shutdown` resets it.
+- `PIStage.initialize` reported the stage connected before it was: `connectionstatus` was set before the connect, and a failed close after a failed reference left it `true`, so a retry answered "already initialized". It is now set only after the whole sequence succeeds, and every step after the connect is inside the cleanup.
+- `PIStage.initialize` ignored a FALSE from reading the travel range (`PI_qTMN`/`PI_qTMX`) or setting the velocity, and came up connected with an unset range. Each is now checked; a failure closes the connection and throws. A failed range query no longer writes an uninitialized buffer into `range_x`/`range_y`.
+- `PIStage.initialize`'s wait for motion to stop after the reference move had no deadline and ignored `PI_IsMoving`'s return, so a failed query could spin forever. It now polls every 0.1 s, throws on a failed query, and gives up after `REFERENCE_TIMEOUT_S`.
+- A `PIStage.initialize` retried after a failed close reported the controller held by another process. The stage now closes its own earlier connection first, and does not reconnect if that close fails too.
+- The stage, Triggerscope and objective-positioner panels log a failed `initialize` instead of throwing out of the callback, through one helper, and a stage panel reads no position after an `initialize` that did not connect.
+
+### Changed
+- `PIStage.initialize` waits for `PI_IsControllerReady` after the reference move, before polling `PI_qFRF`, as PI's samples do. Not yet run on hardware; needs a rig check on the C-867.
+
+### Added
+- Fake-GCS2 tests for `PIStage` (`test/pi_stage_fake_sdk.jl`, `test/pi_stage.jl`): `initialize`'s ordering and cleanup and `shutdown`'s id handling, the range, velocity and motion-stop checks, the reclaim after a failed close, and the GUI guard, with no hardware.
+
 ## [0.2.5] - 2026-09-29
 
 A non-breaking release. It brings the TCube laser's closed-loop (power) mode and
