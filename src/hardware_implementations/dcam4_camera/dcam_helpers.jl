@@ -265,9 +265,11 @@ Leave the camera with no capture running and no buffer attached, whatever an ear
 a sequence, or a capture that failed). It reads the status first and does nothing only when the status is known to be
 STABLE (no buffer) or UNSTABLE. A failed status read, BUSY or ERROR is stopped (unless READY, which is already
 stopped); then anything with a buffer is released. The helpers log their own failures and never throw. Sets
-`camera.is_running = false`.
+`camera.is_running = false`. It also increments `capture_generation`, so a `sequence` poller started before it no
+longer acts. Every start goes through it first: `live` and `sequence` through `abort`, and `capture` directly.
 """
 function stop_and_release!(camera::DCAM4Camera)
+    camera.capture_generation += 1  # any stop makes every older sequence poller stale
     hdcam = camera.camera_handle
     err, status = dcamcap_status(hdcam)
     # Nothing to do only when the status is known to be STABLE (no buffer) or UNSTABLE. A failed
@@ -289,27 +291,34 @@ The interval, in seconds, at which `wait_not_busy` polls the capture status.
 const STATUS_POLL_S = 0.01
 
 """
-    wait_not_busy(camera::DCAM4Camera, timeout_ms, what) -> Bool
+    wait_not_busy(camera::DCAM4Camera, timeout_ms, what; current = () -> true) -> Bool
 
 Poll the capture status every `STATUS_POLL_S` until it is no longer BUSY, for at most `timeout_ms`. Returns `true`
-when the capture has ended. On a timeout or a failed status read it logs (naming `what`), sets `last_error` and
-returns `false`. It sleeps between polls, so an interrupt can land, unlike a blocking DCAM wait.
+when the capture has ended. A failed status read is logged once and retried until the deadline. At the deadline
+it logs (naming `what`), sets `last_error` (the status read's error if the last read failed, else
+`DCAMERR_TIMEOUT`) and returns `false`. It sleeps between polls, so an interrupt can land, unlike a blocking DCAM
+wait. It also returns `false` as soon as `current()` is false (a newer capture replaced the one it watches),
+touching nothing.
 """
-function wait_not_busy(camera::DCAM4Camera, timeout_ms::Integer, what::AbstractString)
+function wait_not_busy(camera::DCAM4Camera, timeout_ms::Integer, what::AbstractString;
+                       current::Function = () -> true)
     deadline = time() + timeout_ms / 1000
-    while true
+    logged = false
+    while current()
         err, status = dcamcap_status(camera.camera_handle)
         if is_failed(err)
-            camera.last_error = err
-            @error "DCAM4Camera $(camera.unique_id): $(what) could not read the capture status ($(err))"
-            return false
+            logged || @error "DCAM4Camera $(camera.unique_id): $(what) could not read the capture status ($(err)); retrying until the deadline"
+            logged = true
+        elseif status != DCAMCAP_STATUS_BUSY
+            return true
         end
-        status == DCAMCAP_STATUS_BUSY || return true
         if time() >= deadline
-            camera.last_error = DCAMERR_TIMEOUT
-            @error "DCAM4Camera $(camera.unique_id): $(what) timed out after $(timeout_ms) ms with the capture still running"
+            camera.last_error = is_failed(err) ? err : DCAMERR_TIMEOUT
+            @error "DCAM4Camera $(camera.unique_id): $(what) timed out after $(timeout_ms) ms " *
+                   (is_failed(err) ? "(the status read fails: $(err))" : "with the capture still running")
             return false
         end
         sleep(STATUS_POLL_S)
     end
+    return false
 end

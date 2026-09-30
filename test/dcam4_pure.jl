@@ -9,7 +9,14 @@
     # A camera built with no library call, through the positional constructor.
     fake_camera() = DC.DCAM4Camera("fake", DC.CameraFormat(1, 1, 1, 1, "SCMOS"), C_NULL, 0.01, 10.0,
         DC.CameraROI(0, 0, 1, 1), DC.LIVE, DC.DCAMPROP_TRIGGER_MODE__NORMAL, 10, DC.DCAMERR_SUCCESS,
-        false, 0, zeros(UInt16, 1, 1), NaN)
+        false, 0, zeros(UInt16, 1, 1), NaN, 0)
+
+    @testset "a superseded wait touches nothing, before any library call" begin
+        cam = fake_camera()
+        cam.last_error = DC.DCAMERR_SUCCESS
+        @test DC.wait_not_busy(cam, 1000, "test"; current = () -> false) == false
+        @test cam.last_error == DC.DCAMERR_SUCCESS
+    end
 
     @testset "capture_timeout_ms" begin
         @test DC.capture_timeout_ms(0.0125, 0.043) == 1111

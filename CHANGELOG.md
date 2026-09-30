@@ -21,14 +21,18 @@ the next version with `-DEV`).
   session.
 - `DCAM4Camera` `getlastframe`: a timeout or failed wait no longer throws a MethodError. It logs, sets `last_error`
   and returns `nothing`, as the code intended. Its wait is bounded the same way, with the readout time read once per
-  `live`, `sequence` or `capture` and cached.
+  `live`, `sequence` or `capture` and cached. A frame that cannot be copied, here or in `capture`, sets `last_error`.
 - `DCAM4Camera` `getdata` in SEQUENCE mode polls the capture status against a deadline of
   2 x N x (exposure + readout) + 1 s instead of waiting for the end-of-cycle event. A sequence that has already
   ended cannot be missed, a full-frame sequence of short exposures no longer times out, and an interrupt can land
   while it waits. A frame that cannot be read returns `nothing` with `last_error` set (it threw a MethodError).
-  Every exit stops the capture and releases the buffer.
+  Every exit stops the capture and releases the buffer. A sequence that transferred fewer frames than requested (or
+  never ran) returns `nothing` with `last_error` set to `DCAMERR_LOSTFRAME`. In LIVE mode `getdata` returns the
+  newest frame at once and leaves the live view running; it used to clear `is_running` while the view ran on.
 - `DCAM4Camera` `sequence`: the task that marks the sequence finished gives up at the same deadline and stops a
-  capture stuck running, so `is_running` can no longer stay true forever.
+  capture stuck running, so `is_running` can no longer stay true forever. It acts only while its sequence is
+  current, so it never stops or marks finished a newer live view or sequence, and a failed status read is retried
+  until the deadline.
 - `DCAM4Camera`: clearing a leftover capture handles every state (a capture in the ERROR state was neither stopped
   nor released), and `abort` now does exactly that.
 
@@ -38,9 +42,6 @@ the next version with `-DEV`).
   running (`is_running`), instead of failing at the buffer allocation and returning `nothing`. It never releases a
   buffer another task may be waiting on. A leftover from an earlier call (a failed capture, or a sequence that
   ended and was never read) is stopped and released first.
-- `DCAM4Camera` `getdata` in LIVE mode returns the newest frame at once and ends the live view, because every exit
-  stops the capture and releases the buffer. It already marked the camera not running, but DCAM refused the buffer
-  release while capturing. No known rig code calls `getdata` during a live view.
 
 ## [0.2.5] - 2026-09-29
 
