@@ -1525,6 +1525,8 @@ lab_summary("Core") do
 
     include("pi_n472.jl")
 
+    include("dcam4_pure.jl")
+
     include("contract.jl")
     include("skills.jl")
     include("gui.jl")

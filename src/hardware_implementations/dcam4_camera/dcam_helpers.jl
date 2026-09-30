@@ -203,5 +203,66 @@ function settriggermode!(camera::DCAM4Camera, trigger_mode::TriggerMode)
     settriggermode!(camera)
 end
 
+"""
+    capture_timeout_ms(exposure_s, readout_s) -> Int32
 
+The timeout for one frame wait, in milliseconds: `2 * (exposure_s + readout_s)` seconds plus 1 s. The readout term
+matters: a full ORCA frame reads out in tens of milliseconds, far longer than a short exposure. Throws for a
+negative or non-finite input, and for a result beyond `typemax(Int32)` ms, so a wait is never unbounded
+(DCAM reads the negative value `0x80000000` as INFINITE).
+"""
+function capture_timeout_ms(exposure_s::Real, readout_s::Real)
+    (isfinite(exposure_s) && exposure_s >= 0) ||
+        error("capture_timeout_ms: exposure $(exposure_s) s must be finite and non-negative")
+    (isfinite(readout_s) && readout_s >= 0) ||
+        error("capture_timeout_ms: readout $(readout_s) s must be finite and non-negative")
+    t = 2000 * (Float64(exposure_s) + Float64(readout_s)) + 1000
+    t <= typemax(Int32) || error("capture_timeout_ms: $(t) ms does not fit a DCAM timeout (Int32 ms)")
+    return Int32(round(t))
+end
 
+"""
+    READOUT_FALLBACK_S
+
+The readout time, in seconds, that `readout_time` assumes when the camera does not report
+`DCAM_IDPROP_TIMING_READOUTTIME`. It is deliberately generous, since it only lengthens a timeout.
+"""
+const READOUT_FALLBACK_S = 1.0
+
+"""
+    readout_time(camera::DCAM4Camera) -> Float64
+
+The sensor readout time in seconds, read from the camera's `DCAM_IDPROP_TIMING_READOUTTIME`, which depends on the
+current ROI and readout speed, so read it after `setroi!`. If the read fails or the value is not a finite,
+non-negative number, it warns and returns `READOUT_FALLBACK_S`.
+"""
+function readout_time(camera::DCAM4Camera)
+    err, t = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_TIMING_READOUTTIME)
+    if is_failed(err) || !isfinite(t) || t < 0
+        @warn "DCAM4Camera $(camera.unique_id): the camera did not report its readout time ($(err), $(t)); assuming $(READOUT_FALLBACK_S) s for the frame-wait timeout"
+        return READOUT_FALLBACK_S
+    end
+    return Float64(t)
+end
+
+"""
+    stop_and_release!(camera::DCAM4Camera)
+
+Leave the camera with no capture running and no buffer attached, whatever an earlier call left behind (a live view,
+a sequence, or a capture that failed). It reads the status first, so a camera with nothing to stop logs no error:
+BUSY is stopped, then BUSY or READY (a buffer attached) is released, and STABLE needs nothing. If the status read
+fails, it tries both. Sets `camera.is_running = false`.
+"""
+function stop_and_release!(camera::DCAM4Camera)
+    hdcam = camera.camera_handle
+    err, status = dcamcap_status(hdcam)
+    if is_failed(err)
+        dcamcap_stop(hdcam)
+        dcambuf_release(hdcam)
+    else
+        status == DCAMCAP_STATUS_BUSY && dcamcap_stop(hdcam)
+        (status == DCAMCAP_STATUS_BUSY || status == DCAMCAP_STATUS_READY) && dcambuf_release(hdcam)
+    end
+    camera.is_running = false
+    return nothing
+end

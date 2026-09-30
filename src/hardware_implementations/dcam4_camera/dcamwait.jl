@@ -82,7 +82,8 @@ function dcamwait_abort(hwait::Ptr{Cvoid})
 end
 
 function dcamwait_event(hwait::Ptr{Cvoid}, eventmask::Int32, timeout_millisec::Int32)
-    dws = DCAMWAIT_START(0, 0, eventmask, timeout_millisec)
+    timeout_millisec >= 0 || error("dcamwait_event: timeout $(timeout_millisec) ms is negative (DCAM reads 0x80000000 as INFINITE); every DCAM wait must be bounded")
+    dws = DCAMWAIT_START(eventmask, timeout_millisec)
     err = dcamwait_start(hwait, Ref(dws))
     if is_failed(err)
         @error "DCAM Failed to Wait for Event:  $(err)))"

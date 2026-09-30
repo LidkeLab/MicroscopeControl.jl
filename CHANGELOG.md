@@ -10,6 +10,27 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Fixed
+
+- `DCAM4Camera` `capture` could hang or leave the camera unusable after a missed frame. Every frame wait is now
+  bounded by 2 x (exposure + readout) + 1 s, with the readout read from the camera
+  (`DCAM_IDPROP_TIMING_READOUTTIME`); the wait is armed before the capture starts; the wait's parameter struct
+  carries its size (it was sent as 0); and every exit stops the capture, releases the buffer and closes the wait.
+  A timeout or failed wait in `capture` now logs, sets `last_error` and throws a clear error (it threw a MethodError
+  before). `capture` also stops a running live view or sequence before it starts. Reported from the quickbeam rig:
+  full frame at 12.5 ms.
+- `DCAM4Camera` `getlastframe` and `getdata`: a timeout or failed wait no longer throws a MethodError. It logs,
+  sets `last_error` and returns `nothing`, as the code intended. `getdata`'s wait for the end of a sequence now
+  includes the readout (2 x N x (exposure + readout) + 1 s; before, a full-frame sequence of short exposures timed
+  out). A sequence that has already ended is read without waiting. Every exit stops the capture, releases the
+  buffer and closes the wait.
+
+### Changed
+
+- `DCAM4Camera` `getdata` in LIVE mode now ends the live view, because every exit stops the capture and releases
+  the buffer. It already marked the camera not running, but DCAM refused the buffer release while capturing, so the
+  live view went on. No known rig code calls `getdata` during a live view.
+
 ## [0.2.5] - 2026-09-29
 
 A non-breaking release. It brings the TCube laser's closed-loop (power) mode and
