@@ -8,7 +8,23 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
-## [Unreleased]
+## [0.2.6] - 2026-09-29
+
+A non-breaking release in three parts. None of it has run on hardware yet; the rig
+checks are listed in #74 and #75.
+
+- **PI stage (#73).** `PIStage.initialize` checks every status return, bounds its
+  wait for motion to stop, and reclaims its own earlier connection. The stage,
+  Triggerscope and objective-positioner panels log a failed `initialize` instead of
+  throwing.
+- **TCube laser safety (#74).** Fixes from the 642 nm rig's controller facts. Fresh
+  reads send their request twice, because the TLD001 answers one request behind.
+  `check_lock` refuses in both directions. A refusal found while the diode is lit
+  zeroes and disables it first. Power mode gains an optional calibration reference,
+  which every power-mode rig should record. Several calls take longer (see Changed).
+- **DCAM4 capture (#75).** Every frame wait is bounded and armed before the capture
+  starts, and every exit cleans up. This fixes the quickbeam rig's full-frame
+  `capture` hang. `capture` now refuses while a live view or sequence runs.
 
 ### Fixed
 
