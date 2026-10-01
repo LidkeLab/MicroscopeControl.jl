@@ -204,7 +204,9 @@ Base.showerror(::IO, ::BadErr) = error("showerror failed")
             ib = findfirst(l -> occursin(r"BEGIN usleep id=\d+", l), bl)
             bid = match(r"BEGIN usleep id=(\d+)", bl[ib])[1]
             ie = findfirst(l -> occursin("END usleep id=$bid ", l), bl)
-            @test count(l -> occursin("NOTE  heartbeat", l), bl[ib:ie]) >= 2
+            nhb = count(l -> occursin("NOTE  heartbeat", l), bl[ib:ie])
+            @info "usleep heartbeat test" heartbeats = nhb tid = Threads.threadid() pool = Threads.threadpool()
+            @test nhb >= 2
             rm(bpath)
         else
             # a single thread cannot run the heartbeat during a ccall from the only thread
