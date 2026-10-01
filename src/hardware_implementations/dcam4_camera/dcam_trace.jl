@@ -54,6 +54,12 @@ every Julia thread is held at a GC stop, waiting for that call. The heartbeat ru
 so it needs a default-pool thread other than the caller's. On Julia 1.12+ the main task runs on the
 interactive thread, so the default thread that 1.12+ starts with is enough. On 1.11 start Julia with
 `-t 2` or more. With a single thread in all, the heartbeat goes silent during every ccall.
+
+Reading a trace: first check the console for the `tracing is now off` warning; if it fired, the file
+stops there because the trace stopped, not because a call hung. Then find the last BEGIN with no END or
+THROW of the same id in the last segment. Heartbeats after that BEGIN mean the call is blocking in the
+library; heartbeats that stopped mean every Julia thread is held at a GC stop, waiting for that call
+(given the thread rule above).
 """
 function dcam_trace!(path::Union{AbstractString, Nothing})
     lock(TRACE_CTL_LOCK) do
