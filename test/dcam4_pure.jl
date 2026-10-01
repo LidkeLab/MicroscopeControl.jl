@@ -15,6 +15,11 @@ function qsort_cmp(a::Ptr{Cint}, b::Ptr{Cint})::Cint
     return Cint(sign(unsafe_load(a) - unsafe_load(b)))
 end
 
+struct BadShow end
+Base.show(::IO, ::BadShow) = error("show failed")
+struct BadErr <: Exception end
+Base.showerror(::IO, ::BadErr) = error("showerror failed")
+
 @testset "DCAM4 (no library)" begin
     DC = MicroscopeControl.HardwareImplementations.DCAM4
     CameraInterface = MicroscopeControl.HardwareInterfaces.CameraInterface
@@ -159,6 +164,17 @@ end
         @test istaskdone(hb2)
         @test filesize(hbpath) == sz
         rm(hbpath); rm(hbpath2)
+
+        # A line that cannot be built is noted, never thrown, and tracing stays on.
+        bpath0 = tempname()
+        DC.dcam_trace!(bpath0)
+        @test DC.dcam_trace_note(BadShow()) === nothing
+        @test DC.trace_throw("x", 1, time_ns(), BadErr()) === nothing
+        @test DC.TRACE_ON[]
+        bl0 = readlines(bpath0)
+        DC.dcam_trace!(nothing)
+        @test count(l -> occursin("(trace line not built: ", l), bl0) == 2
+        rm(bpath0)
 
         # A heartbeat stuck behind a hung call must not block dcam_trace!: it no longer waits on it.
         stuckpath = tempname()

@@ -68,15 +68,17 @@ function dcam_trace!(path::Union{AbstractString, Nothing})
         lock(TRACE_LOCK) do
             TRACE_ON[] = false
             if TRACE_IO[] !== nothing
-                trace_line("NOTE", "", " trace off")
+                trace_line(() -> " trace off", "NOTE", "")
                 TRACE_IO[] === nothing || close(TRACE_IO[])   # a failed write has already closed it
             end
             TRACE_IO[] = nothing
             if path !== nothing
                 TRACE_IO[] = open(path, "a")
-                trace_line("NOTE", "", string(" trace on pid=", getpid(), " julia=", VERSION,
-                    " threads=interactive:", Threads.nthreads(:interactive), ",default:", Threads.nthreads(:default),
-                    " caller_tid=", Threads.threadid(), " caller_pool=", Threads.threadpool()))
+                trace_line("NOTE", "") do
+                    string(" trace on pid=", getpid(), " julia=", VERSION,
+                        " threads=interactive:", Threads.nthreads(:interactive), ",default:", Threads.nthreads(:default),
+                        " caller_tid=", Threads.threadid(), " caller_pool=", Threads.threadpool())
+                end
                 TRACE_ON[] = TRACE_IO[] !== nothing
             end
         end
@@ -92,7 +94,9 @@ function heartbeat_loop(stop::Threads.Atomic{Bool})
     last = 0.0
     while !stop[] && TRACE_ON[]
         if time() - last >= HEARTBEAT_S || last == 0.0
-            trace_line("NOTE", "", " heartbeat" * gc_fields(); guard = stop)
+            trace_line("NOTE", ""; guard = stop) do
+                " heartbeat" * gc_fields()
+            end
             last = time()
         end
         sleep(0.1)
@@ -100,11 +104,20 @@ function heartbeat_loop(stop::Threads.Atomic{Bool})
     return nothing
 end
 
-function trace_line(kind, name, rest::AbstractString; guard = nothing)
+# `build()` returns the text after the name. It runs under TRACE_LOCK, and whatever it throws, an
+# InterruptException included, is turned into a note: no line-building failure may reach the DCAM call
+# or replace the caller's exception. `guard` is a stop flag, checked under the lock so a superseded
+# heartbeat cannot write into a newer file.
+function trace_line(build, kind, name; guard = nothing)
     lock(TRACE_LOCK) do
         io = TRACE_IO[]
         io === nothing && return
         guard !== nothing && guard[] && return
+        rest = try
+            build()
+        catch e
+            string(" (trace line not built: ", typeof(e), ")")
+        end
         try
             t = Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS.sss")
             println(io, t, " tid=", Threads.threadid(), " ", kind, " ", name, rest)
@@ -136,7 +149,7 @@ end
 Write a marker line to the trace, if tracing is on.
 """
 function dcam_trace_note(msg)
-    TRACE_ON[] && trace_line("NOTE", "", " " * string(msg))
+    TRACE_ON[] && trace_line(() -> " " * string(msg), "NOTE", "")
     return nothing
 end
 
@@ -162,21 +175,31 @@ const TRACE_SEQ = Threads.Atomic{Int}(0)
 
 function trace_begin(name, vals)
     id = Threads.atomic_add!(TRACE_SEQ, 1) + 1
-    trace_line("BEGIN", name, string(" id=", id, " args=(", join(map(trace_arg, vals), ", "), ")", gc_fields()))
+    trace_line("BEGIN", name) do
+        args = try
+            join(map(trace_arg, vals), ", ")
+        catch
+            "(args not built)"
+        end
+        string(" id=", id, " args=(", args, ")", gc_fields())
+    end
     return (id, time_ns())
 end
 
 function trace_end(name, id, t0, ret)
     ms = (time_ns() - t0) / 1e6
-    trace_line("END", name, string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " ret=", ret, gc_fields()))
+    trace_line("END", name) do
+        string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " ret=", ret, gc_fields())
+    end
     return nothing
 end
 
 function trace_throw(name, id, t0, err)
     ms = (time_ns() - t0) / 1e6
-    msg = replace(sprint(showerror, err), '\n' => ' ')
-    msg = first(msg, 200)
-    trace_line("THROW", name, string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " err=", typeof(err), ": ", msg, gc_fields()))
+    trace_line("THROW", name) do
+        msg = first(replace(sprint(showerror, err), '\n' => ' '), 200)
+        string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " err=", typeof(err), ": ", msg, gc_fields())
+    end
     return nothing
 end
 
