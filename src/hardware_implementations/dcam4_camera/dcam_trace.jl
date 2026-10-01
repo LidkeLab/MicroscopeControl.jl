@@ -8,6 +8,12 @@
 # wait. `gc_num` is updated only when a collection finishes, so while the hang is still going these
 # numbers do not move; the heartbeat is the in-flight signal.
 #
+# While tracing is on, a heartbeat task writes a NOTE line every second. While a DCAM call's BEGIN has
+# no END, heartbeats that keep coming mean the call is simply blocking in the library; heartbeats that
+# stop mean every Julia thread is held at a GC stop, waiting for that call. This needs a thread other
+# than the caller's: Julia 1.12+ has one interactive thread by default; on 1.11, start with `-t 1,1`
+# or `-t 2`. On a single thread the heartbeat goes silent during every ccall.
+#
 # Off by default; the cost when off is one `Ref{Bool}` check per call. Turn on with
 # `dcam_trace!(path)` (`dcam_trace!(nothing)` turns it off); there is no other way on.
 
@@ -16,6 +22,9 @@ using Dates: Dates
 const TRACE_ON = Ref(false)
 const TRACE_IO = Ref{Union{IOStream, Nothing}}(nothing)
 const TRACE_LOCK = ReentrantLock()
+const TRACE_CTL_LOCK = ReentrantLock()   # serializes dcam_trace!; the heartbeat never takes it
+const HEARTBEAT_S = 1.0
+const HEARTBEAT = Ref{Union{Nothing, Tuple{Task, Threads.Atomic{Bool}}}}(nothing)
 
 """
     dcam_trace!(path)
@@ -33,16 +42,45 @@ DCAM call it brackets. Line formats, each after a timestamp and `tid=`:
     NOTE  <text>
 
 A failed write to the file turns tracing off with one warning; the DCAM call still runs.
+
+While tracing is on, a heartbeat writes `NOTE  heartbeat gc_ms=..` every second. Heartbeats that keep
+coming while a BEGIN has no END mean the call is blocking in the library; heartbeats that stop mean
+every Julia thread is held at a GC stop, waiting for that call. This needs a thread other than the
+caller's (Julia 1.12+ has an interactive thread by default; on 1.11 start with `-t 1,1` or `-t 2`).
 """
 function dcam_trace!(path::Union{AbstractString, Nothing})
-    lock(TRACE_LOCK) do
-        TRACE_ON[] = false
-        TRACE_IO[] === nothing || close(TRACE_IO[])
-        TRACE_IO[] = nothing
-        if path !== nothing
-            TRACE_IO[] = open(path, "a")
-            TRACE_ON[] = true
+    lock(TRACE_CTL_LOCK) do
+        hb = HEARTBEAT[]
+        if hb !== nothing
+            hb[2][] = true
+            wait(hb[1])   # outside TRACE_LOCK: the heartbeat may be waiting for it in trace_line
+            HEARTBEAT[] = nothing
         end
+        lock(TRACE_LOCK) do
+            TRACE_ON[] = false
+            TRACE_IO[] === nothing || close(TRACE_IO[])
+            TRACE_IO[] = nothing
+            if path !== nothing
+                TRACE_IO[] = open(path, "a")
+                TRACE_ON[] = true
+            end
+        end
+        if path !== nothing
+            stop = Threads.Atomic{Bool}(false)
+            HEARTBEAT[] = (Threads.@spawn(:interactive, heartbeat_loop(stop)), stop)
+        end
+    end
+    return nothing
+end
+
+function heartbeat_loop(stop::Threads.Atomic{Bool})
+    last = 0.0
+    while !stop[] && TRACE_ON[]
+        if time() - last >= HEARTBEAT_S || last == 0.0
+            trace_line("NOTE", "", " heartbeat" * gc_fields())
+            last = time()
+        end
+        sleep(0.1)
     end
     return nothing
 end

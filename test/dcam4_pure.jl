@@ -76,7 +76,7 @@
         @test h() == 7
         @test n[] == 2
         DC.dcam_trace_note("marker")
-        lines = readlines(path)   # read while the file is still open: every line is flushed
+        lines = filter(l -> !occursin("NOTE  heartbeat", l), readlines(path))   # read while the file is still open: every line is flushed
         DC.dcam_trace!(nothing)
         @test length(lines) == 5
         @test occursin(r"tid=\d+ BEGIN strlen id=\d+ args=\(String\)", lines[1])
@@ -100,6 +100,33 @@
         @test ids("THROW") == ids("BEGIN")[3:3]
         @test any(l -> occursin(r"THROW strlen id=\d+ elapsed_ms=[\d.]+ err=ArgumentError: ", l), l2)
         rm(path2)
+
+        # A heartbeat runs while tracing is on, and stops (task done, file quiet) when it is off.
+        hbpath = tempname()
+        hbre = r"NOTE  heartbeat gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+"
+        DC.dcam_trace!(hbpath)
+        hb1 = DC.HEARTBEAT[][1]
+        t_end = time() + 5
+        while time() < t_end && !any(l -> occursin(hbre, l), readlines(hbpath))
+            sleep(0.1)
+        end
+        @test any(l -> occursin(hbre, l), readlines(hbpath))
+        DC.dcam_trace!(nothing)
+        @test istaskdone(hb1)
+        @test DC.HEARTBEAT[] === nothing
+        sz = filesize(hbpath)
+        sleep(1.5)
+        @test filesize(hbpath) == sz
+
+        # Re-enabling to a second path starts exactly one new heartbeat; the first file stays quiet.
+        hbpath2 = tempname()
+        DC.dcam_trace!(hbpath2)
+        hb2 = DC.HEARTBEAT[][1]
+        @test hb2 !== hb1
+        DC.dcam_trace!(nothing)
+        @test istaskdone(hb2)
+        @test filesize(hbpath) == sz
+        rm(hbpath); rm(hbpath2)
 
         # A failed trace write turns tracing off with one warning; the call itself still runs.
         # (writing to a closed IOStream does not throw, so /dev/full stands in for a full disk)
