@@ -89,7 +89,7 @@ end
         @test h() == 7
         @test n[] == 2
         DC.dcam_trace_note("marker")
-        lines = filter(l -> !occursin("NOTE  heartbeat", l), readlines(path))   # read while the file is still open: every line is flushed
+        lines = filter(l -> !occursin(r"NOTE  (heartbeat|trace o)", l), readlines(path))   # read while the file is still open: every line is flushed
         DC.dcam_trace!(nothing)
         @test length(lines) == 5
         @test occursin(r"tid=\d+ BEGIN strlen id=\d+ args=\(String\)", lines[1])
@@ -105,6 +105,7 @@ end
         @test f("hi") == 2
         @test_throws ArgumentError f("a\0b")
         l2 = readlines(path2)
+        @test occursin(r"NOTE  trace on pid=\d+ julia=\S+ threads=interactive:\d+,default:\d+", l2[1])
         DC.dcam_trace!(nothing)
         ids(kind) = [parse(Int, m[1]) for m in match.(Regex(kind * " strlen id=(\\d+)"), l2) if m !== nothing]
         @test length(ids("BEGIN")) == 3
@@ -112,6 +113,7 @@ end
         @test issorted(ids("BEGIN"); lt = <=)
         @test ids("THROW") == ids("BEGIN")[3:3]
         @test any(l -> occursin(r"THROW strlen id=\d+ elapsed_ms=[\d.]+ err=ArgumentError: ", l), l2)
+        @test endswith(readlines(path2)[end], "NOTE  trace off")
         rm(path2)
 
         # BEGIN is on disk before the library call runs: the comparator, called from inside qsort, sees it.

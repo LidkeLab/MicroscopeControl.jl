@@ -44,6 +44,10 @@ DCAM call it brackets. Line formats, each after a timestamp and `tid=`:
 
 A failed write to the file turns tracing off with one warning; the DCAM call still runs.
 
+Ids count up from 1 in each process and are not reset. The file is appended to, so each
+`NOTE  trace on` line starts a segment, and a BEGIN pairs with the END or THROW of the same id only
+within its segment.
+
 While tracing is on, a heartbeat writes `NOTE  heartbeat gc_ms=..` every second. Heartbeats that keep
 coming while a BEGIN has no END mean the call is blocking in the library; heartbeats that stop mean
 every Julia thread is held at a GC stop, waiting for that call. The heartbeat runs on the default pool,
@@ -63,11 +67,17 @@ function dcam_trace!(path::Union{AbstractString, Nothing})
         end
         lock(TRACE_LOCK) do
             TRACE_ON[] = false
-            TRACE_IO[] === nothing || close(TRACE_IO[])
+            if TRACE_IO[] !== nothing
+                trace_line("NOTE", "", " trace off")
+                TRACE_IO[] === nothing || close(TRACE_IO[])   # a failed write has already closed it
+            end
             TRACE_IO[] = nothing
             if path !== nothing
                 TRACE_IO[] = open(path, "a")
-                TRACE_ON[] = true
+                trace_line("NOTE", "", string(" trace on pid=", getpid(), " julia=", VERSION,
+                    " threads=interactive:", Threads.nthreads(:interactive), ",default:", Threads.nthreads(:default),
+                    " caller_tid=", Threads.threadid(), " caller_pool=", Threads.threadpool()))
+                TRACE_ON[] = TRACE_IO[] !== nothing
             end
         end
         if path !== nothing
