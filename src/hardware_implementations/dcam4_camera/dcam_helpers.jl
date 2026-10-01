@@ -265,7 +265,8 @@ Leave the camera with no capture running and no buffer attached, whatever an ear
 a sequence, or a capture that failed). It reads the status first and does nothing only when the status is known to be
 STABLE (no buffer) or UNSTABLE. A failed status read, BUSY or ERROR is stopped (unless READY, which is already
 stopped); then anything with a buffer is released. The helpers log their own failures and never throw. Sets
-`camera.is_running = false`. It also increments `capture_generation`, so a `sequence` poller started before it no
+`camera.is_running = false` unless the stop or the release failed; then it records that error in `last_error` and leaves
+`is_running` as it was, since the capture may still be running. It also increments `capture_generation`, so a `sequence` poller started before it no
 longer acts. Every start goes through it first: `live` and `sequence` through `abort`, and `capture` directly.
 """
 function stop_and_release!(camera::DCAM4Camera)
@@ -276,8 +277,10 @@ function stop_and_release!(camera::DCAM4Camera)
     # status read, BUSY or ERROR is stopped; then anything with a buffer is released. The helpers
     # log their own failures and never throw.
     if is_failed(err) || !(status == DCAMCAP_STATUS_STABLE || status == DCAMCAP_STATUS_UNSTABLE)
-        status == DCAMCAP_STATUS_READY || dcamcap_stop(hdcam)
-        dcambuf_release(hdcam)
+        serr = status == DCAMCAP_STATUS_READY ? DCAMERR_SUCCESS : dcamcap_stop(hdcam)
+        rerr = dcambuf_release(hdcam)
+        failed = is_failed(serr) ? serr : rerr
+        is_failed(failed) && (camera.last_error = failed; return nothing)  # may still be running: is_running is left as it was
     end
     camera.is_running = false
     return nothing

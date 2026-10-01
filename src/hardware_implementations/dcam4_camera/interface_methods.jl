@@ -129,6 +129,7 @@ function CameraInterface.live(camera::DCAM4Camera; nframes=10)
     # Start the capture of the sequence
     err = dcamcap_start(camera.camera_handle, Int32(DCAMCAP_START_SEQUENCE))
     if is_failed(err)
+        stop_and_release!(camera)  # free the buffer now rather than at the next start; before last_error, which it may overwrite
         camera.last_error = err
         return
     end
@@ -166,6 +167,7 @@ function CameraInterface.sequence(camera::DCAM4Camera, nframes::Real)
     # Start the capture of the sequence
     err = dcamcap_start(camera.camera_handle, Int32(DCAMCAP_START_SNAP))
     if is_failed(err)
+        stop_and_release!(camera)
         camera.last_error = err
         return
     end
@@ -217,6 +219,7 @@ no release, `is_running` unchanged). A timeout, a failed status read or a frame 
 function CameraInterface.getdata(camera::DCAM4Camera)
     hdcam = camera.camera_handle
     n = camera.sequence_length
+    gen = camera.capture_generation  # a newer capture moves this on; the cleanup below then leaves its buffer alone
     if camera.capture_mode == LIVE
         # Leave the live view running, with no stop and no release: a threaded live reader
         # crashes the process if its buffer is released under it.
@@ -230,10 +233,11 @@ function CameraInterface.getdata(camera::DCAM4Camera)
             timeout_ms = capture_timeout_ms(camera.exposure_time * n, cached_readout_time(camera) * n)
             # Poll the status against that deadline rather than wait for the end-of-cycle event:
             # a sequence that has already ended cannot be missed, and an interrupt can land.
-            wait_not_busy(camera, timeout_ms, "getdata") || return nothing
+            wait_not_busy(camera, timeout_ms, "getdata"; current = () -> camera.capture_generation == gen) || return nothing
             # READY also describes a buffer that was allocated but never ran: check the frame count.
             terr, info = dcamcap_transferinfo(hdcam)
-            if !is_failed(terr) && info.nFrameCount < n
+            is_failed(terr) && (camera.last_error = terr; return nothing)
+            if info.nFrameCount < n
                 camera.last_error = DCAMERR_LOSTFRAME
                 @error "DCAM4Camera $(camera.unique_id): getdata found $(info.nFrameCount) of $(n) frames transferred"
                 return nothing
@@ -260,7 +264,7 @@ function CameraInterface.getdata(camera::DCAM4Camera)
         # On every exit: stop the capture and release the buffer. A failure here is logged, never
         # thrown, so it cannot replace the error or the data that got us here.
         try
-            stop_and_release!(camera)
+            camera.capture_generation == gen && stop_and_release!(camera)
         catch e
             @error "DCAM4Camera $(camera.unique_id): cleanup after getdata failed" exception = e
         end

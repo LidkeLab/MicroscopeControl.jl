@@ -29,7 +29,8 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   camera code. One hang remains: after the rig's GPU code had loaded, a full-frame
   capture hung inside a camera library call, on several cores, until the process was
   ended. It is not fixed here and is tracked for 0.2.7. The NOTREADY, TIMEOUT and
-  NOTSTABLE errors the rig logs during GUI use are not fixed here either. The
+  NOTSTABLE errors the rig logs during GUI use are not fixed here either; the stop and release
+  checks and the buffer freed after a failed start (below) address two plausible causes, unconfirmed on the rig. The
   forced-timeout and sequence checks are still owed. `capture` now refuses while a
   live view or sequence runs.
 
@@ -106,6 +107,14 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   be lit, and its message says that the laser may still be lit if an earlier switch-off failed. It still throws.
 - `CALIBRATION.md`: the calibration reference (step 3b) is recorded inside step 3, with the laser still on and
   before `light_off` and `shutdown`.
+- `DCAM4Camera` `getdata` takes the capture generation at entry and its final stop and release run only while that
+  generation is current, so a live view started meanwhile keeps its buffer.
+- `DCAM4Camera` `stop_and_release!` checks the stop and release return codes; on failure it records `last_error`
+  and leaves `is_running` as it was, since the capture may still be running.
+- `DCAM4Camera` `sequence` and `live` free their buffer (`stop_and_release!`) when the capture fails to start,
+  instead of leaving it until the next start.
+- `DCAM4Camera` `getdata` in SEQUENCE mode: a failed `dcamcap_transferinfo` sets `last_error` and returns
+  `nothing`, instead of reading frames with a success code.
 
 ### Changed
 
