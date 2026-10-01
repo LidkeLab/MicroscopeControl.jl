@@ -10,9 +10,10 @@
 #
 # While tracing is on, a heartbeat task writes a NOTE line every second. While a DCAM call's BEGIN has
 # no END, heartbeats that keep coming mean the call is simply blocking in the library; heartbeats that
-# stop mean every Julia thread is held at a GC stop, waiting for that call. This needs a thread other
-# than the caller's: Julia 1.12+ has one interactive thread by default; on 1.11, start with `-t 1,1`
-# or `-t 2`. On a single thread the heartbeat goes silent during every ccall.
+# stop mean every Julia thread is held at a GC stop, waiting for that call. The heartbeat runs on the
+# default pool, so it needs a default-pool thread other than the caller's. On Julia 1.12+ the main task
+# runs on the interactive thread, so the default thread 1.12+ starts with is enough. On 1.11 start Julia
+# with `-t 2` or more. With a single thread in all, the heartbeat goes silent during every ccall.
 #
 # Off by default; the cost when off is one `Ref{Bool}` check per call. Turn on with
 # `dcam_trace!(path)` (`dcam_trace!(nothing)` turns it off); there is no other way on.
@@ -45,19 +46,19 @@ A failed write to the file turns tracing off with one warning; the DCAM call sti
 
 While tracing is on, a heartbeat writes `NOTE  heartbeat gc_ms=..` every second. Heartbeats that keep
 coming while a BEGIN has no END mean the call is blocking in the library; heartbeats that stop mean
-every Julia thread is held at a GC stop, waiting for that call. This needs a thread other than the
-caller's (Julia 1.12+ has an interactive thread by default; on 1.11 start with `-t 1,1` or `-t 2`).
+every Julia thread is held at a GC stop, waiting for that call. The heartbeat runs on the default pool,
+so it needs a default-pool thread other than the caller's. On Julia 1.12+ the main task runs on the
+interactive thread, so the default thread that 1.12+ starts with is enough. On 1.11 start Julia with
+`-t 2` or more. With a single thread in all, the heartbeat goes silent during every ccall.
 """
 function dcam_trace!(path::Union{AbstractString, Nothing})
     lock(TRACE_CTL_LOCK) do
         hb = HEARTBEAT[]
         if hb !== nothing
+            # Never wait on the old heartbeat: one stuck behind a hung call would block this forever while
+            # it holds TRACE_CTL_LOCK. It checks its stop flag under TRACE_LOCK before each write, so once
+            # the swap below has happened it can no longer write, and it exits on its next tick.
             hb[2][] = true
-            try
-                wait(hb[1])   # outside TRACE_LOCK: the heartbeat may be waiting for it in trace_line
-            catch err         # a failed heartbeat must not keep tracing from being turned off
-                @warn "DCAM4 trace: the heartbeat task failed" exception = err
-            end
             HEARTBEAT[] = nothing
         end
         lock(TRACE_LOCK) do
@@ -71,7 +72,7 @@ function dcam_trace!(path::Union{AbstractString, Nothing})
         end
         if path !== nothing
             stop = Threads.Atomic{Bool}(false)
-            HEARTBEAT[] = (Threads.@spawn(:interactive, heartbeat_loop(stop)), stop)
+            HEARTBEAT[] = (Threads.@spawn(:default, heartbeat_loop(stop)), stop)
         end
     end
     return nothing
@@ -81,7 +82,7 @@ function heartbeat_loop(stop::Threads.Atomic{Bool})
     last = 0.0
     while !stop[] && TRACE_ON[]
         if time() - last >= HEARTBEAT_S || last == 0.0
-            trace_line("NOTE", "", " heartbeat" * gc_fields())
+            trace_line("NOTE", "", " heartbeat" * gc_fields(); guard = stop)
             last = time()
         end
         sleep(0.1)
@@ -89,10 +90,11 @@ function heartbeat_loop(stop::Threads.Atomic{Bool})
     return nothing
 end
 
-function trace_line(kind, name, rest::AbstractString)
+function trace_line(kind, name, rest::AbstractString; guard = nothing)
     lock(TRACE_LOCK) do
         io = TRACE_IO[]
         io === nothing && return
+        guard !== nothing && guard[] && return
         try
             t = Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS.sss")
             println(io, t, " tid=", Threads.threadid(), " ", kind, " ", name, rest)

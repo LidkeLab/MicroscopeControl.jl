@@ -140,6 +140,7 @@ end
         end
         @test any(l -> occursin(hbre, l), readlines(hbpath))
         DC.dcam_trace!(nothing)
+        timedwait(() -> istaskdone(hb1), 2.0)
         @test istaskdone(hb1)
         @test DC.HEARTBEAT[] === nothing
         sz = filesize(hbpath)
@@ -152,9 +153,45 @@ end
         hb2 = DC.HEARTBEAT[][1]
         @test hb2 !== hb1
         DC.dcam_trace!(nothing)
+        timedwait(() -> istaskdone(hb2), 2.0)
         @test istaskdone(hb2)
         @test filesize(hbpath) == sz
         rm(hbpath); rm(hbpath2)
+
+        # A heartbeat stuck behind a hung call must not block dcam_trace!: it no longer waits on it.
+        stuckpath = tempname()
+        DC.dcam_trace!(stuckpath)
+        realhb = DC.HEARTBEAT[]
+        ev = Base.Event()
+        stuck = Threads.@spawn wait(ev)
+        DC.HEARTBEAT[] = (stuck, Threads.Atomic{Bool}(false))
+        t = @async DC.dcam_trace!(nothing)
+        @test timedwait(() -> istaskdone(t), 3.0) === :ok
+        notify(ev)
+        wait(stuck)
+        realhb[2][] = true   # the replaced entry no longer reaches the real heartbeat
+        @test timedwait(() -> istaskdone(realhb[1]), 3.0) === :ok
+        rm(stuckpath)
+
+        # The blocker's test: the heartbeat keeps writing during a long ccall made from this task. It needs a
+        # thread that is not this task's: on 1.12+ the main task is on the interactive thread, so one default
+        # thread is enough; before that the default pool must have two.
+        if Threads.threadpool() !== :default || Threads.nthreads(:default) >= 2
+            bpath = tempname()
+            DC.dcam_trace!(bpath)
+            timedwait(() -> any(l -> occursin("NOTE  heartbeat", l), readlines(bpath)), 3.0)
+            MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall usleep(2_500_000::Cuint)::Cint
+            bl = readlines(bpath)
+            DC.dcam_trace!(nothing)
+            ib = findfirst(l -> occursin(r"BEGIN usleep id=\d+", l), bl)
+            bid = match(r"BEGIN usleep id=(\d+)", bl[ib])[1]
+            ie = findfirst(l -> occursin("END usleep id=$bid ", l), bl)
+            @test count(l -> occursin("NOTE  heartbeat", l), bl[ib:ie]) >= 2
+            rm(bpath)
+        else
+            # a single thread cannot run the heartbeat during a ccall from the only thread
+            @test_skip false
+        end
 
         # A failed trace write turns tracing off with one warning; the call itself still runs.
         # (writing to a closed IOStream does not throw, so /dev/full stands in for a full disk)
