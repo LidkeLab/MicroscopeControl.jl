@@ -1,12 +1,15 @@
 # Opt-in per-call trace of the DCAM library calls. A hang inside a DCAM ccall leaves no Julia frame
 # to inspect, so `@dcamcall` (used at every DCAM ccall site in place of `@ccall`) can write a BEGIN
 # line before and an END line after each call, flushed at once so a killed process leaves its last
-# BEGIN on disk. Cumulative GC time is on every BEGIN and END line: a GC requested by another
-# thread while this thread sits in a long ccall (which is not a GC safe point) makes that thread
-# spin until the call returns, and shows as a jump between a call's BEGIN and END.
+# BEGIN on disk. GC counters are on every BEGIN and END line. `total_time` is only the collection
+# pause. When another thread requests a GC while this thread sits in a long ccall, which is not a GC
+# safe point, the GC waits for this thread to reach a safe point, and that wait is counted in
+# `time_to_safepoint`. A jump in `sp_total_ms`/`sp_max_ms` between a call's BEGIN and END is that
+# wait. `gc_num` is updated only when a collection finishes, so while the hang is still going these
+# numbers do not move; the heartbeat is the in-flight signal.
 #
 # Off by default; the cost when off is one `Ref{Bool}` check per call. Turn on with
-# `dcam_trace!(path)` (`dcam_trace!(nothing)` turns it off) or ENV `MC_DCAM4_TRACE=<path>` at load.
+# `dcam_trace!(path)` (`dcam_trace!(nothing)` turns it off); there is no other way on.
 
 using Dates: Dates
 
@@ -44,7 +47,12 @@ function trace_line(kind, name, rest::AbstractString)
     return nothing
 end
 
-gc_ms() = Base.gc_num().total_time / 1e6
+function gc_fields()
+    g = Base.gc_num()
+    return string(" gc_ms=", round(g.total_time / 1e6, digits = 3),
+                  " sp_total_ms=", round(g.total_time_to_safepoint / 1e6, digits = 3),
+                  " sp_max_ms=", round(g.max_time_to_safepoint / 1e6, digits = 3))
+end
 
 """
     dcam_trace_note(msg)
@@ -75,13 +83,13 @@ function trace_arg(v)
 end
 
 function trace_begin(name, vals)
-    trace_line("BEGIN", name, string(" args=(", join(map(trace_arg, vals), ", "), ") gc_ms=", round(gc_ms(), digits = 3)))
+    trace_line("BEGIN", name, string(" args=(", join(map(trace_arg, vals), ", "), ")", gc_fields()))
     return time_ns()
 end
 
 function trace_end(name, t0, ret)
     ms = (time_ns() - t0) / 1e6
-    trace_line("END", name, string(" elapsed_ms=", round(ms, digits = 3), " ret=", ret, " gc_ms=", round(gc_ms(), digits = 3)))
+    trace_line("END", name, string(" elapsed_ms=", round(ms, digits = 3), " ret=", ret, gc_fields()))
     return nothing
 end
 

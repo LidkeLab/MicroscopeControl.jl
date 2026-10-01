@@ -80,7 +80,8 @@
         DC.dcam_trace!(nothing)
         @test length(lines) == 5
         @test occursin(r"tid=\d+ BEGIN strlen args=\(String\)", lines[1])
-        @test occursin(r"tid=\d+ END strlen elapsed_ms=[\d.]+ ret=5 gc_ms=[\d.]+", lines[2])
+        @test occursin(r"tid=\d+ END strlen elapsed_ms=[\d.]+ ret=5 gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[2])
+        @test occursin(r"BEGIN strlen args=\(String\) gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[1])
         @test occursin("BEGIN abs args=(-7)", lines[3])
         @test occursin("NOTE  marker", lines[5])
 
