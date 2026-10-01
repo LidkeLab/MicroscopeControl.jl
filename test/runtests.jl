@@ -890,6 +890,10 @@ lab_summary("Core") do
             l = readyr(; ref_current_mA=159.95)
             @test_throws ArgumentError light_on(l)
             @test "LD_SetOpenLoopMode" ∉ FK.calls && "LD_EnableOutput" ∉ FK.calls
+            # N1: refused there with the output possibly lit, it is switched off first.
+            l = readyr(; ref_current_mA=159.95); l.properties.is_on = true; empty!(FK.calls)
+            @test_logs (:error, r"output disabled") match_mode = :any @test_throws ArgumentError light_on(l)
+            @test "LD_DisableOutput" ∈ FK.calls && !l.properties.is_on
             # N19: no reference: one warning per initialize, and no extra commands.
             l = ready_cp(); setoutputpower!(l, 10.0)
             @test_logs (:warn, r"no calibration reference") match_mode = :any light_on(l)
@@ -953,27 +957,39 @@ lab_summary("Core") do
             @test_logs light_on(l)
             FK.fail!("LD_SetLaserSetPoint"); light_off(l); FK.status["LD_SetLaserSetPoint"] = 0
             @test l.pd.zero_failed
+            # X2: a zero sent with the output off is ignored by the controller, so it leaves the flag set.
+            light_off(l)
+            @test l.pd.zero_failed
+            @test_logs (:error, r"test failed; output disabled") TCube.disable_after_failure(l, "test")
+            @test l.pd.zero_failed
             initialize(l)
             @test !l.pd.zero_failed
             # B2: setoutputpower! with the output on and the scale unchecked or refused warns; checked, or output off, stays quiet.
             l = readyr(); light_on(l)
             @test_logs setoutputpower!(l, 10.0)
             l.pd.scale_checked = false   # a front-panel switch-on never ran the re-check
-            @test_logs (:warn, r"photodiode scale is unchecked") match_mode = :any setoutputpower!(l, 10.0)
+            @test_logs (:warn, r"photodiode scale is unchecked.*call light_on") match_mode = :any setoutputpower!(l, 10.0)
             l.pd.scale_checked = true; l.pd.scale_refused = true
-            @test_logs (:warn, r"photodiode scale is unchecked") match_mode = :any setoutputpower!(l, 10.0)
+            # N5: light_on refuses until initialize, so the advice is to re-initialize, not to call light_on.
+            @test_logs (:warn, r"photodiode scale is unchecked.*re-initialize after fixing the setup or recalibrating") match_mode = :any setoutputpower!(l, 10.0)
             l = readyr()
             @test_logs setoutputpower!(l, 12.0)
             # B3: the latched refusal first tries a switch-off when the output may be lit, and still throws.
+            # N1: the refusal claims no switch-off; the log says whether one was made and whether it worked.
             l = readyr(); FK.pd_scale[] = 0.5
             @test_throws r"calibration reference" light_on(l)
             empty!(FK.calls)
-            @test_throws r"not lit again" light_on(l)
+            refusal = try light_on(l); nothing catch e; e end
+            @test occursin("not lit again", refusal.msg) && !occursin("switch-off", refusal.msg) && !occursin("still be lit", refusal.msg)
             @test "LD_DisableOutput" ∉ FK.calls   # output off: no switch-off attempt
             l.properties.is_on = true
             empty!(FK.calls)
-            @test_logs (:error, r"output disabled") match_mode = :any @test_throws r"switch-off was just attempted" light_on(l)
+            @test_logs (:error, r"output disabled") match_mode = :any @test_throws r"not lit again" light_on(l)
             @test "LD_DisableOutput" ∈ FK.calls && !l.properties.is_on
+            l.properties.is_on = true; FK.fail!("LD_DisableOutput")
+            @test_logs (:error, r"may still be ON") match_mode = :any @test_throws r"not lit again" light_on(l)
+            @test l.properties.is_on
+            FK.status["LD_DisableOutput"] = 0
             FK.pd_scale[] = 1.0
             # M2: open-loop initialize confirms open loop.
             FK.reset!(); FK.bits[] |= FK.CLOSED; FK.open_loop_ignored[] = true

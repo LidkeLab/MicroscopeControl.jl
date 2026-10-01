@@ -710,7 +710,10 @@ latches the refusal until the next `initialize`: `scale_refused` is set before t
 starts and cleared only on a pass, so every later `light_on` refuses at once, without
 lighting the diode again. A command failure is also cleaned up
 ([`disable_after_failure`](@ref)) and rethrown; a mismatch leaves the output off and
-closed loop restored.
+closed loop restored. Whatever it throws (that latched refusal, a reference above the
+ceiling, a failure or a mismatch), `light_on` first switches the output off
+([`disable_after_failure`](@ref)) when it may be on, as for a `require_clamp` refusal, then
+rethrows; the log says whether that switch-off worked.
 
 The reference is in amps, decoded with `tia_range`. A range the reading does not follow,
 or a `tia_range` relabelled with W/A kept (the 642 nm rig's fact 6), fails the re-check. A
@@ -725,13 +728,10 @@ correct range change, where the words do follow, passes.
 check_scale!(light::TCubeLaser{ConstantCurrent}) = nothing
 function check_scale!(light::TCubeLaser{ConstantPhotocurrent})
     pd, serialNo = light.pd, light.serialNo
-    if pd.scale_refused
-        output_may_be_on(light) && disable_after_failure(light, "light_on (latched calibration-reference refusal)")   # the output may be lit if an earlier switch-off failed
-        error(
-            "TCubeLaser $serialNo: light_on refused: the calibration-reference re-check failed since the last initialize (a mismatch, or a command or mode failure during it), " *
-            "and the diode is not lit again to re-check it. The laser may still be lit if an earlier switch-off failed; a switch-off was just attempted (see the log). " *
-            "Fix the setup or recalibrate (CALIBRATION.md), then call initialize.")
-    end
+    pd.scale_refused && error(
+        "TCubeLaser $serialNo: light_on refused: the calibration-reference re-check failed since the last initialize (a mismatch, or a command or mode failure during it), " *
+        "and the diode is not lit again to re-check it. " *
+        "Fix the setup or recalibrate (CALIBRATION.md), then call initialize.")
     pd.scale_checked && return nothing
     if isnan(pd.ref_current_mA)
         @warn "TCubeLaser $serialNo: no calibration reference (ref_current_mA, ref_photocurrent_A), so the photodiode scale re-check is skipped for this initialize; check_lock's two-sided test is the only guard against a scale change since calibration. See CALIBRATION.md."
@@ -1048,7 +1048,14 @@ controller power cycle can restore the pot).
 """
 function LightSourceInterface.light_on(light::TCubeLaser)
     require_clamp(regulation_mode(light), light, "light_on")
-    check_scale!(light)
+    try
+        check_scale!(light)
+    catch
+        # require_clamp's safety catch: a refusal while the output may be on (an earlier switch-off
+        # failed, or the reference is above the clamp) zeroes and disables it first.
+        output_may_be_on(light) && disable_after_failure(light, "light_on (the calibration-reference check refused while the output may be on)")
+        rethrow()
+    end
     serialNo = light.serialNo
     light.pd isa PhotodiodeLoop && light.pd.zero_failed && @warn "TCubeLaser $serialNo: the last setpoint zero failed, so the controller's stored setpoint may be stale (after a failed re-check, the calibration-reference word read as a power target); the first moments after this enable may run toward it, bounded by the programmed clamp"
     has_request(light) || @warn "TCubeLaser $(serialNo): light_on before any setpoint was requested; sending setpoint 0, since the controller's stored setpoint cannot be trusted"
@@ -1228,7 +1235,8 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
     check_power(light, power_mW)
     pd, serialNo = light.pd, light.serialNo
     on = light.properties.is_on || bits & STATUS_BITS.output_enabled != 0
-    on && (pd.scale_refused || !pd.scale_checked) && @warn "TCubeLaser $serialNo: the photodiode scale is unchecked (the calibration re-check was refused or has not run), so the delivered power may differ from the request (twice it at half the photodiode gain); recalibrate or call light_on"
+    on && (pd.scale_refused || !pd.scale_checked) && @warn "TCubeLaser $serialNo: the photodiode scale is unchecked (the calibration re-check was refused or has not run), so the delivered power may differ from the request (twice it at half the photodiode gain); " *
+        (pd.scale_refused ? "re-initialize after fixing the setup or recalibrating (light_on refuses until then)" : "recalibrate or call light_on")
     overrange = try
         bits & STATUS_BITS.tia_over != 0 || (on && read_photocurrent_word(light) == PHOTOCURRENT_OVER_RANGE)
     catch
@@ -1281,7 +1289,7 @@ function zero_then_disable(light::TCubeLaser)
     serialNo = light.serialNo
     zeroed = zero_setpoint(light)
     isnothing(zeroed) || @error "TCubeLaser $serialNo: zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
-    light.pd isa PhotodiodeLoop && (light.pd.zero_failed = !isnothing(zeroed))
+    note_zero!(light, zeroed)
     check_err(LD_DisableOutput(serialNo), "LD_DisableOutput", serialNo)
     light.properties.is_on = false
     return nothing
@@ -1300,7 +1308,7 @@ the next enable must start dark, not on a stale setpoint.
 function disable_after_failure(light::TCubeLaser, what::AbstractString)
     serialNo = light.serialNo
     zeroed = zero_setpoint(light)
-    light.pd isa PhotodiodeLoop && (light.pd.zero_failed = !isnothing(zeroed))
+    note_zero!(light, zeroed)
     disabled, offerr = false, nothing
     try
         status = LD_DisableOutput(serialNo)
@@ -1317,6 +1325,19 @@ function disable_after_failure(light::TCubeLaser, what::AbstractString)
         @error "TCubeLaser $serialNo: $what failed and the disable failed ($offerr)$zeronote; the output may still be ON at the controller's stored setpoint"
     end
     return disabled
+end
+
+# Record a setpoint zero's outcome in `pd.zero_failed` (power mode), before the disable. A failed zero sets it. A
+# zero sent with the output off is ignored by the controller, so only one sent while the output is recorded on
+# (`properties.is_on`) clears it; `initialize` clears it too.
+function note_zero!(light::TCubeLaser, zeroed)
+    light.pd isa PhotodiodeLoop || return nothing
+    if !isnothing(zeroed)
+        light.pd.zero_failed = true
+    elseif light.properties.is_on
+        light.pd.zero_failed = false
+    end
+    return nothing
 end
 
 """

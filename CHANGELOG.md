@@ -96,16 +96,21 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
 - `DCAM4Camera`: clearing a leftover capture handles every state (a capture in the ERROR state was neither stopped
   nor released), and `abort` now does exactly that.
 - `TCubeLaser` power mode: a failed setpoint zero (in `light_off`, or in a failure cleanup) is no longer only
-  logged. It is flagged in the laser's state (`PhotodiodeLoop.zero_failed`, cleared by a later successful zero
-  and by `initialize`), and the next `light_on` warns that the controller's stored setpoint may be stale and
+  logged. It is flagged in the laser's state (`PhotodiodeLoop.zero_failed`, cleared only by a zero that lands,
+  one sent while the output is recorded on, since the controller ignores a zero sent with the output off, and by
+  `initialize`), and the next `light_on` warns that the controller's stored setpoint may be stale and
   that the first moments after the enable may run toward it, bounded by the programmed clamp.
 - `TCubeLaser` power mode: `setoutputpower!` with the output on warns when the photodiode scale is unchecked (the
   calibration re-check was refused or has not run, as after a front-panel switch-on): the delivered power may
-  differ from the request, by twice at half the photodiode gain. Recalibrate or call `light_on`.
-- `TCubeLaser` power mode: the latched calibration-reference refusal tries a switch-off first when the output may
-  be lit, and its message says that the laser may still be lit if an earlier switch-off failed. It still throws.
-- `CALIBRATION.md`: the calibration reference (step 3b) is recorded inside step 3, with the laser still on and
-  before `light_off` and `shutdown`.
+  differ from the request, by twice at half the photodiode gain. Recalibrate or call `light_on`; after a refused
+  re-check, which `light_on` keeps refusing until `initialize`, it says to re-initialize after fixing the setup or
+  recalibrating.
+- `TCubeLaser` power mode: whatever the calibration-reference re-check throws in `light_on` (the latched refusal,
+  a reference above the current ceiling, a command failure or a mismatch), the output is switched off first when
+  it may be lit, as for a `require_clamp` refusal, and the error is rethrown. The log says whether the switch-off
+  worked; the refusal message no longer claims a switch-off that was not made.
+- `CALIBRATION.md`: the calibration reference (step 3b) is recorded inside step 3, with the laser still on, and
+  its code block ends with `light_off(laser); shutdown(laser)`, so running the blocks in order leaves the diode off.
 
 ### Changed
 
@@ -141,6 +146,19 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   next `initialize`. Without one, that `light_on` warns once that the check is skipped. See `CALIBRATION.md`.
   **Every rig that uses power mode should record one** (`ref_current_mA`, `ref_photocurrent_A`),
   with its next W/A measurement; `CALIBRATION.md` step 3b says how.
+
+### Known issues
+
+- Camera (`DCAM4Camera`), fixed in 0.2.7:
+  - A frame read waiting in `getdata` can stop and release a newer live view's buffer if another task starts one.
+  - A failed stop or buffer release is not recorded, and the camera is marked stopped; it recovers at the next start.
+  - A sequence or live view that fails to start leaves its buffer allocated until the next start.
+  - If the frame-count query fails, a sequence can return frames without checking that all arrived.
+- Laser (`TCubeLaser`):
+  - In power mode, a zero sent right after a failed enable counts as landed, so the next `light_on` may not warn
+    about a stale stored setpoint. The first moments after that enable are still bounded by the programmed clamp.
+  - In `CALIBRATION.md`, if reading the reference throws, the example's `light_off` and `shutdown` do not run:
+    switch the laser off by hand after any error there.
 
 ## [0.2.5] - 2026-09-29
 
