@@ -725,9 +725,13 @@ correct range change, where the words do follow, passes.
 check_scale!(light::TCubeLaser{ConstantCurrent}) = nothing
 function check_scale!(light::TCubeLaser{ConstantPhotocurrent})
     pd, serialNo = light.pd, light.serialNo
-    pd.scale_refused && error(
-        "TCubeLaser $serialNo: light_on refused: the calibration-reference re-check failed since the last initialize (a mismatch, or a command or mode failure during it), " *
-        "and the diode is not lit again to re-check it. Fix the setup or recalibrate (CALIBRATION.md), then call initialize.")
+    if pd.scale_refused
+        output_may_be_on(light) && disable_after_failure(light, "light_on (latched calibration-reference refusal)")   # the output may be lit if an earlier switch-off failed
+        error(
+            "TCubeLaser $serialNo: light_on refused: the calibration-reference re-check failed since the last initialize (a mismatch, or a command or mode failure during it), " *
+            "and the diode is not lit again to re-check it. The laser may still be lit if an earlier switch-off failed; a switch-off was just attempted (see the log). " *
+            "Fix the setup or recalibrate (CALIBRATION.md), then call initialize.")
+    end
     pd.scale_checked && return nothing
     if isnan(pd.ref_current_mA)
         @warn "TCubeLaser $serialNo: no calibration reference (ref_current_mA, ref_photocurrent_A), so the photodiode scale re-check is skipped for this initialize; check_lock's two-sided test is the only guard against a scale change since calibration. See CALIBRATION.md."
@@ -921,6 +925,7 @@ function reset_loop_state!(light::TCubeLaser{ConstantPhotocurrent})
     pd.max_current_clamp = NaN
     pd.scale_checked = false
     pd.scale_refused = false
+    pd.zero_failed = false
     return nothing
 end
 
@@ -1045,6 +1050,7 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     require_clamp(regulation_mode(light), light, "light_on")
     check_scale!(light)
     serialNo = light.serialNo
+    light.pd isa PhotodiodeLoop && light.pd.zero_failed && @warn "TCubeLaser $serialNo: the last setpoint zero failed, so the controller's stored setpoint may be stale (after a failed re-check, the calibration-reference word read as a power target); the first moments after this enable may run toward it, bounded by the programmed clamp"
     has_request(light) || @warn "TCubeLaser $(serialNo): light_on before any setpoint was requested; sending setpoint 0, since the controller's stored setpoint cannot be trusted"
     code = intended_code(light)
     # On (or unknown) from the moment the enable is sent (Codex C3); a failed
@@ -1222,6 +1228,7 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
     check_power(light, power_mW)
     pd, serialNo = light.pd, light.serialNo
     on = light.properties.is_on || bits & STATUS_BITS.output_enabled != 0
+    on && (pd.scale_refused || !pd.scale_checked) && @warn "TCubeLaser $serialNo: the photodiode scale is unchecked (the calibration re-check was refused or has not run), so the delivered power may differ from the request (twice it at half the photodiode gain); recalibrate or call light_on"
     overrange = try
         bits & STATUS_BITS.tia_over != 0 || (on && read_photocurrent_word(light) == PHOTOCURRENT_OVER_RANGE)
     catch
@@ -1274,6 +1281,7 @@ function zero_then_disable(light::TCubeLaser)
     serialNo = light.serialNo
     zeroed = zero_setpoint(light)
     isnothing(zeroed) || @error "TCubeLaser $serialNo: zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
+    light.pd isa PhotodiodeLoop && (light.pd.zero_failed = !isnothing(zeroed))
     check_err(LD_DisableOutput(serialNo), "LD_DisableOutput", serialNo)
     light.properties.is_on = false
     return nothing
@@ -1292,6 +1300,7 @@ the next enable must start dark, not on a stale setpoint.
 function disable_after_failure(light::TCubeLaser, what::AbstractString)
     serialNo = light.serialNo
     zeroed = zero_setpoint(light)
+    light.pd isa PhotodiodeLoop && (light.pd.zero_failed = !isnothing(zeroed))
     disabled, offerr = false, nothing
     try
         status = LD_DisableOutput(serialNo)

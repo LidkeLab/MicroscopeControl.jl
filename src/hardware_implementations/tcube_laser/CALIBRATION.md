@@ -239,7 +239,7 @@ for I in 70.0:10.0:130.0
     P = parse(Float64, readline())
     push!(rows, (I_mA = I, I_pd_A = s.photocurrent_A, P_mW = P))
 end
-light_off(laser)
+# the laser stays on: record the calibration reference (3b) before light_off and shutdown
 
 x = [r.I_pd_A for r in rows]
 y = [r.P_mW / 1000 for r in rows]                # W
@@ -249,16 +249,18 @@ wa_calibration = sum(x .* y) / sum(x .^ 2)       # least squares through the ori
 Is = [r.I_mA for r in rows]; Ps = [r.P_mW for r in rows]
 slope = sum((Is .- mean(Is)) .* (Ps .- mean(Ps))) / sum((Is .- mean(Is)) .^ 2)
 threshold_current = mean(Is) - mean(Ps) / slope
-
-shutdown(laser)
 ```
 
 Check the residuals: if power against photocurrent is not a straight line, the
 range is wrong (step 1) or the photodiode is saturating.
 
+Step 3b belongs to this step and runs now, with the laser still on. Only then switch it
+off, with `light_off(laser)` and `shutdown(laser)`.
+
 ### 3b. Record the calibration reference
 
-Do this in the same session, on the same range and gain as the W/A factor. Pick one
+Do this inside step 3, before its `light_off(laser)` and `shutdown(laser)`, on the same
+range and gain as the W/A factor. Pick one
 current from the sweep at least 20 mA above threshold and at most the power-mode
 `max_current`, whose indicated power is at most `max_power` (the constructor refuses
 otherwise). On the 642 nm rig that is 90 mA (about 99 uA, about 22 mW at 224.2 W/A).

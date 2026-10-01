@@ -940,6 +940,41 @@ lab_summary("Core") do
             empty!(FK.calls)
             @test_throws r"not lit again" light_on(l)
             @test "LD_SetOpenLoopMode" ∉ FK.calls && "LD_EnableOutput" ∉ FK.calls
+            # B1: a failed zero sets a flag; the next power-mode light_on warns once; a good zero or initialize clears it.
+            l = readyr(); light_on(l)
+            @test !l.pd.zero_failed
+            FK.fail!("LD_SetLaserSetPoint")
+            @test_logs (:error, r"zeroing the setpoint") match_mode = :any light_off(l)
+            @test l.pd.zero_failed
+            FK.status["LD_SetLaserSetPoint"] = 0
+            @test_logs (:warn, r"stored setpoint may be stale") match_mode = :any light_on(l)
+            light_off(l)
+            @test !l.pd.zero_failed
+            @test_logs light_on(l)
+            FK.fail!("LD_SetLaserSetPoint"); light_off(l); FK.status["LD_SetLaserSetPoint"] = 0
+            @test l.pd.zero_failed
+            initialize(l)
+            @test !l.pd.zero_failed
+            # B2: setoutputpower! with the output on and the scale unchecked or refused warns; checked, or output off, stays quiet.
+            l = readyr(); light_on(l)
+            @test_logs setoutputpower!(l, 10.0)
+            l.pd.scale_checked = false   # a front-panel switch-on never ran the re-check
+            @test_logs (:warn, r"photodiode scale is unchecked") match_mode = :any setoutputpower!(l, 10.0)
+            l.pd.scale_checked = true; l.pd.scale_refused = true
+            @test_logs (:warn, r"photodiode scale is unchecked") match_mode = :any setoutputpower!(l, 10.0)
+            l = readyr()
+            @test_logs setoutputpower!(l, 12.0)
+            # B3: the latched refusal first tries a switch-off when the output may be lit, and still throws.
+            l = readyr(); FK.pd_scale[] = 0.5
+            @test_throws r"calibration reference" light_on(l)
+            empty!(FK.calls)
+            @test_throws r"not lit again" light_on(l)
+            @test "LD_DisableOutput" ∉ FK.calls   # output off: no switch-off attempt
+            l.properties.is_on = true
+            empty!(FK.calls)
+            @test_logs (:error, r"output disabled") match_mode = :any @test_throws r"switch-off was just attempted" light_on(l)
+            @test "LD_DisableOutput" ∈ FK.calls && !l.properties.is_on
+            FK.pd_scale[] = 1.0
             # M2: open-loop initialize confirms open loop.
             FK.reset!(); FK.bits[] |= FK.CLOSED; FK.open_loop_ignored[] = true
             l = cc()

@@ -167,8 +167,11 @@ delivered power drifts while photocurrent is held steady. That is why
   was skipped for want of a reference.
 - `scale_refused::Bool`: state, `true` once this initialize's re-check found a mismatch.
   Every later power-mode `light_on` refuses without lighting the diode until the next `initialize`.
+- `zero_failed::Bool`: state, `true` while the last setpoint zero failed (cleared by a later
+  successful zero and by `initialize`). The next power-mode `light_on` warns that the controller's
+  stored setpoint may be stale.
 
-Construct it with the keyword form, which fills the last twelve fields.
+Construct it with the keyword form, which fills the last thirteen fields.
 """
 mutable struct PhotodiodeLoop
     wa_calibration::Float64
@@ -186,6 +189,7 @@ mutable struct PhotodiodeLoop
     ref_ratio::Float64
     scale_checked::Bool
     scale_refused::Bool
+    zero_failed::Bool
 end
 
 """
@@ -224,6 +228,6 @@ function PhotodiodeLoop(; wa_calibration::Real, tia_range::Real, tec_stabilised:
                           Float64(ramp_step_mW), Float64(ramp_step_s), Float64(lock_check_s), Float64(lock_ratio),
                           ref_current_mA === nothing ? NaN : Float64(ref_current_mA),
                           ref_photocurrent_A === nothing ? NaN : Float64(ref_photocurrent_A),
-                          Float64(ref_ratio), false, false)
+                          Float64(ref_ratio), false, false, false)
 end
 
