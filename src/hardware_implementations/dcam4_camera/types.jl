@@ -29,7 +29,24 @@ mutable struct DCAM4Camera <: Camera
     data::Array{UInt16}
     readout_s::Float64
     capture_generation::Int
+    # The per-camera acquisition lock. It serializes every start (`live`, `sequence`, `capture`) with
+    # `stop_and_release!` (and so `abort`), and covers `getdata`'s generation check, its frame reads and
+    # its final cleanup, and the `sequence` poller's check-and-act (its stop, and clearing `is_running`).
+    # Every holder makes only non-blocking DCAM calls (status, stop, release, alloc, start, property
+    # get/set, transferinfo, frame copy, and `capture`'s `dcamwait_open`). The blocking parts run with it
+    # released: `wait_not_busy`'s poll and sleep (in `getdata` and the poller) and `capture`'s
+    # `dcamwait_event`; so does `capture`'s `dcamwait_close`, and `getlastframe` never takes it. No holder
+    # waits for the poller, for `is_running`, or for another task, so each hold ends in bounded time and
+    # the poller, which takes it last and only around a check-and-act, cannot block forever. Reentrant:
+    # `stop_and_release!` runs inside the starts and inside `getdata`'s cleanup.
+    acquisition_lock::ReentrantLock
 end
+
+# The fields before the lock, positionally; the lock is always a new one.
+DCAM4Camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
+            sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation) =
+    DCAM4Camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
+                sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation, ReentrantLock())
 
 function DCAM4Camera(dev_id::Int = 0;
     unique_id::String="DCAM4Camera",

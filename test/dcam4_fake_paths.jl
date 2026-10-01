@@ -13,7 +13,9 @@
         FK.status[] = DC.DCAMCAP_STATUS_BUSY
         cam = fake_camera(DC.SEQUENCE)
         FK.on_status[] = () -> (cam.capture_generation += 1)   # a live view replaces the capture mid-poll
-        @test CameraInterface.getdata(cam) === nothing
+        # N3: one warning, and last_error left as it was.
+        @test_logs (:warn, r"replaced by a newer one") @test CameraInterface.getdata(cam) === nothing
+        @test cam.last_error == DC.DCAMERR_SUCCESS
         @test FK.first_index("dcamcap_stop") === nothing && FK.first_index("dcambuf_release") === nothing
         # Control: a current getdata still cleans up.
         FK.reset!()
@@ -59,9 +61,46 @@
         FK.reset!()
         FK.status[] = DC.DCAMCAP_STATUS_STABLE
         FK.codes["dcamcap_transferinfo"] = DC.DCAMERR_NOTREADY
+        FK.frames_transferred[] = 2   # all transferred: only the failed read itself can stop the frame reads
         cam = fake_camera(DC.SEQUENCE)
         @test CameraInterface.getdata(cam) === nothing
         @test cam.last_error == DC.DCAMERR_NOTREADY
         @test FK.first_index("dcambuf_getframe_err") === nothing
+    end
+
+    @testset "X3: getdata superseded during a status read that ends the poll reads no frame" begin
+        FK.reset!()
+        FK.status[] = DC.DCAMCAP_STATUS_STABLE   # not BUSY, so this one read ends the poll
+        FK.frames_transferred[] = 2
+        cam = fake_camera(DC.SEQUENCE)
+        FK.on_status[] = () -> (cam.capture_generation += 1)   # a newer capture replaces it during that read
+        @test_logs (:warn, r"replaced by a newer one") @test CameraInterface.getdata(cam) === nothing
+        @test FK.first_index("dcamcap_transferinfo") === nothing && FK.first_index("dcambuf_getframe_err") === nothing
+        @test FK.first_index("dcamcap_stop") === nothing && FK.first_index("dcambuf_release") === nothing
+    end
+
+    @testset "X1: a live view started during getdata's cleanup keeps its buffer" begin
+        FK.reset!()
+        FK.status[] = DC.DCAMCAP_STATUS_READY   # a single frame captured, its buffer still attached
+        cam = fake_camera(DC.SINGLE_FRAME)
+        live_task = Ref{Task}()
+        # A single frame is read with no poll, so the first status read is the cleanup's. It starts a live
+        # view on another task and yields once, so that task runs as far as it can before the cleanup reads on.
+        FK.on_status[] = function ()
+            FK.on_status[] = () -> nothing
+            live_task[] = @async CameraInterface.live(cam)
+            yield()
+            istaskdone(live_task[]) && (FK.status[] = DC.DCAMCAP_STATUS_BUSY)   # the live view started, and runs
+        end
+        # No log output: a log write could yield inside the live start and hide the race.
+        Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+            CameraInterface.getdata(cam)
+        end
+        wait(live_task[])
+        start = FK.last_index("dcamcap_start")
+        @test start !== nothing
+        @test FK.last_index("dcambuf_release") < start
+        @test something(FK.last_index("dcamcap_stop"), 0) < start
+        @test cam.is_running
     end
 end

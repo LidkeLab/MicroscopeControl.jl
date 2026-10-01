@@ -167,9 +167,9 @@ delivered power drifts while photocurrent is held steady. That is why
   was skipped for want of a reference.
 - `scale_refused::Bool`: state, `true` once this initialize's re-check found a mismatch.
   Every later power-mode `light_on` refuses without lighting the diode until the next `initialize`.
-- `zero_failed::Bool`: state, `true` while the last setpoint zero failed (cleared by a later
-  successful zero and by `initialize`). The next power-mode `light_on` warns that the controller's
-  stored setpoint may be stale.
+- `zero_failed::Bool`: state, `true` once a setpoint zero failed, until a zero lands (one that
+  succeeds while the output is recorded on; the controller ignores a zero sent with the output off)
+  or `initialize`. The next power-mode `light_on` warns that the controller's stored setpoint may be stale.
 
 Construct it with the keyword form, which fills the last thirteen fields.
 """

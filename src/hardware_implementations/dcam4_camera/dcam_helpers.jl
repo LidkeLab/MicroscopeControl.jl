@@ -268,21 +268,24 @@ stopped); then anything with a buffer is released. The helpers log their own fai
 `camera.is_running = false` unless the stop or the release failed; then it records that error in `last_error` and leaves
 `is_running` as it was, since the capture may still be running. It also increments `capture_generation`, so a `sequence` poller started before it no
 longer acts. Every start goes through it first: `live` and `sequence` through `abort`, and `capture` directly.
+It holds the camera's acquisition lock throughout (see `DCAM4Camera`), so no start interleaves with it.
 """
 function stop_and_release!(camera::DCAM4Camera)
-    camera.capture_generation += 1  # any stop makes every older sequence poller stale
-    hdcam = camera.camera_handle
-    err, status = dcamcap_status(hdcam)
-    # Nothing to do only when the status is known to be STABLE (no buffer) or UNSTABLE. A failed
-    # status read, BUSY or ERROR is stopped; then anything with a buffer is released. The helpers
-    # log their own failures and never throw.
-    if is_failed(err) || !(status == DCAMCAP_STATUS_STABLE || status == DCAMCAP_STATUS_UNSTABLE)
-        serr = status == DCAMCAP_STATUS_READY ? DCAMERR_SUCCESS : dcamcap_stop(hdcam)
-        rerr = dcambuf_release(hdcam)
-        failed = is_failed(serr) ? serr : rerr
-        is_failed(failed) && (camera.last_error = failed; return nothing)  # may still be running: is_running is left as it was
+    @lock camera.acquisition_lock begin  # no other start or stop interleaves (see `DCAM4Camera`)
+        camera.capture_generation += 1  # any stop makes every older sequence poller stale
+        hdcam = camera.camera_handle
+        err, status = dcamcap_status(hdcam)
+        # Nothing to do only when the status is known to be STABLE (no buffer) or UNSTABLE. A failed
+        # status read, BUSY or ERROR is stopped; then anything with a buffer is released. The helpers
+        # log their own failures and never throw.
+        if is_failed(err) || !(status == DCAMCAP_STATUS_STABLE || status == DCAMCAP_STATUS_UNSTABLE)
+            serr = status == DCAMCAP_STATUS_READY ? DCAMERR_SUCCESS : dcamcap_stop(hdcam)
+            rerr = dcambuf_release(hdcam)
+            failed = is_failed(serr) ? serr : rerr
+            is_failed(failed) && (camera.last_error = failed; return nothing)  # may still be running: is_running is left as it was
+        end
+        camera.is_running = false
     end
-    camera.is_running = false
     return nothing
 end
 

@@ -259,8 +259,8 @@ off, with `light_off(laser)` and `shutdown(laser)`.
 
 ### 3b. Record the calibration reference
 
-Do this inside step 3, before its `light_off(laser)` and `shutdown(laser)`, on the same
-range and gain as the W/A factor. Pick one
+Do this inside step 3, with the laser still on, on the same range and gain as the W/A
+factor; the block below ends step 3 with `light_off(laser)` and `shutdown(laser)`. Pick one
 current from the sweep at least 20 mA above threshold and at most the power-mode
 `max_current`, whose indicated power is at most `max_power` (the constructor refuses
 otherwise). On the 642 nm rig that is 90 mA (about 99 uA, about 22 mW at 224.2 W/A).
@@ -269,6 +269,7 @@ otherwise). On the 642 nm rig that is 90 mA (about 99 uA, about 22 mW at 224.2 W
 TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
 setcurrent!(laser, 90.0); sleep(1.0)
 ref_photocurrent_A = TCube.photocurrent_from_raw(laser, TCube.read_photocurrent_word(laser), 1e-3)  # decode with the tia_range the power-mode config will state
+light_off(laser); shutdown(laser)                # the end of step 3: the laser is off
 ```
 
 Then pass `ref_current_mA = 90.0, ref_photocurrent_A = ref_photocurrent_A` when you build

@@ -97,18 +97,27 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
 - `DCAM4Camera`: clearing a leftover capture handles every state (a capture in the ERROR state was neither stopped
   nor released), and `abort` now does exactly that.
 - `TCubeLaser` power mode: a failed setpoint zero (in `light_off`, or in a failure cleanup) is no longer only
-  logged. It is flagged in the laser's state (`PhotodiodeLoop.zero_failed`, cleared by a later successful zero
-  and by `initialize`), and the next `light_on` warns that the controller's stored setpoint may be stale and
+  logged. It is flagged in the laser's state (`PhotodiodeLoop.zero_failed`, cleared only by a zero that lands,
+  one sent while the output is recorded on, since the controller ignores a zero sent with the output off, and by
+  `initialize`), and the next `light_on` warns that the controller's stored setpoint may be stale and
   that the first moments after the enable may run toward it, bounded by the programmed clamp.
 - `TCubeLaser` power mode: `setoutputpower!` with the output on warns when the photodiode scale is unchecked (the
   calibration re-check was refused or has not run, as after a front-panel switch-on): the delivered power may
-  differ from the request, by twice at half the photodiode gain. Recalibrate or call `light_on`.
-- `TCubeLaser` power mode: the latched calibration-reference refusal tries a switch-off first when the output may
-  be lit, and its message says that the laser may still be lit if an earlier switch-off failed. It still throws.
-- `CALIBRATION.md`: the calibration reference (step 3b) is recorded inside step 3, with the laser still on and
-  before `light_off` and `shutdown`.
-- `DCAM4Camera` `getdata` takes the capture generation at entry and its final stop and release run only while that
-  generation is current, so a live view started meanwhile keeps its buffer.
+  differ from the request, by twice at half the photodiode gain. Recalibrate or call `light_on`; after a refused
+  re-check, which `light_on` keeps refusing until `initialize`, it says to re-initialize after fixing the setup or
+  recalibrating.
+- `TCubeLaser` power mode: whatever the calibration-reference re-check throws in `light_on` (the latched refusal,
+  a reference above the current ceiling, a command failure or a mismatch), the output is switched off first when
+  it may be lit, as for a `require_clamp` refusal, and the error is rethrown. The log says whether the switch-off
+  worked; the refusal message no longer claims a switch-off that was not made.
+- `CALIBRATION.md`: the calibration reference (step 3b) is recorded inside step 3, with the laser still on, and
+  its code block ends with `light_off(laser); shutdown(laser)`, so running the blocks in order leaves the diode off.
+- `DCAM4Camera`: one internal lock per camera serializes the starts (`live`, `sequence`, `capture`) with
+  `stop_and_release!` and `abort`, and covers `getdata`'s check that its capture is still current, its frame reads
+  and its final stop and release, and the `sequence` task's stop. No status poll or frame wait runs under it. So a
+  `getdata` whose capture a newer one replaced, from another task, never reads the newer capture's frames or
+  releases its buffer, including a live view started during `getdata`'s cleanup; it logs one warning and returns
+  `nothing`, with `last_error` unchanged.
 - `DCAM4Camera` `stop_and_release!` checks the stop and release return codes; on failure it records `last_error`
   and leaves `is_running` as it was, since the capture may still be running.
 - `DCAM4Camera` `sequence` and `live` free their buffer (`stop_and_release!`) when the capture fails to start,
