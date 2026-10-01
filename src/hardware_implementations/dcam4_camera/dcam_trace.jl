@@ -10,10 +10,15 @@
 #
 # While tracing is on, a heartbeat task writes a NOTE line every second. While a DCAM call's BEGIN has
 # no END, heartbeats that keep coming mean the call is simply blocking in the library; heartbeats that
-# stop mean every Julia thread is held at a GC stop, waiting for that call. The heartbeat runs on the
-# default pool, so it needs a default-pool thread other than the caller's. On Julia 1.12+ the main task
-# runs on the interactive thread, so the default thread 1.12+ starts with is enough. On 1.11 start Julia
-# with `-t 2` or more. With a single thread in all, the heartbeat goes silent during every ccall.
+# stop mean every Julia thread is held at a GC stop, waiting for that call. Julia's `sleep` and timers
+# fire from the libuv event loop, which thread 1 runs, so a sleep-based heartbeat is silent during any
+# ccall on thread 1. This heartbeat instead blocks its own thread 1 ms at a time and yields between
+# waits. It runs on the default pool, so it needs a default-pool thread other than the caller's. On Julia
+# 1.12+ the main task runs on the interactive thread, so the default thread 1.12+ starts with is enough.
+# On 1.11 start Julia with `-t 2` or more. With a single thread in all, the heartbeat goes silent during
+# every ccall. Cost while tracing is on: a GC waits up to one heartbeat wait (about 1 ms, up to about
+# 16 ms on Windows, whose Sleep clock is coarse) longer to reach a safepoint; a GC held by a hung DCAM
+# call shows as seconds.
 #
 # Off by default; the cost when off is one `Ref{Bool}` check per call. Turn on with
 # `dcam_trace!(path)` (`dcam_trace!(nothing)` turns it off); there is no other way on.
@@ -50,7 +55,11 @@ within its segment.
 
 While tracing is on, a heartbeat writes `NOTE  heartbeat gc_ms=..` every second. Heartbeats that keep
 coming while a BEGIN has no END mean the call is blocking in the library; heartbeats that stop mean
-every Julia thread is held at a GC stop, waiting for that call. The heartbeat runs on the default pool,
+every Julia thread is held at a GC stop, waiting for that call. Julia's `sleep` and timers fire from
+the libuv event loop, which thread 1 runs, so a sleep-based heartbeat would be silent during any ccall
+on thread 1; this one blocks its own thread 1 ms at a time and yields between waits. The cost while tracing
+is on is that a GC waits up to one such wait (about 1 ms, up to about 16 ms on Windows) longer to reach a
+safepoint; a GC held by a hung DCAM call shows as seconds. The heartbeat runs on the default pool,
 so it needs a default-pool thread other than the caller's. On Julia 1.12+ the main task runs on the
 interactive thread, so the default thread that 1.12+ starts with is enough. On 1.11 start Julia with
 `-t 2` or more. With a single thread in all, the heartbeat goes silent during every ccall.
@@ -105,7 +114,8 @@ function heartbeat_loop(stop::Threads.Atomic{Bool})
             end
             last = time()
         end
-        sleep(0.1)
+        Libc.systemsleep(0.001)   # not `sleep`: timers fire from the libuv loop, which thread 1 runs
+        yield()                   # without this the loop can hold its thread and starve a sticky main task
     end
     return nothing
 end
