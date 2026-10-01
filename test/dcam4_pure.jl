@@ -159,16 +159,33 @@ end
         # A failed trace write turns tracing off with one warning; the call itself still runs.
         # (writing to a closed IOStream does not throw, so /dev/full stands in for a full disk)
         # The heartbeat's first line or the call's BEGIN fails first, depending on threads: one warning either way.
-        r = @test_logs (:warn, r"tracing is now off") begin
-            DC.dcam_trace!("/dev/full")
-            v = f("hello")
-            wait(DC.HEARTBEAT[][1])
-            v
+        if Sys.islinux()   # /dev/full is Linux-only
+            r = @test_logs (:warn, r"tracing is now off") begin
+                DC.dcam_trace!("/dev/full")
+                v = f("hello")
+                wait(DC.HEARTBEAT[][1])
+                v
+            end
+            @test r == 5
+            @test !DC.TRACE_ON[]
+            @test (@test_logs f("hello")) == 5
+            DC.dcam_trace!(nothing)
         end
-        @test r == 5
-        @test !DC.TRACE_ON[]
-        @test (@test_logs f("hello")) == 5
+
+        # The catch in the traced branch must not bind the caller's `err` (the DCAM call sites all have one).
+        function caller_err()
+            err = :untouched
+            try
+                MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall strlen("a\0b"::Cstring)::Csize_t
+            catch
+            end
+            return err
+        end
+        errpath = tempname()
+        DC.dcam_trace!(errpath)
+        @test caller_err() === :untouched
         DC.dcam_trace!(nothing)
+        rm(errpath)
 
         # A Ref to a struct logs its Int32 fields, so a wait's timeout shows.
         @test occursin("DCAMWAIT_START{size=16,eventhappened=0,eventmask=2,timeout=1000}", DC.trace_arg(Ref(DC.DCAMWAIT_START(Int32(2), Int32(1000)))))

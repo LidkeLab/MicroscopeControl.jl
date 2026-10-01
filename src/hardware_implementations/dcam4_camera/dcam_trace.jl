@@ -53,7 +53,11 @@ function dcam_trace!(path::Union{AbstractString, Nothing})
         hb = HEARTBEAT[]
         if hb !== nothing
             hb[2][] = true
-            wait(hb[1])   # outside TRACE_LOCK: the heartbeat may be waiting for it in trace_line
+            try
+                wait(hb[1])   # outside TRACE_LOCK: the heartbeat may be waiting for it in trace_line
+            catch err         # a failed heartbeat must not keep tracing from being turned off
+                @warn "DCAM4 trace: the heartbeat task failed" exception = err
+            end
             HEARTBEAT[] = nothing
         end
         lock(TRACE_LOCK) do
@@ -187,7 +191,7 @@ macro dcamcall(expr)
         push!(newargs, Expr(:(::), t, a.args[2]))
     end
     plain = :(Base.@ccall $(Expr(:(::), Expr(:call, newargs...), ret)))
-    r = gensym("ret"); t0 = gensym("t0"); id = gensym("id")
+    r = gensym("ret"); t0 = gensym("t0"); id = gensym("id"); e = gensym("err")
     on = GlobalRef(@__MODULE__, :TRACE_ON)
     return esc(quote
         let $(binds...)
@@ -195,8 +199,8 @@ macro dcamcall(expr)
                 ($id, $t0) = $(GlobalRef(@__MODULE__, :trace_begin))($fname, ($(tmps...),))
                 $r = try
                     $plain
-                catch err
-                    $(GlobalRef(@__MODULE__, :trace_throw))($fname, $id, $t0, err)
+                catch $e
+                    $(GlobalRef(@__MODULE__, :trace_throw))($fname, $id, $t0, $e)
                     rethrow()
                 end
                 $(GlobalRef(@__MODULE__, :trace_end))($fname, $id, $t0, $r)
