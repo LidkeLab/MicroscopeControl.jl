@@ -10,15 +10,18 @@
 #
 # While tracing is on, a heartbeat task writes a NOTE line every second. While a DCAM call's BEGIN has
 # no END, heartbeats that keep coming mean the call is simply blocking in the library; heartbeats that
-# stop mean every Julia thread is held at a GC stop, waiting for that call. Julia's `sleep` and timers
-# fire from the libuv event loop, which thread 1 runs, so a sleep-based heartbeat is silent during any
-# ccall on thread 1. This heartbeat instead blocks its own thread 1 ms at a time and yields between
+# stop mean every Julia thread is held at a GC stop, waiting for that call, or that other tasks keep
+# every default-pool thread busy (the heartbeat is one task among them). Once the call returns, look at
+# `sp_max_ms` on its END: a jump confirms a GC wait, and no jump means busy threads. Julia's `sleep` and
+# timers fire from the libuv event loop, which thread 1 runs, so a sleep-based heartbeat is silent during
+# any ccall on thread 1. This heartbeat instead blocks its own thread in a sleep call and yields between
 # waits. It runs on the default pool, so it needs a default-pool thread other than the caller's. On Julia
 # 1.12+ the main task runs on the interactive thread, so the default thread 1.12+ starts with is enough.
 # On 1.11 start Julia with `-t 2` or more. With a single thread in all, the heartbeat goes silent during
-# every ccall. Cost while tracing is on: a GC waits up to one heartbeat wait (about 1 ms, up to about
-# 16 ms on Windows, whose Sleep clock is coarse) longer to reach a safepoint; a GC held by a hung DCAM
-# call shows as seconds.
+# every ccall. Cost while tracing is on: on 1.12+ the heartbeat sleeps 100 ms per wait in a GC-safe
+# call, so it adds nothing to a GC's time-to-safepoint. On 1.11 it waits 1 ms per wait (up to about 16 ms
+# on Windows, whose Sleep clock is coarse) in a call that is not GC-safe, and each GC can wait that long
+# for it. A GC held by a hung DCAM call shows as seconds either way.
 #
 # Off by default; the cost when off is one `Ref{Bool}` check per call. Turn on with
 # `dcam_trace!(path)` (`dcam_trace!(nothing)` turns it off); there is no other way on.
@@ -31,6 +34,8 @@ const TRACE_LOCK = ReentrantLock()
 const TRACE_CTL_LOCK = ReentrantLock()   # serializes dcam_trace!; the heartbeat never takes it
 const HEARTBEAT_S = 1.0
 const HEARTBEAT = Ref{Union{Nothing, Tuple{Task, Threads.Atomic{Bool}}}}(nothing)
+const TRACE_PID = Ref(0)   # set when a file is opened: the module is precompiled, so a load-time getpid() would be stale
+const INFLIGHT = Dict{Int, Tuple{String, Int}}()   # id => (name, tid) of calls with a BEGIN and no END yet; guarded by TRACE_LOCK
 
 """
     dcam_trace!(path)
@@ -40,7 +45,7 @@ Append a trace line for every DCAM library call to `path`, or stop tracing and c
 This is the only way to turn tracing on.
 
 `path` must be on a local disk: a write to a network path can stall, and a stalled write stalls the
-DCAM call it brackets. Line formats, each after a timestamp and `tid=`:
+DCAM call it brackets. Line formats, each after `<time> pid=<pid> tid=<tid>`:
 
     BEGIN <name> id=<n> args=(...) gc_ms=.. sp_total_ms=.. sp_max_ms=..
     END <name> id=<n> elapsed_ms=<ms> ret=<ret> gc_ms=.. sp_total_ms=.. sp_max_ms=..
@@ -50,16 +55,23 @@ DCAM call it brackets. Line formats, each after a timestamp and `tid=`:
 A failed write to the file turns tracing off with one warning; the DCAM call still runs.
 
 Ids count up from 1 in each process and are not reset. The file is appended to, so each
-`NOTE  trace on` line starts a segment, and a BEGIN pairs with the END or THROW of the same id only
-within its segment.
+`NOTE  trace on` line starts a segment. The `trace off` and `trace on` lines end with
+`inflight=none` or `inflight=<id>:<name>@tid<tid>,...` (sorted by id). A call in flight when the trace
+was switched or turned off is listed on those lines. Its BEGIN is in the earlier segment and its END or
+THROW, if it ever comes, is in the later one. With the pid on every line, the pair `(pid, id)` matches a
+BEGIN to its END or THROW across segments.
 
 While tracing is on, a heartbeat writes `NOTE  heartbeat gc_ms=..` every second. Heartbeats that keep
 coming while a BEGIN has no END mean the call is blocking in the library; heartbeats that stop mean
-every Julia thread is held at a GC stop, waiting for that call. Julia's `sleep` and timers fire from
-the libuv event loop, which thread 1 runs, so a sleep-based heartbeat would be silent during any ccall
-on thread 1; this one blocks its own thread 1 ms at a time and yields between waits. The cost while tracing
-is on is that a GC waits up to one such wait (about 1 ms, up to about 16 ms on Windows) longer to reach a
-safepoint; a GC held by a hung DCAM call shows as seconds. The heartbeat runs on the default pool,
+every Julia thread is held at a GC stop, waiting for that call, or that other tasks keep every
+default-pool thread busy (the heartbeat is one task among them). To tell the two apart once the call
+returns, look at `sp_max_ms` on its END: a jump confirms a GC wait, and no jump means busy threads.
+Julia's `sleep` and timers fire from the libuv event loop, which thread 1 runs, so a sleep-based
+heartbeat would be silent during any ccall on thread 1; this one blocks its own thread in a sleep call
+and yields between waits. The cost while tracing is on: on Julia 1.12+ the heartbeat sleeps 100 ms per
+wait in a GC-safe call, so it adds nothing to a GC's time-to-safepoint. On 1.11 it waits 1 ms per wait
+(up to about 16 ms on Windows) in a call that is not GC-safe, and each GC can wait that long for it. A
+GC held by a hung DCAM call shows as seconds either way. The heartbeat runs on the default pool,
 so it needs a default-pool thread other than the caller's. On Julia 1.12+ the main task runs on the
 interactive thread, so the default thread that 1.12+ starts with is enough. On 1.11 start Julia with
 `-t 2` or more. With a single thread in all, the heartbeat goes silent during every ccall.
@@ -83,16 +95,17 @@ function dcam_trace!(path::Union{AbstractString, Nothing})
         lock(TRACE_LOCK) do
             TRACE_ON[] = false
             if TRACE_IO[] !== nothing
-                trace_line(() -> " trace off", "NOTE", "")
+                trace_line(() -> " trace off" * inflight_text(), "NOTE", "")
                 TRACE_IO[] === nothing || close(TRACE_IO[])   # a failed write has already closed it
             end
             TRACE_IO[] = nothing
             if path !== nothing
+                TRACE_PID[] = getpid()
                 TRACE_IO[] = open(path, "a")
                 trace_line("NOTE", "") do
                     string(" trace on pid=", getpid(), " julia=", VERSION,
                         " threads=interactive:", Threads.nthreads(:interactive), ",default:", Threads.nthreads(:default),
-                        " caller_tid=", Threads.threadid(), " caller_pool=", Threads.threadpool())
+                        " caller_tid=", Threads.threadid(), " caller_pool=", Threads.threadpool(), inflight_text())
                 end
                 TRACE_ON[] = TRACE_IO[] !== nothing
             end
@@ -105,6 +118,20 @@ function dcam_trace!(path::Union{AbstractString, Nothing})
     return nothing
 end
 
+# Not `sleep`: timers fire from the libuv loop, which thread 1 runs. The yield keeps the loop from holding
+# its thread and starving a sticky main task.
+@static if VERSION >= v"1.12"
+    # gc_safe: a GC does not wait for this thread while it sleeps; returning blocks while a GC runs, so the heartbeat
+    # still goes silent while a GC waits on a DCAM call.
+    @static if Sys.iswindows()
+        heartbeat_wait() = (@ccall gc_safe = true Sleep(100::UInt32)::Cvoid; yield())
+    else
+        heartbeat_wait() = (@ccall gc_safe = true usleep(100_000::Cuint)::Cint; yield())
+    end
+else
+    heartbeat_wait() = (Libc.systemsleep(0.001); yield())   # not gc-safe on 1.11: short waits bound the GC delay
+end
+
 function heartbeat_loop(stop::Threads.Atomic{Bool})
     last = 0.0
     while !stop[] && TRACE_ON[]
@@ -114,8 +141,7 @@ function heartbeat_loop(stop::Threads.Atomic{Bool})
             end
             last = time()
         end
-        Libc.systemsleep(0.001)   # not `sleep`: timers fire from the libuv loop, which thread 1 runs
-        yield()                   # without this the loop can hold its thread and starve a sticky main task
+        heartbeat_wait()
     end
     return nothing
 end
@@ -136,7 +162,7 @@ function trace_line(build, kind, name; guard = nothing)
         end
         try
             t = Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS.sss")
-            println(io, t, " tid=", Threads.threadid(), " ", kind, " ", name, rest)
+            println(io, t, " pid=", TRACE_PID[], " tid=", Threads.threadid(), " ", kind, " ", name, rest)
             flush(io)
         catch err
             err isa InterruptException && rethrow()
@@ -150,6 +176,12 @@ function trace_line(build, kind, name; guard = nothing)
         end
     end
     return nothing
+end
+
+# Under TRACE_LOCK (it is called from a `build`).
+function inflight_text()
+    isempty(INFLIGHT) && return " inflight=none"
+    return " inflight=" * join((string(id, ":", INFLIGHT[id][1], "@tid", INFLIGHT[id][2]) for id in sort!(collect(keys(INFLIGHT)))), ",")
 end
 
 function gc_fields()
@@ -191,19 +223,28 @@ const TRACE_SEQ = Threads.Atomic{Int}(0)
 
 function trace_begin(name, vals)
     id = Threads.atomic_add!(TRACE_SEQ, 1) + 1
-    trace_line("BEGIN", name) do
-        args = try
-            join(map(trace_arg, vals), ", ")
-        catch
-            "(args not built)"
+    lock(TRACE_LOCK) do
+        INFLIGHT[id] = (String(name), Threads.threadid())
+    end
+    try
+        trace_line("BEGIN", name) do
+            args = try
+                join(map(trace_arg, vals), ", ")
+            catch
+                "(args not built)"
+            end
+            string(" id=", id, " args=(", args, ")", gc_fields())
         end
-        string(" id=", id, " args=(", args, ")", gc_fields())
+    catch
+        lock(() -> delete!(INFLIGHT, id), TRACE_LOCK)
+        rethrow()
     end
     return (id, time_ns())
 end
 
 function trace_end(name, id, t0, ret)
     ms = (time_ns() - t0) / 1e6
+    lock(() -> delete!(INFLIGHT, id), TRACE_LOCK)
     trace_line("END", name) do
         string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " ret=", ret, gc_fields())
     end
@@ -212,6 +253,7 @@ end
 
 function trace_throw(name, id, t0, err)
     ms = (time_ns() - t0) / 1e6
+    lock(() -> delete!(INFLIGHT, id), TRACE_LOCK)
     trace_line("THROW", name) do
         msg = first(replace(sprint(showerror, err), '\n' => ' '), 200)
         string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " err=", typeof(err), ": ", msg, gc_fields())

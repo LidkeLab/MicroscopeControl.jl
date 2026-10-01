@@ -97,7 +97,8 @@ Base.showerror(::IO, ::BadErr) = error("showerror failed")
         lines = filter(l -> !occursin(r"NOTE  (heartbeat|trace o)", l), readlines(path))   # read while the file is still open: every line is flushed
         DC.dcam_trace!(nothing)
         @test length(lines) == 5
-        @test occursin(r"tid=\d+ BEGIN strlen id=\d+ args=\(String\)", lines[1])
+        @test occursin(r"pid=\d+ tid=\d+ BEGIN strlen id=\d+ args=\(String\)", lines[1])
+        @test occursin("pid=$(getpid()) ", lines[1])
         @test occursin(r"tid=\d+ END strlen id=\d+ elapsed_ms=[\d.]+ ret=5 gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[2])
         @test occursin(r"BEGIN strlen id=\d+ args=\(String\) gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[1])
         @test occursin(r"BEGIN abs id=\d+ args=\(-7\)", lines[3])
@@ -118,8 +119,22 @@ Base.showerror(::IO, ::BadErr) = error("showerror failed")
         @test issorted(ids("BEGIN"); lt = <=)
         @test ids("THROW") == ids("BEGIN")[3:3]
         @test any(l -> occursin(r"THROW strlen id=\d+ elapsed_ms=[\d.]+ err=ArgumentError: ", l), l2)
-        @test endswith(readlines(path2)[end], "NOTE  trace off")
+        @test endswith(readlines(path2)[end], "NOTE  trace off inflight=none")
         rm(path2)
+
+        # A call in flight when the trace is switched is listed on the trace off and trace on lines until its END.
+        ifa = tempname(); ifb = tempname()
+        DC.dcam_trace!(ifa)
+        (fid, ft0) = DC.trace_begin("fake", ())
+        DC.dcam_trace!(ifb)
+        DC.dcam_trace_note("mid")
+        pat = Regex("inflight=$(fid):fake@tid\\d+\$")
+        @test any(l -> occursin("trace off", l) && occursin(pat, l), readlines(ifa))
+        @test any(l -> occursin("trace on", l) && occursin(pat, l), readlines(ifb))
+        DC.trace_end("fake", fid, ft0, 0)
+        DC.dcam_trace!(nothing)
+        @test occursin(r"trace off inflight=none$", readlines(ifb)[end])
+        rm(ifa); rm(ifb)
 
         # BEGIN is on disk before the library call runs: the comparator, called from inside qsort, sees it.
         qpath = tempname()
@@ -198,16 +213,49 @@ Base.showerror(::IO, ::BadErr) = error("showerror failed")
             bpath = tempname()
             DC.dcam_trace!(bpath)
             timedwait(() -> any(l -> occursin("NOTE  heartbeat", l), readlines(bpath)), 3.0)
-            MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall usleep(2_500_000::Cuint)::Cint
+            @static if Sys.iswindows()
+                MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall Sleep(2500::UInt32)::Cvoid
+                sname = "Sleep"
+            else
+                MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall usleep(2_500_000::Cuint)::Cint
+                sname = "usleep"
+            end
             bl = readlines(bpath)
             DC.dcam_trace!(nothing)
-            ib = findfirst(l -> occursin(r"BEGIN usleep id=\d+", l), bl)
-            bid = match(r"BEGIN usleep id=(\d+)", bl[ib])[1]
-            ie = findfirst(l -> occursin("END usleep id=$bid ", l), bl)
+            ib = findfirst(l -> occursin(Regex("BEGIN $sname id=\\d+"), l), bl)
+            bid = match(Regex("BEGIN $sname id=(\\d+)"), bl[ib])[1]
+            ie = findfirst(l -> occursin("END $sname id=$bid ", l), bl)
             nhb = count(l -> occursin("NOTE  heartbeat", l), bl[ib:ie])
             @info "usleep heartbeat test" heartbeats = nhb tid = Threads.threadid() pool = Threads.threadpool()
             @test nhb >= 2
             rm(bpath)
+
+            # The GC-wait signature: a GC requested during the call waits for this thread, so the heartbeat goes silent
+            # from the request to the END, and the END's sp_max_ms jumps. The helper must not use `sleep` (libuv timers).
+            gpath = tempname()
+            DC.dcam_trace!(gpath)
+            timedwait(() -> any(l -> occursin("NOTE  heartbeat", l), readlines(gpath)), 3.0)
+            helper = Threads.@spawn :default (Libc.systemsleep(1.2); DC.dcam_trace_note("gc request"); GC.gc())
+            @static if Sys.iswindows()
+                MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall Sleep(3000::UInt32)::Cvoid
+                gname = "Sleep"
+            else
+                MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall usleep(3_000_000::Cuint)::Cint
+                gname = "usleep"
+            end
+            wait(helper)
+            gl = readlines(gpath)
+            DC.dcam_trace!(nothing)
+            gb = findfirst(l -> occursin(Regex("BEGIN $gname id=\\d+"), l), gl)
+            gid = match(Regex("BEGIN $gname id=(\\d+)"), gl[gb])[1]
+            ge = findfirst(l -> occursin("END $gname id=$gid ", l), gl)
+            gr = findfirst(l -> occursin("NOTE  gc request", l), gl)
+            @info "GC-wait test" heartbeats_before_gc = count(l -> occursin("NOTE  heartbeat", l), gl[gb:gr])
+            @test gr !== nothing && gr < ge
+            # A heartbeat can win TRACE_LOCK against END when the GC releases: it is fine if it already shows the jumped counter.
+            @test all(l -> parse(Float64, match(r"sp_max_ms=([\d.]+)", l)[1]) >= 1000, filter(l -> occursin("NOTE  heartbeat", l), gl[gr:ge]))
+            @test parse(Float64, match(r"sp_max_ms=([\d.]+)", gl[ge])[1]) >= 1000
+            rm(gpath)
         else
             # a single thread cannot run the heartbeat during a ccall from the only thread
             @test_skip false
