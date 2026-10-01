@@ -154,6 +154,8 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   - A failed stop or buffer release is not recorded, and the camera is marked stopped; it recovers at the next start.
   - A sequence or live view that fails to start leaves its buffer allocated until the next start.
   - If the frame-count query fails, a sequence can return frames without checking that all arrived.
+  - Stop any threaded `getlastframe` loop before calling `abort`, `live`, `sequence` or `capture` from another task: a
+    buffer released during its frame wait can crash the process. (Fixed in 0.2.7.)
 - Laser (`TCubeLaser`):
   - In power mode, a zero sent right after a failed enable counts as landed, so the next `light_on` may not warn
     about a stale stored setpoint. The first moments after that enable are still bounded by the programmed clamp.
