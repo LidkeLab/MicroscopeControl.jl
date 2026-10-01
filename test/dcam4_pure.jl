@@ -2,6 +2,19 @@
 # runs without it. The capture error paths, getdata's poll and stop_and_release! call the DCAM
 # library first and cannot run without a swappable-library fake (a follow-up). The refusal and the
 # cache are tested because they come before any library call.
+
+# State for the qsort BEGIN-before-call test. The comparator runs inside the traced C call, so it must
+# not throw (an exception through C frames is undefined): it records what it saw and the test checks after.
+const QSORT_TRACE_PATH = Ref("")
+const QSORT_SAW_BEGIN = Ref(false)
+function qsort_cmp(a::Ptr{Cint}, b::Ptr{Cint})::Cint
+    try
+        QSORT_SAW_BEGIN[] |= occursin(r"BEGIN qsort id=", read(QSORT_TRACE_PATH[], String))
+    catch
+    end
+    return Cint(sign(unsafe_load(a) - unsafe_load(b)))
+end
+
 @testset "DCAM4 (no library)" begin
     DC = MicroscopeControl.HardwareImplementations.DCAM4
     CameraInterface = MicroscopeControl.HardwareInterfaces.CameraInterface
@@ -100,6 +113,21 @@
         @test ids("THROW") == ids("BEGIN")[3:3]
         @test any(l -> occursin(r"THROW strlen id=\d+ elapsed_ms=[\d.]+ err=ArgumentError: ", l), l2)
         rm(path2)
+
+        # BEGIN is on disk before the library call runs: the comparator, called from inside qsort, sees it.
+        qpath = tempname()
+        QSORT_TRACE_PATH[] = qpath
+        QSORT_SAW_BEGIN[] = false
+        cmp = @cfunction(qsort_cmp, Cint, (Ptr{Cint}, Ptr{Cint}))
+        arr = Cint[3, 1, 2]
+        DC.dcam_trace!(qpath)
+        GC.@preserve arr MicroscopeControl.HardwareImplementations.DCAM4.@dcamcall qsort(pointer(arr)::Ptr{Cint}, length(arr)::Csize_t, sizeof(Cint)::Csize_t, cmp::Ptr{Cvoid})::Cvoid
+        ql = readlines(qpath)
+        DC.dcam_trace!(nothing)
+        @test QSORT_SAW_BEGIN[]
+        @test arr == Cint[1, 2, 3]
+        @test any(l -> occursin(r"END qsort id=\d+ ", l), ql)
+        rm(qpath)
 
         # A heartbeat runs while tracing is on, and stops (task done, file quiet) when it is off.
         hbpath = tempname()
