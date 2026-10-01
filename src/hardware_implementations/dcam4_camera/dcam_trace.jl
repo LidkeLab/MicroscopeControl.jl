@@ -21,7 +21,18 @@ const TRACE_LOCK = ReentrantLock()
     dcam_trace!(path)
     dcam_trace!(nothing)
 
-Append a BEGIN/END line for every DCAM library call to `path`, or stop tracing and close the file.
+Append a trace line for every DCAM library call to `path`, or stop tracing and close the file.
+This is the only way to turn tracing on.
+
+`path` must be on a local disk: a write to a network path can stall, and a stalled write stalls the
+DCAM call it brackets. Line formats, each after a timestamp and `tid=`:
+
+    BEGIN <name> id=<n> args=(...) gc_ms=.. sp_total_ms=.. sp_max_ms=..
+    END <name> id=<n> elapsed_ms=<ms> ret=<ret> gc_ms=.. sp_total_ms=.. sp_max_ms=..
+    THROW <name> id=<n> elapsed_ms=<ms> err=<Type>: <message> gc_ms=.. sp_total_ms=.. sp_max_ms=..
+    NOTE  <text>
+
+A failed write to the file turns tracing off with one warning; the DCAM call still runs.
 """
 function dcam_trace!(path::Union{AbstractString, Nothing})
     lock(TRACE_LOCK) do
@@ -40,9 +51,20 @@ function trace_line(kind, name, rest::AbstractString)
     lock(TRACE_LOCK) do
         io = TRACE_IO[]
         io === nothing && return
-        t = Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS.sss")
-        println(io, t, " tid=", Threads.threadid(), " ", kind, " ", name, rest)
-        flush(io)
+        try
+            t = Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS.sss")
+            println(io, t, " tid=", Threads.threadid(), " ", kind, " ", name, rest)
+            flush(io)
+        catch err
+            err isa InterruptException && rethrow()
+            TRACE_ON[] = false
+            try
+                close(io)
+            catch
+            end
+            TRACE_IO[] = nothing
+            @warn "DCAM4 trace: writing the trace file failed; tracing is now off" exception = err
+        end
     end
     return nothing
 end
@@ -146,9 +168,4 @@ macro dcamcall(expr)
             end
         end
     end)
-end
-
-function __init__()
-    path = get(ENV, "MC_DCAM4_TRACE", "")
-    isempty(path) || dcam_trace!(path)
 end

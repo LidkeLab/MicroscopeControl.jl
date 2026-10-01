@@ -101,6 +101,20 @@
         @test any(l -> occursin(r"THROW strlen id=\d+ elapsed_ms=[\d.]+ err=ArgumentError: ", l), l2)
         rm(path2)
 
+        # A failed trace write turns tracing off with one warning; the call itself still runs.
+        # (writing to a closed IOStream does not throw, so /dev/full stands in for a full disk)
+        # The heartbeat's first line or the call's BEGIN fails first, depending on threads: one warning either way.
+        r = @test_logs (:warn, r"tracing is now off") begin
+            DC.dcam_trace!("/dev/full")
+            v = f("hello")
+            wait(DC.HEARTBEAT[][1])
+            v
+        end
+        @test r == 5
+        @test !DC.TRACE_ON[]
+        @test (@test_logs f("hello")) == 5
+        DC.dcam_trace!(nothing)
+
         # A Ref to a struct logs its Int32 fields, so a wait's timeout shows.
         @test occursin("DCAMWAIT_START{size=16,eventhappened=0,eventmask=2,timeout=1000}", DC.trace_arg(Ref(DC.DCAMWAIT_START(Int32(2), Int32(1000)))))
 
