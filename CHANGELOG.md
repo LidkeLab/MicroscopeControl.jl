@@ -8,7 +8,7 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
-## [0.2.6] - 2026-09-29
+## [0.2.6] - 2026-10-01
 
 A non-breaking release in three parts. Only the DCAM4 part has run on hardware so
 far (below); the rig checks still owed are listed in #73 (the C-867 startup check),
@@ -24,11 +24,14 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   zeroes and disables it first. Power mode gains an optional calibration reference,
   which every power-mode rig should record. Several calls take longer (see Changed).
 - **DCAM4 capture (#75).** Every frame wait is bounded and armed before the capture
-  starts, and every exit cleans up. This fixes the full-frame `capture` hang,
-  confirmed on the quickbeam rig: 26 full-frame captures at 12.5, 100 and 250 ms on a
-  v0.2.4-based trial with this camera code, with no timeout or hang. The forced-timeout
-  and sequence checks are still owed. `capture` now refuses while a live view or
-  sequence runs.
+  starts, and every exit cleans up. On the quickbeam rig, full-frame captures that had
+  always hung passed 26 of 26 (12.5, 100 and 250 ms) on a v0.2.4-based trial with this
+  camera code. One hang remains: after the rig's GPU code had loaded, a full-frame
+  capture hung inside a camera library call, on several cores, until the process was
+  ended. It is not fixed here and is tracked for 0.2.7. The NOTREADY, TIMEOUT and
+  NOTSTABLE errors the rig logs during GUI use are not fixed here either. The
+  forced-timeout and sequence checks are still owed. `capture` now refuses while a
+  live view or sequence runs.
 
 ### Fixed
 
@@ -69,13 +72,13 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   `initialize` lowers the potentiometer for any `max_current` below the controller's limit, and
   power-mode construction no longer refuses a `max_current` under 17.25 mA; the limit the
   controller reports decides (the 642 nm rig's unit reads 16.74 mA at the lowest position).
-- `DCAM4Camera` `capture` could hang, or leave the camera unusable after a missed frame. Its frame wait is now
-  bounded by 2 x (exposure + readout) + 1 s, with the readout read from the camera
-  (`DCAM_IDPROP_TIMING_READOUTTIME`); the wait is armed before the capture starts; the wait's parameter struct
-  carries its size (it was sent as 0); and every exit stops the capture, releases the buffer and closes the wait.
-  A timeout or failed wait logs, sets `last_error` and throws a clear error (it threw a MethodError before).
-  Reported from the quickbeam rig: full frame at 12.5 ms and at 100 ms, including the first capture in a fresh
-  session.
+- `DCAM4Camera` `capture` could hang, or leave the camera unusable after a missed frame. One hang inside a camera
+  library call remains (see the summary). Its frame wait is now bounded by 2 x (exposure + readout) + 1 s, with the
+  readout read from the camera (`DCAM_IDPROP_TIMING_READOUTTIME`); the wait is armed before the capture starts; the
+  wait's parameter struct carries its size (it was sent as 0); and every exit stops the capture, releases the
+  buffer and closes the wait. A timeout or failed wait logs, sets `last_error` and throws a clear error (it threw a
+  MethodError before). Reported from the quickbeam rig: full frame at 12.5 ms and at 100 ms, including the first
+  capture in a fresh session.
 - `DCAM4Camera` `getlastframe`: a timeout or failed wait no longer throws a MethodError. It logs, sets `last_error`
   and returns `nothing`, as the code intended. Its wait is bounded the same way, with the readout time read once per
   `live`, `sequence` or `capture` and cached. A frame that cannot be copied, here or in `capture`, sets `last_error`.
