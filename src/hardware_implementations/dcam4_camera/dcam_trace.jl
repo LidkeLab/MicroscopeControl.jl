@@ -82,21 +82,32 @@ function trace_arg(v)
     end
 end
 
+const TRACE_SEQ = Threads.Atomic{Int}(0)
+
 function trace_begin(name, vals)
-    trace_line("BEGIN", name, string(" args=(", join(map(trace_arg, vals), ", "), ")", gc_fields()))
-    return time_ns()
+    id = Threads.atomic_add!(TRACE_SEQ, 1) + 1
+    trace_line("BEGIN", name, string(" id=", id, " args=(", join(map(trace_arg, vals), ", "), ")", gc_fields()))
+    return (id, time_ns())
 end
 
-function trace_end(name, t0, ret)
+function trace_end(name, id, t0, ret)
     ms = (time_ns() - t0) / 1e6
-    trace_line("END", name, string(" elapsed_ms=", round(ms, digits = 3), " ret=", ret, gc_fields()))
+    trace_line("END", name, string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " ret=", ret, gc_fields()))
+    return nothing
+end
+
+function trace_throw(name, id, t0, err)
+    ms = (time_ns() - t0) / 1e6
+    msg = replace(sprint(showerror, err), '\n' => ' ')
+    msg = first(msg, 200)
+    trace_line("THROW", name, string(" id=", id, " elapsed_ms=", round(ms, digits = 3), " err=", typeof(err), ": ", msg, gc_fields()))
     return nothing
 end
 
 """
     @dcamcall [lib.]fn(arg::T, ...)::Ret
 
-`@ccall`, plus a BEGIN and an END trace line when tracing is on (see `dcam_trace!`). Each argument
+`@ccall`, plus a BEGIN and an END (or THROW) trace line when tracing is on (see `dcam_trace!`). Each argument
 expression is evaluated once.
 """
 macro dcamcall(expr)
@@ -116,14 +127,19 @@ macro dcamcall(expr)
         push!(newargs, Expr(:(::), t, a.args[2]))
     end
     plain = :(Base.@ccall $(Expr(:(::), Expr(:call, newargs...), ret)))
-    r = gensym("ret"); t0 = gensym("t0")
+    r = gensym("ret"); t0 = gensym("t0"); id = gensym("id")
     on = GlobalRef(@__MODULE__, :TRACE_ON)
     return esc(quote
         let $(binds...)
             if $on[]
-                $t0 = $(GlobalRef(@__MODULE__, :trace_begin))($fname, ($(tmps...),))
-                $r = $plain
-                $(GlobalRef(@__MODULE__, :trace_end))($fname, $t0, $r)
+                ($id, $t0) = $(GlobalRef(@__MODULE__, :trace_begin))($fname, ($(tmps...),))
+                $r = try
+                    $plain
+                catch err
+                    $(GlobalRef(@__MODULE__, :trace_throw))($fname, $id, $t0, err)
+                    rethrow()
+                end
+                $(GlobalRef(@__MODULE__, :trace_end))($fname, $id, $t0, $r)
                 $r
             else
                 $plain

@@ -79,11 +79,27 @@
         lines = readlines(path)   # read while the file is still open: every line is flushed
         DC.dcam_trace!(nothing)
         @test length(lines) == 5
-        @test occursin(r"tid=\d+ BEGIN strlen args=\(String\)", lines[1])
-        @test occursin(r"tid=\d+ END strlen elapsed_ms=[\d.]+ ret=5 gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[2])
-        @test occursin(r"BEGIN strlen args=\(String\) gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[1])
-        @test occursin("BEGIN abs args=(-7)", lines[3])
+        @test occursin(r"tid=\d+ BEGIN strlen id=\d+ args=\(String\)", lines[1])
+        @test occursin(r"tid=\d+ END strlen id=\d+ elapsed_ms=[\d.]+ ret=5 gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[2])
+        @test occursin(r"BEGIN strlen id=\d+ args=\(String\) gc_ms=[\d.]+ sp_total_ms=[\d.]+ sp_max_ms=[\d.]+", lines[1])
+        @test occursin(r"BEGIN abs id=\d+ args=\(-7\)", lines[3])
         @test occursin("NOTE  marker", lines[5])
+
+        # Calls are numbered: BEGIN and END share an id, ids increase, and a throw is logged under its BEGIN's id.
+        path2 = tempname()
+        DC.dcam_trace!(path2)
+        @test f("hello") == 5
+        @test f("hi") == 2
+        @test_throws ArgumentError f("a\0b")
+        l2 = readlines(path2)
+        DC.dcam_trace!(nothing)
+        ids(kind) = [parse(Int, m[1]) for m in match.(Regex(kind * " strlen id=(\\d+)"), l2) if m !== nothing]
+        @test length(ids("BEGIN")) == 3
+        @test ids("END") == ids("BEGIN")[1:2]
+        @test issorted(ids("BEGIN"); lt = <=)
+        @test ids("THROW") == ids("BEGIN")[3:3]
+        @test any(l -> occursin(r"THROW strlen id=\d+ elapsed_ms=[\d.]+ err=ArgumentError: ", l), l2)
+        rm(path2)
 
         # A Ref to a struct logs its Int32 fields, so a wait's timeout shows.
         @test occursin("DCAMWAIT_START{size=16,eventhappened=0,eventmask=2,timeout=1000}", DC.trace_arg(Ref(DC.DCAMWAIT_START(Int32(2), Int32(1000)))))
