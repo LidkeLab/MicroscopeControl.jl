@@ -4,15 +4,18 @@
 # BEGIN on disk. GC counters are on every BEGIN and END line. `total_time` is only the collection
 # pause. When another thread requests a GC while this thread sits in a long ccall, which is not a GC
 # safe point, the GC waits for this thread to reach a safe point, and that wait is counted in
-# `time_to_safepoint`. A jump in `sp_total_ms`/`sp_max_ms` between a call's BEGIN and END is that
+# `time_to_safepoint`. A rise in `sp_total_ms` between a call's BEGIN and END is that
 # wait. `gc_num` is updated only when a collection finishes, so while the hang is still going these
 # numbers do not move; the heartbeat is the in-flight signal.
 #
 # While tracing is on, a heartbeat task writes a NOTE line every second. While a DCAM call's BEGIN has
 # no END, heartbeats that keep coming mean the call is simply blocking in the library; heartbeats that
 # stop mean every Julia thread is held at a GC stop, waiting for that call, or that other tasks keep
-# every default-pool thread busy (the heartbeat is one task among them). Once the call returns, look at
-# `sp_max_ms` on its END: a jump confirms a GC wait, and no jump means busy threads. Julia's `sleep` and
+# every default-pool thread busy (the heartbeat is one task among them). A GC wait shows as `sp_total_ms`
+# rising by about the stall from the call's BEGIN to its END, or across a silent stretch of heartbeats;
+# heartbeats that stop with no rise in `sp_total_ms` mean the default threads were busy. (`sp_max_ms` is a
+# process-wide high-water mark that is never reset, so after an earlier long wait a new one shows no
+# jump in it.) Julia's `sleep` and
 # timers fire from the libuv event loop, which thread 1 runs, so a sleep-based heartbeat is silent during
 # any ccall on thread 1. This heartbeat instead blocks its own thread in a sleep call and yields between
 # waits. It runs on the default pool, so it needs a default-pool thread other than the caller's. On Julia
@@ -64,8 +67,11 @@ BEGIN to its END or THROW across segments.
 While tracing is on, a heartbeat writes `NOTE  heartbeat gc_ms=..` every second. Heartbeats that keep
 coming while a BEGIN has no END mean the call is blocking in the library; heartbeats that stop mean
 every Julia thread is held at a GC stop, waiting for that call, or that other tasks keep every
-default-pool thread busy (the heartbeat is one task among them). To tell the two apart once the call
-returns, look at `sp_max_ms` on its END: a jump confirms a GC wait, and no jump means busy threads.
+default-pool thread busy (the heartbeat is one task among them). A GC wait shows as `sp_total_ms`
+rising by about the stall from the call's BEGIN to its END, or across a silent stretch of heartbeats;
+heartbeats that stop with no rise in `sp_total_ms` mean the default threads were busy. Do not use
+`sp_max_ms` for this: it is a process-wide high-water mark that is never reset, so after an earlier long
+wait a new one shows no jump in it.
 Julia's `sleep` and timers fire from the libuv event loop, which thread 1 runs, so a sleep-based
 heartbeat would be silent during any ccall on thread 1; this one blocks its own thread in a sleep call
 and yields between waits. The cost while tracing is on: on Julia 1.12+ the heartbeat sleeps 100 ms per
@@ -77,10 +83,11 @@ interactive thread, so the default thread that 1.12+ starts with is enough. On 1
 `-t 2` or more. With a single thread in all, the heartbeat goes silent during every ccall.
 
 Reading a trace: first check the console for the `tracing is now off` warning; if it fired, the file
-stops there because the trace stopped, not because a call hung. Then find the last BEGIN with no END or
-THROW of the same id in the last segment. Heartbeats after that BEGIN mean the call is blocking in the
-library; heartbeats that stopped mean every Julia thread is held at a GC stop, waiting for that call
-(given the thread rule above).
+stops there because the trace stopped, not because a call hung. A hung call is one listed in `inflight=`
+on a `trace off` or `trace on` line, or the last BEGIN with no END or THROW of the same id in its
+segment. Heartbeats after its BEGIN mean the call is blocking in the library. Heartbeats that stopped
+mean a GC wait only when `sp_total_ms` rises across the silent stretch (on the next line written, or on
+the call's END); otherwise the default threads were busy (given the thread rule above).
 """
 function dcam_trace!(path::Union{AbstractString, Nothing})
     lock(TRACE_CTL_LOCK) do
@@ -103,7 +110,7 @@ function dcam_trace!(path::Union{AbstractString, Nothing})
                 TRACE_PID[] = getpid()
                 TRACE_IO[] = open(path, "a")
                 trace_line("NOTE", "") do
-                    string(" trace on pid=", getpid(), " julia=", VERSION,
+                    string(" trace on julia=", VERSION,
                         " threads=interactive:", Threads.nthreads(:interactive), ",default:", Threads.nthreads(:default),
                         " caller_tid=", Threads.threadid(), " caller_pool=", Threads.threadpool(), inflight_text())
                 end

@@ -111,7 +111,7 @@ Base.showerror(::IO, ::BadErr) = error("showerror failed")
         @test f("hi") == 2
         @test_throws ArgumentError f("a\0b")
         l2 = readlines(path2)
-        @test occursin(r"NOTE  trace on pid=\d+ julia=\S+ threads=interactive:\d+,default:\d+", l2[1])
+        @test occursin(r"pid=\d+ tid=\d+ NOTE  trace on julia=\S+ threads=interactive:\d+,default:\d+", l2[1])
         DC.dcam_trace!(nothing)
         ids(kind) = [parse(Int, m[1]) for m in match.(Regex(kind * " strlen id=(\\d+)"), l2) if m !== nothing]
         @test length(ids("BEGIN")) == 3
