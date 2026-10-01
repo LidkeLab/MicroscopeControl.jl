@@ -100,37 +100,6 @@ function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
     return err
 end
 
-# Old version of dcambuf_getframe that was not working properly for rectangular ROIs
-# function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
-
-#     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
-#     err, height = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_HEIGHT))
-#     err, rowbytes = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_ROWBYTES))
-#     err, type = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_PIXELTYPE))
-
-#     if DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO16
-#         data = zeros(UInt16, Int(height), Int(width))
-#     elseif DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO8
-#         data = zeros(UInt8, Int(height), Int(width))
-#     end
-
-#     dcf = DCAMBUF_FRAME()
-#     dcf.iFrame = iFrame
-#     dcf.width = Int32(width)
-#     dcf.height = Int32(height)
-#     dcf.rowbytes = Int32(rowbytes)
-#     dcf.type = DCAM_PIXELTYPE(Int32(type))
-#     dcf.buf = pointer(data)
-
-#     pFrame=Ref(dcf)
-
-#     err = @dcamcall "dcamapi.dll".dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
-#     if is_failed(err)
-#         @error "DCAM Failed to Copy Frame"
-#     end
-#     return data
-# end
-
 
 function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
