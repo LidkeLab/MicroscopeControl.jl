@@ -252,6 +252,8 @@ Base.showerror(::IO, ::BadErr) = error("showerror failed")
             gr = findfirst(l -> occursin("NOTE  gc request", l), gl)
             @info "GC-wait test" heartbeats_before_gc = count(l -> occursin("NOTE  heartbeat", l), gl[gb:gr])
             @test gr !== nothing && gr < ge
+            # sp_max_ms is a process-wide high-water mark: the check below means something only if it was still low at BEGIN.
+            @test parse(Float64, match(r"sp_max_ms=([\d.]+)", gl[gb])[1]) < 1000
             # A heartbeat can win TRACE_LOCK against END when the GC releases: it is fine if it already shows the jumped counter.
             @test all(l -> parse(Float64, match(r"sp_max_ms=([\d.]+)", l)[1]) >= 1000, filter(l -> occursin("NOTE  heartbeat", l), gl[gr:ge]))
             @test parse(Float64, match(r"sp_max_ms=([\d.]+)", gl[ge])[1]) >= 1000
