@@ -25,6 +25,7 @@ export dcamprop_getvalue, DCAM_IDPROP_INTERNALFRAMERATE, CameraROI, dcamapi_unin
 include("dcamerr.jl")
 include("dcam_idprop.jl")
 include("types.jl")
+include("dcam_trace.jl")
 include("dcamapi.jl")
 include("dcamdev.jl")
 include("dcamprop.jl")

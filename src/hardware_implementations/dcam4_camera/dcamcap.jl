@@ -32,7 +32,7 @@ end
 ## Functions 
 
 function dcamcap_start(hdcam::Ptr{Cvoid}, mode::Int32)
-    err = @ccall "dcamapi.dll".dcamcap_start(hdcam::Ptr{Cvoid}, mode::Int32)::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamcap_start(hdcam::Ptr{Cvoid}, mode::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Start"
     end
@@ -40,7 +40,7 @@ function dcamcap_start(hdcam::Ptr{Cvoid}, mode::Int32)
 end
 
 function dcamcap_stop(hdcam::Ptr{Cvoid})
-    err = @ccall "dcamapi.dll".dcamcap_stop(hdcam::Ptr{Cvoid})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamcap_stop(hdcam::Ptr{Cvoid})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Stop"
     end
@@ -49,7 +49,7 @@ end
 
 function dcamcap_status(hdcam::Ptr{Cvoid})
     pStatus = Ref{Int32}(0)
-    err = @ccall "dcamapi.dll".dcamcap_status(hdcam::Ptr{Cvoid}, pStatus::Ref{Int32})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamcap_status(hdcam::Ptr{Cvoid}, pStatus::Ref{Int32})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Get Status"
     end
@@ -58,7 +58,7 @@ end
 
 function dcamcap_transferinfo(hdcam::Ptr{Cvoid})
     param = DCAMCAP_TRANSFERINFO()  # Create the struct
-    err = @ccall "dcamapi.dll".dcamcap_transferinfo(hdcam::Ptr{Cvoid}, param::Ref{DCAMCAP_TRANSFERINFO})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamcap_transferinfo(hdcam::Ptr{Cvoid}, param::Ref{DCAMCAP_TRANSFERINFO})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Get Transfer Info"
     end
@@ -67,7 +67,7 @@ end
 
 function dcamcap_firetrigger(hdcam::Ptr{Cvoid})
     iKind = 0
-    err = @ccall "dcamapi.dll".dcamcap_firetrigger(hdcam::Ptr{Cvoid}, iKind::Int32)::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamcap_firetrigger(hdcam::Ptr{Cvoid}, iKind::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Fire Trigger"
     end

@@ -33,6 +33,12 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   forced-timeout and sequence checks are still owed. `capture` now refuses while a
   live view or sequence runs.
 
+### Added
+
+- Opt-in per-call trace of the DCAM library calls (`DCAM4.dcam_trace!(path)`, or ENV `MC_DCAM4_TRACE=<path>`
+  at load): a flushed BEGIN and END line per call with arguments, elapsed time, return value and cumulative GC
+  time, to name a call that hangs. Off by default; one `Ref{Bool}` check per call.
+
 ### Fixed
 
 - `PIStage`: `shutdown` could close another object's connection. `id` defaulted to `0`, a valid GCS id, and was never reset; it now defaults to `-1` and `shutdown` resets it.

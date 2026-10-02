@@ -50,7 +50,7 @@ end
 function dcamwait_open(hdcam::Ptr{Cvoid})
     dwo = DCAMWAIT_OPEN(hdcam)
     param = Ref(dwo)
-    err = @ccall "dcamapi.dll".dcamwait_open(param::Ref{DCAMWAIT_OPEN})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamwait_open(param::Ref{DCAMWAIT_OPEN})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Open Wait:  $(err)))"
     end
@@ -58,7 +58,7 @@ function dcamwait_open(hdcam::Ptr{Cvoid})
 end
 
 function dcamwait_close(hwait::Ptr{Cvoid})
-    err = @ccall "dcamapi.dll".dcamwait_close(hwait::Ptr{Cvoid})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamwait_close(hwait::Ptr{Cvoid})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Close Wait:  $(err)))"
     end
@@ -66,7 +66,7 @@ function dcamwait_close(hwait::Ptr{Cvoid})
 end
 
 function dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})
-    err = @ccall "dcamapi.dll".dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Start Wait: $(err))"
     end
@@ -74,7 +74,7 @@ function dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})
 end
 
 function dcamwait_abort(hwait::Ptr{Cvoid})
-    err = @ccall "dcamapi.dll".dcamwait_abort(hwait::Ptr{Cvoid})::DCAMERR
+    err = @dcamcall "dcamapi.dll".dcamwait_abort(hwait::Ptr{Cvoid})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Abort Wait:  $(err)))"
     end
