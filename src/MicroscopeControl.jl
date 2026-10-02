@@ -32,6 +32,9 @@ using .HardwareImplementations.OK_XEM
 using .HardwareImplementations.ThorCamDCx
 using .HardwareImplementations.Triggerscope
 using .HardwareImplementations.MCLMicroPositioner
+using .HardwareImplementations.BeamSteeringBackends
+using .HardwareImplementations.GalvoControl
+using .HardwareImplementations.EODControl
 
 # # Export all HardwareImplementations modules
 # export DCAM4, SimulatedCamera, SimulatedStage, PI, MadCityLabs, PI_N472, ThorCamCSC
@@ -70,6 +73,17 @@ export Triggerscope4
 
 #re-export objective positioner implementations
 export MclZPositioner
+
+# Re-export beam steering: the devices, the backends that drive them, and the
+# voltage/angle methods they share.
+export Galvo, EOD
+export BeamSteerer, SteeringBackend, AngleCalibration
+export TriggerscopeBackend, DAQmxBackend
+export getvoltage, setangle, getangle, zeroaxes
+export voltage_to_angle, angle_to_voltage, gridpoints, gridscan
+export setcrystalvoltage, getcrystalvoltage, crystal_limits
+export amplifier_factor, tocrystal, todaq
+export rangelimits, min_voltage_step
 
 # Re-export common GUI methods
 export gui

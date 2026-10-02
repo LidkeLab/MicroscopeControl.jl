@@ -25,4 +25,9 @@ include("meadowlark_slm/Meadowlark.jl")
 include("triggerscope/Triggerscope.jl")
 include("mcl_micro_positioner/MCLMicroPositioner.jl")
 
+# Beam steering: the backends first, then the devices built on top of them.
+include("beam_steering_backends/BeamSteeringBackends.jl")
+include("galvo_mirrors/GalvoControl.jl")
+include("eod_deflector/EODControl.jl")
+
 end
