@@ -1,4 +1,4 @@
-function create_menu(figure, row, column, options, default)
+function create_menu(figure, row, column, options, default, camera::Camera)
     menu = Menu(figure[row, column], options=options, default=default, width=350, height=30)
     on(menu.selection) do mode
         camera.capture_mode = mode
@@ -86,13 +86,14 @@ function gui(camera::Camera)
     println(typeof(camera))
 
     # Create the figure for the control window
-    control_fig = Figure()
+    control_fig = Figure(size=(800, 600), title="Camera Control: " * camera.unique_id)
 
     # Dropdown menus for enums
     modes = ["capture", "trigger"]
     for (index, mode) in enumerate(modes)
         options = [(string(m), m) for m in instances(typeof(getfield(camera, Symbol(mode * "_mode"))))]
-        create_menu(control_fig, 2, index, options, string(getfield(camera, Symbol(mode * "_mode"))))
+        create_menu(control_fig, 2, index, options,
+            string(getfield(camera, Symbol(mode * "_mode"))), camera)
     end
 
     # label, textbox, and callback for each property

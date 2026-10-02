@@ -20,6 +20,9 @@ include("thorcam_csc/ThorCamCSC.jl")
 include("thorcam_dcx/ThorCamDCx.jl")
 @reexport using .ThorCamDCx
 
+include("ids_camera/IDSCam.jl")
+@reexport using .IDSCam
+
 # Stage implementations
 include("pi_stage/PI.jl")
 @reexport using .PI
