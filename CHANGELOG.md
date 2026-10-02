@@ -8,6 +8,160 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
+## [0.2.6] - 2026-10-01
+
+A non-breaking release in three parts. Only the DCAM4 part has run on hardware so
+far (below); the rig checks still owed are listed in #73 (the C-867 startup check),
+#74 and #75.
+
+- **PI stage (#73).** `PIStage.initialize` checks the travel-range, velocity and
+  motion-stop returns, bounds its wait for motion to stop, and reclaims its own
+  earlier connection. The stage, Triggerscope and objective-positioner panels log a
+  failed `initialize` instead of throwing.
+- **TCube laser safety (#74).** Fixes from the 642 nm rig's controller facts. Fresh
+  reads send their request twice, because the TLD001 answers one request behind.
+  `check_lock` refuses in both directions. A refusal found while the diode is lit
+  zeroes and disables it first. Power mode gains an optional calibration reference,
+  which every power-mode rig should record. Several calls take longer (see Changed).
+- **DCAM4 capture (#75).** Every frame wait is bounded and armed before the capture
+  starts, and every exit cleans up. On the quickbeam rig, full-frame captures that had
+  always hung passed 26 of 26 (12.5, 100 and 250 ms) on a v0.2.4-based trial with this
+  camera code. One hang remains: after the rig's GPU code had loaded, a full-frame
+  capture hung inside a camera library call, on several cores, until the process was
+  ended. It is not fixed here and is tracked for 0.2.7. The NOTREADY, TIMEOUT and
+  NOTSTABLE errors the rig logs during GUI use are not fixed here either. The
+  forced-timeout and sequence checks are still owed. `capture` now refuses while a
+  live view or sequence runs.
+
+### Fixed
+
+- `PIStage`: `shutdown` could close another object's connection. `id` defaulted to `0`, a valid GCS id, and was never reset; it now defaults to `-1` and `shutdown` resets it.
+- `PIStage.initialize` reported the stage connected before it was: `connectionstatus` was set before the connect, and a failed close after a failed reference left it `true`, so a retry answered "already initialized". It is now set only after the whole sequence succeeds, and every step after the connect is inside the cleanup.
+- `PIStage.initialize` ignored a FALSE from reading the travel range (`PI_qTMN`/`PI_qTMX`) or setting the velocity, and came up connected with an unset range. Each is now checked; a failure closes the connection and throws. A failed range query no longer writes an uninitialized buffer into `range_x`/`range_y`.
+- `PIStage.initialize`'s wait for motion to stop after the reference move had no deadline and ignored `PI_IsMoving`'s return, so a failed query could spin forever. It now polls every 0.1 s, throws on a failed query, and gives up after `REFERENCE_TIMEOUT_S`.
+- A `PIStage.initialize` retried after a failed close reported the controller held by another process. The stage now closes its own earlier connection first, and does not reconnect if that close fails too.
+- The stage, Triggerscope and objective-positioner panels log a failed `initialize` instead of throwing out of the callback, through one helper, and a stage panel reads no position after an `initialize` that did not connect.
+- `TCubeLaser`: every fresh read of the controller (the status word, the current limit, the
+  potentiometer position, the W/A read-back, `initialize`'s limit read and `tcube_get_current`)
+  now sends its request twice before reading. The 642 nm rig's TLD001 answers one request behind
+  (2026-09-29), so a single request could let `light_on`'s current-limit gate pass a
+  potentiometer raised since the previous read, and the enable then ran above `max_current`
+  until the setpoint landed.
+- `TCubeLaser` power mode: `check_lock` makes its own readings and status requests and refuses
+  in both directions. Besides a photocurrent above `lock_ratio` times the request, it refuses when
+  the controller reports its current limit reached (status bit `0x400`) or the photocurrent is
+  below the request divided by `lock_ratio`; the output is then zeroed and disabled, as for a
+  suspected lock. It used to read the polled cache and test only the high side, so a loop driven
+  to the clamp -- by a request the clamp cannot reach, or by a photodiode giving fewer counts per
+  mW than at calibration -- went unnoticed.
+- `PhotodiodeLoop` refuses a `lock_check_s` below 0.1 s (`LOCK_CHECK_MIN_S`): 0 was accepted and
+  disabled the lock check. A construction passing a smaller value now throws.
+- `TCubeLaser`: `measured_current` (and so `loop_status`) accepts the raw reading -32768, which
+  the Kinesis header defines as -220 mA, instead of throwing.
+- `TCubeLaser`: any failure during the calibration-reference re-check (a mismatch, a mode refusal or a
+  command error) latches until the next `initialize`, and the diode is not re-lit on every retried `light_on`.
+- `TCubeLaser`: a safety check that refuses while the output may be on (the stored-limit
+  check, and in power mode also a mode, TIA-range or clamp change, or an over-range photodiode) now zeroes and disables
+  the output before it throws, instead of leaving the diode lit in the fault.
+- `TCubeLaser` open-loop `initialize` confirms open loop with a fresh status read after
+  `LD_SetOpenLoopMode`, and refuses if the controller stays in closed loop.
+- `TCubeLaser` power mode: `check_lock` also runs the current-limit test (`0x400`) at a zero request.
+- `TCubeLaser` power mode: `setoutputpower!` decides on fresh status and photocurrent reads, and
+  `light_on` and `setoutputpower!` refuse a photodiode range that no longer matches `tia_range`.
+- `TCubeLaser`: the header's potentiometer floor, 17.25 mA, no longer gates anything. Open-loop
+  `initialize` lowers the potentiometer for any `max_current` below the controller's limit, and
+  power-mode construction no longer refuses a `max_current` under 17.25 mA; the limit the
+  controller reports decides (the 642 nm rig's unit reads 16.74 mA at the lowest position).
+- `DCAM4Camera` `capture` could hang, or leave the camera unusable after a missed frame. One hang inside a camera
+  library call remains (see the summary). Its frame wait is now bounded by 2 x (exposure + readout) + 1 s, with the
+  readout read from the camera (`DCAM_IDPROP_TIMING_READOUTTIME`); the wait is armed before the capture starts; the
+  wait's parameter struct carries its size (it was sent as 0); and every exit stops the capture, releases the
+  buffer and closes the wait. A timeout or failed wait logs, sets `last_error` and throws a clear error (it threw a
+  MethodError before). Reported from the quickbeam rig: full frame at 12.5 ms and at 100 ms, including the first
+  capture in a fresh session.
+- `DCAM4Camera` `getlastframe`: a timeout or failed wait no longer throws a MethodError. It logs, sets `last_error`
+  and returns `nothing`, as the code intended. Its wait is bounded the same way, with the readout time read once per
+  `live`, `sequence` or `capture` and cached. A frame that cannot be copied, here or in `capture`, sets `last_error`.
+- `DCAM4Camera` `getdata` in SEQUENCE mode polls the capture status against a deadline of
+  2 x N x (exposure + readout) + 1 s instead of waiting for the end-of-cycle event. A sequence that has already
+  ended cannot be missed, a full-frame sequence of short exposures no longer times out, and an interrupt can land
+  while it waits. A frame that cannot be read returns `nothing` with `last_error` set (it threw a MethodError).
+  Every exit stops the capture and releases the buffer. A sequence that transferred fewer frames than requested (or
+  never ran) returns `nothing` with `last_error` set to `DCAMERR_LOSTFRAME`. In LIVE mode `getdata` returns the
+  newest frame at once and leaves the live view running; it used to clear `is_running` while the view ran on.
+- `DCAM4Camera` `sequence`: the task that marks the sequence finished gives up at the same deadline and stops a
+  capture stuck running, so `is_running` can no longer stay true forever. It acts only while its sequence is
+  current, so it never stops or marks finished a newer live view or sequence, and a failed status read is retried
+  until the deadline.
+- `DCAM4Camera`: clearing a leftover capture handles every state (a capture in the ERROR state was neither stopped
+  nor released), and `abort` now does exactly that.
+- `TCubeLaser` power mode: a failed setpoint zero (in `light_off`, or in a failure cleanup) is no longer only
+  logged. It is flagged in the laser's state (`PhotodiodeLoop.zero_failed`, cleared only by a zero that lands,
+  one sent while the output is recorded on, since the controller ignores a zero sent with the output off, and by
+  `initialize`), and the next `light_on` warns that the controller's stored setpoint may be stale and
+  that the first moments after the enable may run toward it, bounded by the programmed clamp.
+- `TCubeLaser` power mode: `setoutputpower!` with the output on warns when the photodiode scale is unchecked (the
+  calibration re-check was refused or has not run, as after a front-panel switch-on): the delivered power may
+  differ from the request, by twice at half the photodiode gain. Recalibrate or call `light_on`; after a refused
+  re-check, which `light_on` keeps refusing until `initialize`, it says to re-initialize after fixing the setup or
+  recalibrating.
+- `TCubeLaser` power mode: whatever the calibration-reference re-check throws in `light_on` (the latched refusal,
+  a reference above the current ceiling, a command failure or a mismatch), the output is switched off first when
+  it may be lit, as for a `require_clamp` refusal, and the error is rethrown. The log says whether the switch-off
+  worked; the refusal message no longer claims a switch-off that was not made.
+- `CALIBRATION.md`: the calibration reference (step 3b) is recorded inside step 3, with the laser still on, and
+  its code block ends with `light_off(laser); shutdown(laser)`, so running the blocks in order leaves the diode off.
+
+### Changed
+
+- `PIStage.initialize` waits for `PI_IsControllerReady` after the reference move, before polling `PI_qFRF`, as PI's samples do. Not yet run on hardware; needs a rig check on the C-867.
+- `TCubeLaser` timings, against 0.2.5, at the default `lock_check_s` (0.2 s) and `REQUEST_WAIT_S`
+  (0.1 s; a fresh read now sends its request twice, 0.2 s, where it was 0.1 s):
+  - a power-mode `light_on` takes about 0.6 s longer (`require_clamp` two fresh reads, +0.2 s; `check_lock`
+    adds its photocurrent and status reads, +0.4 s);
+  - a power-mode `setoutputpower!` with the output on takes about 0.8 s longer for a request above zero
+    and about 0.6 s for a zero request (`require_clamp` +0.2 s, the fresh photocurrent read +0.2 s,
+    `check_lock` +0.4 s, or +0.2 s at zero); with the output off, about 0.2 s longer;
+  - an open-loop `light_on` takes about 0.1 s longer (one fresh limit read), and a `setcurrent!` with
+    the output off about 0.1 s longer (one fresh status read);
+  - `initialize` takes about 0.8 s longer in power mode (eight fresh reads: status 2, potentiometer 2, limit 3,
+    W/A 1, for one potentiometer setting; each further setting adds 0.2 s) and about 0.3 s in open loop
+    (one limit read, more if the potentiometer is lowered, plus 0.2 s for the open-loop confirm);
+  - the first power-mode `light_on` after `initialize` also runs the calibration-reference re-check:
+    `REFERENCE_DWELL_S` (0.1 s), three fresh reads (0.6 s) and the setpoint confirm, about 0.7 s plus the confirm.
+- `DCAM4Camera` `capture` refuses (throws "Stop the live view or sequence first") while a live view or sequence is
+  running (`is_running`), instead of failing at the buffer allocation and returning `nothing`. It never releases a
+  buffer another task may be waiting on. A leftover from an earlier call (a failed capture, or a sequence that
+  ended and was never read) is stopped and released first.
+
+### Added
+
+- Fake-GCS2 tests for `PIStage` (`test/pi_stage_fake_sdk.jl`, `test/pi_stage.jl`): `initialize`'s ordering and cleanup and `shutdown`'s id handling, the range, velocity and motion-stop checks, the reclaim after a failed close, and the GUI guard, with no hardware.
+- A calibration reference for power mode: `ref_current_mA`, `ref_photocurrent_A` and `ref_ratio`
+  (default 1.5) on `PhotodiodeLoop`, `TCubeLaser` and `SimDiodeLaser` (which stores them and does
+  not check). With a reference, the first power-mode `light_on` after each `initialize` runs the
+  diode in open loop at `ref_current_mA` for `REFERENCE_DWELL_S` (0.1 s) before reading the photodiode,
+  and refuses unless the photocurrent is within a factor `ref_ratio` of `ref_photocurrent_A`; the
+  output is off after the check either way, and a mismatch refuses every later `light_on` until the
+  next `initialize`. Without one, that `light_on` warns once that the check is skipped. See `CALIBRATION.md`.
+  **Every rig that uses power mode should record one** (`ref_current_mA`, `ref_photocurrent_A`),
+  with its next W/A measurement; `CALIBRATION.md` step 3b says how.
+
+### Known issues
+
+- Camera (`DCAM4Camera`), planned for 0.2.7:
+  - A frame read waiting in `getdata` can stop and release a newer live view's buffer if another task starts one.
+  - A failed stop or buffer release is not recorded, and the camera is marked stopped; it recovers at the next start.
+  - A sequence or live view that fails to start leaves its buffer allocated until the next start.
+  - If the frame-count query fails, a sequence can return frames without checking that all arrived.
+  - Stop any threaded `getlastframe` loop before calling `abort`, `live`, `sequence` or `capture` from another task: a
+    buffer released during its frame wait can crash the process.
+- Laser (`TCubeLaser`):
+  - In power mode, a zero sent right after a failed enable counts as landed, so the next `light_on` may not warn
+    about a stale stored setpoint. The first moments after that enable are still bounded by the programmed clamp.
+  - In `CALIBRATION.md`, if reading the reference throws, the example's `light_off` and `shutdown` do not run:
+    switch the laser off by hand after any error there.
+
 ## [0.2.5] - 2026-09-29
 
 A non-breaking release. It brings the TCube laser's closed-loop (power) mode and

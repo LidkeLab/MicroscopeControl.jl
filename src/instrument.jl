@@ -54,6 +54,23 @@ function gui(instrument::AbstractInstrument)
     error("gui not implemented for $(typeof(instrument))")
 end
 
+"""
+    gui_initialize(device, what::AbstractString) -> Bool
+
+Call `initialize(device)` from a GUI panel or button. A throw is logged with `@error` instead of
+escaping into Makie's callback. Returns `false` after a throw, or when the device has a
+`connectionstatus` field that is still `false`; otherwise `true`.
+"""
+function gui_initialize(device, what::AbstractString)
+    try
+        initialize(device)
+    catch err
+        @error "Failed to initialize the $what" exception = err
+        return false
+    end
+    return !hasproperty(device, :connectionstatus) || device.connectionstatus
+end
+
 # =============================================================================
 # AbstractSystem - Composite of instruments
 # =============================================================================
