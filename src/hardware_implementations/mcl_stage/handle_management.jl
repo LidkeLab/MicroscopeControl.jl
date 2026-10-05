@@ -14,7 +14,7 @@ This function is responsible for initializing the handle for the stage. The hand
 
 """
 function inithandle(stage::MCLStage)
-    handle = @ccall madlibpath.MCL_InitHandle()::Cint
+    handle = @ccall libmadlib.MCL_InitHandle()::Cint
     stage.id = handle
     stage.connectionstatus = true    
 
@@ -39,14 +39,14 @@ This function is responsible for releasing the handle for the stage. After the h
 
 """
 function releasehandle(stage::MCLStage)
-    @ccall madlibpath.MCL_ReleaseHandle(stage.id::Cint)::Cvoid
+    @ccall libmadlib.MCL_ReleaseHandle(stage.id::Cint)::Cvoid
     stage.connectionstatus = false
     return nothing
 end 
 
 
 function releaseallhandles(stage::MCLStage)
-    @ccall madlibpath.MCL_ReleaseAllHandles()::Cvoid
+    @ccall libmadlib.MCL_ReleaseAllHandles()::Cvoid
     stage.connectionstatus = false
     return nothing
 end
