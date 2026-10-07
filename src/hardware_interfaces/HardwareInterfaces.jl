@@ -32,6 +32,9 @@ include("attenuator_interface/AttenuatorInterface.jl")
 include("triggerscope_interface/TrigInterface.jl")
 @reexport using .TrigInterface
 
+include("beam_steering_interface/BeamSteeringInterface.jl")
+@reexport using .BeamSteeringInterface
+
 # Commented out - not currently in use
 # include("objective_positioner_interface/ObjPositionerInterface.jl")
 # @reexport using .ObjPositionerInterface

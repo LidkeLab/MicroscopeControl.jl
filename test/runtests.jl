@@ -14,6 +14,10 @@ include("pi_n472_fake_sdk.jl")
 # Same seam for the PI stage's GCS2 wrappers; see the file.
 include("pi_stage_fake_sdk.jl")
 
+# Records beam-steering writes instead of driving a Triggerscope or an NI card, so the
+# Galvo/EOD logic runs with nothing attached. Top level, before the testsets.
+include("beam_steering_fake_backend.jl")
+
 # Writes the lab test record summary when LAB_TEST_SUMMARY is set; see the file.
 include("lab_summary.jl")
 
@@ -1855,5 +1859,6 @@ lab_summary("Core") do
     include("contract.jl")
     include("skills.jl")
     include("gui.jl")
+    include("beam_steering.jl")
 end
 end  # lab_summary
