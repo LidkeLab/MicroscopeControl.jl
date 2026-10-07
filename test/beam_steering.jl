@@ -139,27 +139,42 @@
     end
 
     @testset "Backends" begin
-        # Range table and the finest step a 16-bit DAC can address at each range.
+        # Range table: pure arithmetic, no device of any kind.
         @test rangelimits(PLUSMINUS10) == (-10.0, 10.0)
         @test rangelimits(PLUSMINUS2_5) == (-2.5, 2.5)
         @test rangelimits(ZEROTOFIVE) == (0.0, 5.0)
 
-        scope = Triggerscope4()
-        @test isapprox(min_voltage_step(TriggerscopeBackend(scope; range=PLUSMINUS10)), 20.0 / 65535)
-        @test isapprox(min_voltage_step(TriggerscopeBackend(scope; range=PLUSMINUS2_5)), 5.0 / 65535)
-
-        @test BeamSteeringInterface.backend_limits(
-            TriggerscopeBackend(scope; range=PLUSMINUS5)) == ((-5.0, 5.0), (-5.0, 5.0))
-        @test_throws ArgumentError TriggerscopeBackend(scope; x_channel=3, y_channel=3)
-        @test_throws ArgumentError TriggerscopeBackend(scope; x_channel=99)
-
-        # The NI backend is constructed without touching a card; its tasks are only
-        # created by initialize, and writing before that is refused.
+        # The NI backend is constructed without touching a card: it only records the
+        # channel names, and its tasks are created by initialize, so writing before that
+        # is refused rather than reaching NI-DAQmx.
         daq = DAQmxBackend("Dev2/ao0", "Dev2/ao1"; vmin=-10.0, vmax=10.0)
         @test BeamSteeringInterface.backend_limits(daq) == ((-10.0, 10.0), (-10.0, 10.0))
         @test_throws ArgumentError BeamSteeringInterface.write_voltages!(daq, 1.0, 1.0)
         @test_throws ArgumentError DAQmxBackend("Dev2/ao0", "Dev2/ao0")
         @test_throws ArgumentError DAQmxBackend("Dev2/ao0", "Dev2/ao1"; vmin=5.0, vmax=-5.0)
+
+        # Triggerscope4's constructor builds a LibSerialPort.SerialPort eagerly, which
+        # throws SP_ERR_ARG where the named port does not exist -- so a machine with no
+        # serial port (CI) cannot construct one at all, while Windows happens to accept a
+        # name for a port that is not there. Everything above this point is therefore
+        # unconditional and the rest is skipped where no port can be opened.
+        scope = try
+            Triggerscope4()
+        catch e
+            @info "No serial port available; skipping the Triggerscope backend checks" exception = e
+            nothing
+        end
+
+        if scope !== nothing
+            # 16-bit DAC: the finest addressable step is the range span / 65535.
+            @test isapprox(min_voltage_step(TriggerscopeBackend(scope; range=PLUSMINUS10)), 20.0 / 65535)
+            @test isapprox(min_voltage_step(TriggerscopeBackend(scope; range=PLUSMINUS2_5)), 5.0 / 65535)
+
+            @test BeamSteeringInterface.backend_limits(
+                TriggerscopeBackend(scope; range=PLUSMINUS5)) == ((-5.0, 5.0), (-5.0, 5.0))
+            @test_throws ArgumentError TriggerscopeBackend(scope; x_channel=3, y_channel=3)
+            @test_throws ArgumentError TriggerscopeBackend(scope; x_channel=99)
+        end
     end
 end
 
