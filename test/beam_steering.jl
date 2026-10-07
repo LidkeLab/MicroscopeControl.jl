@@ -173,3 +173,19 @@ end
     @test BeamSteeringInterface.backend_limits(bare) === nothing
     @test_throws ArgumentError Galvo(bare)
 end
+
+@testset "EOD negative zero" begin
+    # An inverting amplifier turns a commanded 0 V into -0.0, which displays as "-0.0 V"
+    # and gets saved that way. The conversions normalise it.
+    eod = EOD(RecordingBackend(), amplifier_gain=20.0, invert=true,
+        xlimits=(-7.5, 7.5), ylimits=(-7.5, 7.5))
+    initialize(eod)
+    @test !signbit(tocrystal(eod, 0.0))
+    @test !signbit(todaq(eod, 0.0))
+    @test all(!signbit, getcrystalvoltage(eod))
+    attrs, _, _ = export_state(eod)
+    @test !signbit(attrs["crystal_voltage_x"])
+    # the sign of a real value is of course untouched
+    @test tocrystal(eod, 1.0) == -20.0
+    @test todaq(eod, -20.0) == 1.0
+end

@@ -16,14 +16,16 @@ amplifier_factor(eod::EOD) = eod.invert ? -eod.amplifier_gain : eod.amplifier_ga
 
 The voltage across the crystal when the DAQ puts out `v_daq` volts.
 """
-tocrystal(eod::EOD, v_daq::Real) = Float64(v_daq) * amplifier_factor(eod)
+#     + 0.0 normalises the negative zero an inverting amplifier otherwise produces from a
+#     commanded 0 V, which would show up as "-0.0 V" and be saved that way by export_state.
+tocrystal(eod::EOD, v_daq::Real) = Float64(v_daq) * amplifier_factor(eod) + 0.0
 
 """
     todaq(eod::EOD, v_crystal::Real)
 
 The DAQ output voltage needed to put `v_crystal` volts across the crystal.
 """
-todaq(eod::EOD, v_crystal::Real) = Float64(v_crystal) / amplifier_factor(eod)
+todaq(eod::EOD, v_crystal::Real) = Float64(v_crystal) / amplifier_factor(eod) + 0.0
 
 """
     crystal_limits(eod::EOD)
