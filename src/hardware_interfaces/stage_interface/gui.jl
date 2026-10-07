@@ -29,13 +29,13 @@ function gui(stage::Stage)
     elseif stage.dimensions == 3
         return gui3d(stage)
     else
-        @error "Stage dimension not supported"
+        error("gui not implemented for $(typeof(stage)) with dimensions $(stage.dimensions)")
     end
 end
 
 function gui1d(stage::Stage)
     #First we will create a figure to hold the GUI elements
-    stage_gui_fig = Figure(resolution=(600, 400))  #This is the Stage GUI Figure
+    stage_gui_fig = Figure(size=(600, 400))  #This is the Stage GUI Figure
 
     #Set up variables for motion that will be changed
     xstepsize = Observable(0.1)
@@ -164,7 +164,7 @@ function gui1d(stage::Stage)
         stopmotion(stage)
     end
     on(control_buttons[3].clicks) do initialize_click
-        initialize(stage)
+        MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[] = stage.real_x
         xtarget[] = stage.targ_x
@@ -258,7 +258,7 @@ end
 
 function gui2d(stage::Stage)
     #First we will create a figure to hold the GUI elements
-    stage_gui_fig = Figure(resolution=(1200, 600))  #This is the Stage GUI Figure
+    stage_gui_fig = Figure(size=(1200, 600))  #This is the Stage GUI Figure
 
     #=
     This function should flow as follows
@@ -453,7 +453,7 @@ function gui2d(stage::Stage)
         stopmotion(stage)
     end
     on(control_buttons[3].clicks) do initialize_click
-        initialize(stage)
+        MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[], yposition[] = stage.real_x, stage.real_y
         xtarget[], ytarget[] = stage.targ_x, stage.targ_y
@@ -553,7 +553,7 @@ end
 function gui3d(stage::Stage)
 
     #First we will create a figure to hold the GUI elements
-    stage_gui_fig = Figure(resolution=(1200, 600))  #This is the Stage GUI Figure
+    stage_gui_fig = Figure(size=(1200, 600))  #This is the Stage GUI Figure
 
     #Set up variables for motion that will be changed
     xstepsize = Observable(0.1)
@@ -795,7 +795,7 @@ function gui3d(stage::Stage)
         stopmotion(stage)
     end
     on(control_buttons[3].clicks) do initialize_click
-        initialize(stage)
+        MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[], yposition[], zposition[] = stage.real_x, stage.real_y, stage.real_z
         xtarget[], ytarget[], ztarget[] = stage.targ_x, stage.targ_y, stage.targ_z

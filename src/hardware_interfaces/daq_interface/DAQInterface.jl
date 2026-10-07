@@ -8,6 +8,7 @@ using Images
 using ...MicroscopeControl
 
 # import ...MicroscopeControl: AbstractInstrument, export_state, initialize, shutdown
+import ...MicroscopeControl: gui
 
 export DAQ
 export showdevices, showchannels, createtask, setvoltage, readvoltage, deletetask, addchannel!

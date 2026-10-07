@@ -39,17 +39,17 @@ function export_state(camera::SimCamera)
     attributes = Dict{String, Any}(
         "unique_id" => camera.unique_id,
         # Camera format
-        "sensor_width" => camera.camera_format.width,
-        "sensor_height" => camera.camera_format.height,
-        "bit_depth" => camera.camera_format.bit_depth,
-        "bytes_per_pixel" => camera.camera_format.bytes_per_pixel,
-        "sensor_type" => camera.camera_format.sensor_type,
+        "sensor_width" => camera.camera_format.x_pixels,
+        "sensor_height" => camera.camera_format.y_pixels,
+        "pixel_size" => camera.camera_format.pixelsize,
+        "gain" => camera.camera_format.gain,
+        "sensor_type" => camera.camera_format.sensortype,
         # Camera settings
         "exposure_time" => camera.exposure_time,
         "frame_rate" => camera.frame_rate,
         # ROI
-        "roi_origin_x" => camera.roi.origin_x,
-        "roi_origin_y" => camera.roi.origin_y,
+        "roi_x_start" => camera.roi.x_start,
+        "roi_y_start" => camera.roi.y_start,
         "roi_width" => camera.roi.width,
         "roi_height" => camera.roi.height,
         # Capture settings

@@ -10,7 +10,7 @@ function gui(daq::DAQ)
     println(typeof(daq))
 
     # Create the figure for the control window
-    control_fig = Figure(resolution = (900,400))
+    control_fig = Figure(size = (900,400))
 
     # create a dropdown menu for the devices
     devs = showdevices(daq)

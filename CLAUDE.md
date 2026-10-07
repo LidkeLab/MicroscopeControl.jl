@@ -1,0 +1,255 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Build and Test Commands
+
+```bash
+# Run all tests
+julia --project -e 'using Pkg; Pkg.test()'
+
+# Run tests with coverage
+julia --project -e 'using Pkg; Pkg.test(coverage=true)'
+
+# Run specific test interactively (useful for debugging)
+julia --project -e 'using MicroscopeControl, Test; @testset "Simulated Camera" begin cam=SimCamera(); @test initialize(cam)===nothing end'
+
+# Load package in REPL for development
+julia --project -e 'using Pkg; Pkg.instantiate(); using MicroscopeControl'
+
+# Install as development package
+julia -e 'using Pkg; Pkg.develop(url="https://github.com/LidkeLab/MicroscopeControl.jl.git")'
+```
+
+### Testing policy: local first, CI as confirmation
+
+**Run the full local suite before every push.** CI is confirmation, never the
+first signal that a change works. Actions minutes are a shared, finite
+resource, and a workflow re-run is not a cheap way to find out whether code
+compiles.
+
+```bash
+# the gate, before any push
+xvfb-run -a julia --project -e 'using Pkg; Pkg.test()'
+
+# before a release, or when touching anything version-sensitive, also run the
+# OLDEST supported version, which CI no longer runs on pull requests
+xvfb-run -a ~/.julia/juliaup/julia-1.11*/bin/julia --project -e 'using Pkg; Pkg.test()'
+```
+
+What CI actually runs, deliberately thin (`.github/workflows/CI.yml`):
+- **pull request**: one Julia version, the version-bump check, no docs build,
+  and nothing at all when the change touches only `docs/`, `README.md`,
+  `CHANGELOG.md`, `CLAUDE.md` or `LICENSE`.
+- **push to `main` / tags**: the full version matrix, coverage upload, and the
+  docs build — once, where the tag is actually cut.
+- Full signal on a branch without opening a pull request:
+  `gh workflow run CI.yml --ref <branch>`.
+
+Batch fixups into one push rather than pushing each review round separately;
+every push to an open pull request starts a fresh run.
+
+Tests use simulated devices only (`SimCamera`, `SimStage3d`/`SimStage2d`/`SimStage1d`, `SimLight`, `SimDiodeLaser`) plus a fake Kinesis SDK (`test/tcube_fake_sdk.jl`) that the real `TCubeLaser` driver runs against - no hardware required. GLMakie needs a display: run under `xvfb-run -a` on a headless Linux box (CI does this). Test sets: "Simulated Camera", "Simulated Stage", "Simulated Light Source", "Export State".
+
+## Architecture
+
+MicroscopeControl.jl uses a **three-layer architecture** leveraging Julia's multiple dispatch:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  MicroscopeControl.jl (main module)                         │
+│  Re-exports all types and functions for user convenience    │
+├─────────────────────────────────────────────────────────────┤
+│  hardware_interfaces/          │  hardware_implementations/ │
+│  Abstract types + contracts    │  Concrete device drivers   │
+│  - CameraInterface             │  - SimulatedCamera, DCAM4  │
+│  - StageInterface              │  - SimulatedStage, PI, MCL │
+│  - LightSourceInterface        │  - SimulatedLight, TCube,  │
+│    (+ DiodeLaser)              │    SimDiodeLaser           │
+│  - DAQInterface                │  - NIDAQcard               │
+│  - SLMInterface                │  - OK_XEM (FPGA)           │
+│  - AttenuatorInterface         │  - LCC1620                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Core Pattern
+
+All hardware inherits from `AbstractInstrument` (defined in `instrument.jl`):
+- `initialize(device)` - setup hardware connection
+- `shutdown(device)` - close hardware connection
+- `export_state(device)` - returns `(attributes::Dict, data, children::Dict)` for HDF5 serialization
+- `gui(device)` - open a GUI control panel for the device
+
+Interfaces define method signatures with throwing `error("<name> not implemented for $(typeof(...)))")` stubs (see `test/contract.jl`'s "Interface Contract" testset). Implementations provide concrete methods that dispatch on the device type.
+
+### Data Persistence
+
+`h5_file_saving.jl` provides `save_h5(filename, state_tuple)`, where `state_tuple` is the `(attributes, data, children)` tuple returned by `export_state` (not the device itself). It runs on an `@async` task and returns that `Task`; `wait` it before reading the file. The synchronous form is `save_attributes_and_data(filename, group, attributes, data, children)`; `save_h5` calls it with `group = "Main"`. Children are further `(attributes, data, children)` tuples, written recursively as HDF5 groups.
+
+### Adding New Hardware
+
+1. Create directory under `hardware_implementations/your_device/`
+2. Create `types.jl` with struct inheriting from interface type (e.g., `Camera`, `Stage`, `LightSource`)
+3. Create `interface_methods.jl` implementing required interface functions
+4. Add module to `HardwareImplementations.jl`
+5. Re-export types/functions in main `MicroscopeControl.jl`
+
+### Key Interface Methods
+
+**Camera**: `capture`, `live`, `sequence`, `abort`, `getlastframe`, `getdata` (exposure and ROI are set through the `exposure_time` and `roi::CameraROI` fields)
+
+**Stage**: `move`, `getposition`, `getrange`, `stopmotion`
+
+**LightSource**: `setpower`, `light_on`, `light_off`
+
+**DiodeLaser** (`<: LightSource`; `TCubeLaser{M}`, `SimDiodeLaser{M}` with `M` = `ConstantCurrent` or `ConstantPhotocurrent`, fixed at construction, `mode=` required): `setcurrent!` (mA, `ConstantCurrent` only), `setoutputpower!` (mW at the laser output, `ConstantPhotocurrent` only), `setlevel!` (0..1 of the declared range, both), `measured_current`, `measured_photocurrent`, `indicated_output_power`, `loop_status`, `regulation_mode`, `supported_modes`. `setpower` throws on a `DiodeLaser`. Mode-shared methods are written against the bare `TCubeLaser`, mode-specific ones against `TCubeLaser{ConstantCurrent}` / `{ConstantPhotocurrent}`; never a `where M` method on a generic `test/contract.jl` checks. `subtypes` is one level deep, so the contract test and API map walk to the leaves (`device_types`). Closed-loop calibration and the 642 nm rig's measured facts: `src/hardware_implementations/tcube_laser/CALIBRATION.md`.
+
+**DAQ**: `showdevices`, `showchannels`, `createtask`, `setvoltage`, `readvoltage`, `deletetask`
+
+**Attenuator**: `setdrivevoltage`, `getdrivevoltage`, `settransmission`, `gettransmission`, `set_calibration!`
+
+### GUI Components
+
+Each interface has optional `gui.jl` with GLMakie-based control panels. Access via `gui(device)`.
+
+### C Library Bindings
+
+Hardware implementations use `ccall` for vendor SDKs:
+- `dcam4_camera/dcamapi*.jl` - Hamamatsu DCAM4
+- `pi_n472/functions_GCS2.jl` - PI GCS2 protocol
+- `tcube_laser/tcubeapi.jl` - Thorlabs TCube
+- `ok_xem/functions_okFP.jl` - Opal Kelly FrontPanel
+- `mcl_stage/*.jl` - Mad City Labs NanoDrive
+- Serial devices (CrystaLaser, Vortran, Triggerscope) use `LibSerialPort`
+
+Rules at the `ccall` boundary, learned from the C-867 servo bug (v0.1.1), the
+N-472 connect string that worked only by accident of `filter`, and the N-472
+`stopmotion` that never worked:
+- A `Ptr{Cchar}` argument (GCS2 axes lists, USB descriptions) gets a Julia
+  `String`, which is always NUL-terminated. Never a `Vector{UInt8}` with the
+  zeros filtered out, and never a `Vector{String}`; join axes with a space first.
+- A GCS2 `BOOL*` argument is 32-bit (`Cuint`/`Cint`), one element per axis,
+  never `UInt8`.
+- Set a driver's `connectionstatus` only after the connect call's return value
+  is checked, and clear it and the device id in `shutdown`, so a failed or
+  closed object can be initialized again and a stale id cannot close another
+  object's connection.
+
+The test suite must never command attached hardware. Driver tests replace the
+vendor wrappers with a recorder (`test/tcube_fake_sdk.jl`,
+`test/pi_n472_fake_sdk.jl`), so they run on every machine and never reach a DLL.
+
+### Camera Image Data Convention
+
+**Convention:** Image data is stored and displayed as column-major `(H, W, N)` arrays where `data[row, col]` = `data[y, x]`.
+
+**At DLL boundary (getdata):** C SDKs return row-major buffers. Must permute after reshape:
+```julia
+# WRONG: reshape(buffer, (W, H)) - Julia reads column-first, data is transposed
+# CORRECT: permutedims(reshape(buffer, (W, H)), (2, 1)) -> (H, W)
+```
+
+**Display (Makie image/heatmap):** Both `image()` and `heatmap()` map dim1→x, dim2→y. For `(H, W)` data:
+```julia
+# Both work the same way:
+image(permutedims(data); axis=(yreversed=true,))    # W→x, H→y, origin top-left
+heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-left
+```
+
+**Saving (HDF5):** No transform needed if getdata follows convention. Save `(H, W, N)` directly.
+
+### Claude Code Skills
+
+`skills/` holds the sources for Claude Code skills that `install_skills()`
+copies into a downstream repo's `.claude/skills/` (see `src/skills.jl` and
+the README's "Claude Code skills" section). `list_skills()` reads the
+directory, so adding a skill is adding a directory with a `SKILL.md`; only
+`test/skills.jl`'s expected-name list needs a matching edit. The five skills
+are `mc-system-design` (entry point; design and composition), `mc-extend`
+(diagnose, report/work around, implement an interface, define an interface),
+`mc-acquire`, `mc-testing` and `mc-api-map` (whose `references/gui-fields.md`
+is hand-written and tracked, unlike the generated map). Every architectural
+statement in a skill is labelled as an
+existing guarantee, a current limitation, or a recommended system policy;
+keep that discipline when editing them. `mc-api-map`'s
+`references/api-map.md` is generated at install time by introspecting the
+loaded module and must never be committed; the repo-tracked `references/`
+directory holds only the `.gitkeep` placeholder and the hand-written
+`gui-fields.md`.
+
+### Work in Progress
+
+Some hardware modules are commented out in `MicroscopeControl.jl` while under development:
+- `MCLMicroPositioner` - Mad City Labs microdrive positioner
+
+### Versioning
+
+This package is 0.x and not yet registered; install a pinned tag per the README's Installation Notes. Versions follow lab decision 0033.
+
+**`main` is the development branch.** Its `Project.toml` carries the next
+version with `-DEV`: after `vX.Y.Z` is tagged, the next pull request sets
+`X.Y.(Z+1)-DEV`. Every pull request goes into `main` and leaves that version
+alone, unless it breaks an interface, in which case it raises it to
+`X.(Y+1).0-DEV`. A release is one pull request that drops `-DEV` and writes
+the `CHANGELOG.md` section; `.github/workflows/TagOnMerge.yml` tags its merge
+`vX.Y.Z` when a passing `lab/tests` record covers that commit's tree
+(decision 0009), and otherwise fails and says why. It skips every `-DEV`
+merge. CI's "Version bumped" check runs on every pull request
+(`.github/scripts/versions.py`): against a `-DEV` base the version may stay
+or rise but never fall, and against a released base it must rise.
+
+A release branch exists only for a safety backport: when `main` has moved on
+to a breaking version and a rig pinned to the previous series needs a fix,
+cut `release-X.Y` from that series' last tag, merge the fix into it with a
+pull request that raises `Z`, and merge the same fix into `main`.
+`[limitation]` TagOnMerge watches `main` only, so a backport's tag is cut by
+hand, after checking the same `lab/tests` coverage.
+
+What the numbers mean (decision 0033): before 1.0, in `0.Y.Z` **raising `Z` is any non-breaking change, new features included, and raising `Y` is an interface break** -- `0.2.4 -> 0.3.0` declares a break and `0.2.4 -> 0.2.5` a compatible release, which is also how Julia's `^0.2` compat bound reads them. A break is anything that lets working downstream code behave differently: a signature, an export, or what a call returns or throws. A bug fix that changes behaviour only on a path that was already broken is not a break. Config types are built by keyword (lab decision 0035): adding a field with a default is not a break, and a positional argument's meaning never changes (add a keyword and deprecate the old form instead). Hardware verification is not tracked in this repo; it is recorded by the downstream rig repo that pins to a given tag. The merge gate is the local suite (see "Testing policy" above) plus `test/contract.jl`'s "Interface Contract" testset, which guards the no-ambiguous-exports and core-method invariants described above; CI confirms it on a reduced matrix.
+
+## Instrument documentation archive (`manuals/`)
+
+`manuals/` is a **local-only symlink** to the lab-wide instrument archive on
+the NAS — vendor manuals, SDK headers, API references and the driver-facing
+notes that explain why a binding is the way it is. It is gitignored and must
+**never** be committed: git stores a symlink as a mode-120000 blob, and on a
+Windows rig without the symlink privilege that checks out as a text file
+containing the path, which is worse than nothing. Each clone makes its own.
+
+```bash
+# Linux (any of the four hosts)
+ln -sfn /mnt/nas/lidkelab/Projects/lab_instruments manuals
+```
+```bat
+REM Windows rig, from the repo root. Needs an elevated prompt, OR Developer
+REM Mode enabled once (Settings > Privacy & security > For developers).
+mklink /D manuals \\192.168.1.21\lidke-lrs\Projects\lab_instruments
+```
+
+`[limitation]` The junction form, `mklink /J`, does **not** work here: junctions
+resolve only to local volumes, so a UNC target fails. `/D` is required, and it
+is the one step in this arrangement that needs a privilege — once per rig, not
+once per clone. This has not been run on either rig yet; if `/D` is refused,
+say so rather than reaching for a mapped drive letter, which differs between
+user sessions and services.
+
+Nothing else is required — no environment variable and no shell profile edit.
+If `manuals/` is absent, make it with the line above.
+
+Layout is manufacturer first, then model: `manuals/Thorlabs/TLD001/`,
+`manuals/Hamamatsu/C11440-22CU/`, with shared vendor SDKs under
+`manuals/<Manufacturer>/SDK/<sdk-id>/`. Start at `manuals/INDEX.md`; the rules
+for adding anything are in `manuals/README.md`.
+
+Within a model directory, `source/` is the vendor original, verbatim and never
+renamed, and `docs/` is the working copy with a predictable name. A
+`BINDING.md`, where one exists, is the distillate a driver author actually
+needs — for example `manuals/Thorlabs/TLD001/BINDING.md` records that a Kinesis
+C++ boolean must be *passed* as a 4-byte `Cuint` but *read back* as a 1-byte
+`Bool`, which this package got wrong twice in opposite directions.
+
+`[policy]` When a driver's behaviour turns on a vendor fact -- a struct layout,
+an ABI width, a scaling constant, a status bit -- record it in that model's
+`BINDING.md` and cite the document in `source/` it came from. Three of the four
+defects in v0.2.3 were found by a rig holding hardware rather than by review,
+because the vendor fact was not written down anywhere a reviewer could check.

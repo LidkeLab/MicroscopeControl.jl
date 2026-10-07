@@ -1,7 +1,7 @@
 """
-Function to initialize PI Stage, right now this requires calibration using PiMikroMove to work correctly, no documentation on how to calibrate using the PI_GCS2 library
+Initialize the PI stage; see `initialize_original` for the sequence and its failure behaviour.
 """
-function initialize(stage::PIStage) #TODO: Error handling
+function initialize(stage::PIStage)
     initialize_original(stage)
 end
 
@@ -30,6 +30,14 @@ Function to update the position of the PI Stage
 """
 function StageInterface.getposition(stage::PIStage)
     getposition(stage)
+end
+
+"""
+Function to update the position range of the PI Stage
+"""
+function StageInterface.getrange(stage::PIStage)
+    getrange(stage)
+    return stage.range_y  # preserves 0.2.5's return value
 end
 
 

@@ -3,7 +3,7 @@
 """
 module NIDAQcard
 
-using NIDAQ
+using DAQmx
 using ...MicroscopeControl.HardwareInterfaces.DAQInterface
 
 import ...MicroscopeControl: export_state, initialize, shutdown

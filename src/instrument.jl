@@ -15,7 +15,7 @@ Export the state of the instrument as a tuple of attributes, data, and children.
 - A tuple of dictionaries containing the attributes, data, and children of the instrument.
 """
 function export_state(instrument::AbstractInstrument)
-    @error "Export state not implemented for this instrument"
+    error("export_state not implemented for $(typeof(instrument))")
 end
 
 """
@@ -27,7 +27,7 @@ Initialize the instrument.
 - `instrument::AbstractInstrument`: The instrument to initialize.
 """
 function initialize(instrument::AbstractInstrument)
-    @error "Initialize not implemented for this instrument"
+    error("initialize not implemented for $(typeof(instrument))")
 end
 
 """
@@ -39,5 +39,121 @@ Shuts down the instrument.
 - `instrument::AbstractInstrument`: The instrument to shut down.
 """
 function shutdown(instrument::AbstractInstrument)
-    @error "Shutdown not implemented for this instrument"
+    error("shutdown not implemented for $(typeof(instrument))")
+end
+
+"""
+    gui(instrument::AbstractInstrument)
+
+Open a GUI control panel for the instrument.
+
+# Arguments
+- `instrument::AbstractInstrument`: The instrument to build a GUI for.
+"""
+function gui(instrument::AbstractInstrument)
+    error("gui not implemented for $(typeof(instrument))")
+end
+
+"""
+    gui_initialize(device, what::AbstractString) -> Bool
+
+Call `initialize(device)` from a GUI panel or button. A throw is logged with `@error` instead of
+escaping into Makie's callback. Returns `false` after a throw, or when the device has a
+`connectionstatus` field that is still `false`; otherwise `true`.
+"""
+function gui_initialize(device, what::AbstractString)
+    try
+        initialize(device)
+    catch err
+        @error "Failed to initialize the $what" exception = err
+        return false
+    end
+    return !hasproperty(device, :connectionstatus) || device.connectionstatus
+end
+
+# =============================================================================
+# AbstractSystem - Composite of instruments
+# =============================================================================
+
+"""
+    AbstractSystemState
+
+Abstract type for system state. Concrete implementations should contain
+the configuration parameters for a specific system.
+"""
+abstract type AbstractSystemState end
+
+"""
+    AbstractSystem
+
+Abstract type for a microscope system (composite of instruments).
+Systems compose multiple instruments and manage their collective state.
+"""
+abstract type AbstractSystem end
+
+"""
+    get_state(sys::AbstractSystem)
+
+Get the current state of the system.
+
+# Arguments
+- `sys::AbstractSystem`: The system to get state from.
+
+# Returns
+- An `AbstractSystemState` representing the current configuration.
+"""
+function get_state(sys::AbstractSystem)
+    @error "get_state not implemented for $(typeof(sys))"
+end
+
+"""
+    set_state(sys::AbstractSystem, state::AbstractSystemState)
+
+Set the state of the system, updating all relevant instruments.
+
+# Arguments
+- `sys::AbstractSystem`: The system to configure.
+- `state::AbstractSystemState`: The desired state.
+"""
+function set_state(sys::AbstractSystem, state::AbstractSystemState)
+    @error "set_state not implemented for $(typeof(sys))"
+end
+
+"""
+    initialize(sys::AbstractSystem)
+
+Initialize all instruments in the system.
+
+# Arguments
+- `sys::AbstractSystem`: The system to initialize.
+"""
+function initialize(sys::AbstractSystem)
+    @error "initialize not implemented for $(typeof(sys))"
+end
+
+"""
+    shutdown(sys::AbstractSystem)
+
+Shutdown all instruments in the system.
+
+# Arguments
+- `sys::AbstractSystem`: The system to shut down.
+"""
+function shutdown(sys::AbstractSystem)
+    @error "shutdown not implemented for $(typeof(sys))"
+end
+
+"""
+    export_state(sys::AbstractSystem)
+
+Export the state of the system as a tuple of attributes, data, and children.
+
+# Arguments
+- `sys::AbstractSystem`: The system to export state from.
+
+# Returns
+- A tuple of (attributes::Dict, data, children::Dict).
+"""
+function export_state(sys::AbstractSystem)
+    @error "export_state not implemented for $(typeof(sys))"
 end

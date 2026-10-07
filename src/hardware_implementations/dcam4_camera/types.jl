@@ -27,6 +27,8 @@ mutable struct DCAM4Camera <: Camera
     is_running::Bool
     camerastate
     data::Array{UInt16}
+    readout_s::Float64
+    capture_generation::Int
 end
 
 function DCAM4Camera(dev_id::Int = 0;
@@ -46,13 +48,17 @@ function DCAM4Camera(dev_id::Int = 0;
     err, dci = dcamapi_init()
     if is_failed(err)
         dcamapi_uninit()
-        return err
+        error("DCAM4Camera(dev_id=$dev_id): dcamapi_init failed with $err. " *
+              "The DCAM API may already be held by another process (only one process " *
+              "can hold the DCAM SDK at a time).")
     end
 
     err, dco = dcamdev_open(dev_id::Int)
     if err != DCAMERR_SUCCESS
-        @error "Could not open camera"
-        return
+        dcamapi_uninit()
+        error("DCAM4Camera(dev_id=$dev_id): dcamdev_open failed with $err. " *
+              "The camera may already be held open by another process (only one process " *
+              "can hold a given DCAM device at a time).")
     end
 
     im_width, im_height = dcamprop_getsize(dco.hdcam)
@@ -60,5 +66,5 @@ function DCAM4Camera(dev_id::Int = 0;
     err, exposure_time = dcamprop_getvalue(dco.hdcam, DCAM_IDPROP_EXPOSURETIME)
     data = zeros(UInt16, im_width, im_height)
 
-    DCAM4Camera(unique_id, camera_format, dco.hdcam, exposure_time, frame_rate, roi, capture_mode, trigger_mode, sequence_length, last_error, is_running, camerastate,data)
+    DCAM4Camera(unique_id, camera_format, dco.hdcam, exposure_time, frame_rate, roi, capture_mode, trigger_mode, sequence_length, last_error, is_running, camerastate, data, NaN, 0)
 end

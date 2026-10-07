@@ -1,21 +1,42 @@
-
 """
-This module is a container for all hardware interfaces
+This module is a container for all hardware interfaces.
+Uses Reexport to automatically propagate exports from submodules.
 """
 module HardwareInterfaces
 
 using ..MicroscopeControl
 import ..MicroscopeControl: AbstractInstrument
-import ..MicroscopeControl: export_state, initialize, shutdown
+using Reexport
 
+# Include and re-export all interface modules
+# Each submodule exports its abstract types and generic function signatures
 
 include("camera_interface/CameraInterface.jl")
+@reexport using .CameraInterface
+
 include("slm_interface/SLMInterface.jl")
+@reexport using .SLMInterface
+
 include("stage_interface/StageInterface.jl")
+@reexport using .StageInterface
 
 include("lightsource_interface/LightSourceInterface.jl")
+@reexport using .LightSourceInterface
+
 include("daq_interface/DAQInterface.jl")
+@reexport using .DAQInterface
+
+include("attenuator_interface/AttenuatorInterface.jl")
+@reexport using .AttenuatorInterface
+
 include("triggerscope_interface/TrigInterface.jl")
+@reexport using .TrigInterface
+
 include("beam_steering_interface/BeamSteeringInterface.jl")
-include("objective_positioner_interface/ObjPositionerInterface.jl")
+@reexport using .BeamSteeringInterface
+
+# Commented out - not currently in use
+# include("objective_positioner_interface/ObjPositionerInterface.jl")
+# @reexport using .ObjPositionerInterface
+
 end

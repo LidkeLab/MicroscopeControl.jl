@@ -30,7 +30,8 @@ function gui(trig::TRIG)
     trig_gui_fig[2,1] = stopbutton = Button(trig_gui_fig, label="Stop Device")
     
     on(startbutton.clicks) do event
-        initialize(trig)
+        MicroscopeControl.gui_initialize(trig, "Triggerscope")
+        return nothing
     end
 
     on(stopbutton.clicks) do event

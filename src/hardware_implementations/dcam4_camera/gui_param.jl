@@ -1,6 +1,6 @@
 
 function gui_param(camera::DCAM4Camera)
-    prop_fig = GLMakie.Figure(resolution=(900, 1800), title="Camera Properties")
+    prop_fig = GLMakie.Figure(size=(900, 1800), title="Camera Properties")
     wd = 200
     wd1 = 300
     wd2 = 130

@@ -7,3 +7,9 @@ NIDAQ = "66b72792-1abf-55ab-8064-6e9051317175"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Polynomials = "f27b6e38-b328-58d1-80ce-0feddd5e7a45"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
+
+# DAQmx is not in the General registry; point at the lab's repo, as the root
+# Project.toml does. Without this, instantiating dev/ fails with
+# "expected package `DAQmx [bc903ccc]` to be registered".
+[sources]
+DAQmx = {rev = "main", url = "https://github.com/LidkeLab/DAQmx.jl.git"}

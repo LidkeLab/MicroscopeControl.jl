@@ -7,3 +7,7 @@
 .DS_Store
 thorlabs_tsi_logger.cfg
 *.dll
+# local-only symlink to the lab instrument archive on the NAS (see CLAUDE.md)
+/manuals
+# Local run output: test records, logs, handoffs (lab decision 0028)
+dev/output/

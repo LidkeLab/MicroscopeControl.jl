@@ -1,4 +1,21 @@
 
+"""
+    initialize(camera::SimCamera)
+
+No-op: the simulated camera needs no hardware connection.
+"""
+function initialize(camera::SimCamera)
+    return nothing
+end
+
+"""
+    shutdown(camera::SimCamera)
+
+No-op: the simulated camera needs no hardware connection to close.
+"""
+function shutdown(camera::SimCamera)
+    return nothing
+end
 
 function CameraInterface.getlastframe(camera::SimCamera)
     # Get the last image frame from the camera
@@ -37,7 +54,7 @@ end
 
 function CameraInterface.getdata(camera::SimCamera)
     if camera.capture_mode == SEQUENCE
-        return rand(UInt16, camera.sequence_length, camera.roi.height, camera.roi.width)
+        return rand(UInt16, camera.roi.height, camera.roi.width, camera.sequence_length)  # (H, W, N) convention
     elseif camera.capture_mode == SINGLE_FRAME
         return rand(UInt16, camera.roi.height, camera.roi.width)
     elseif camera.capture_mode == LIVE

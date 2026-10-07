@@ -7,7 +7,7 @@ List available devices.
 - `daq::DAQ`: A DAQ type.
 """
 function showdevices(daq::DAQ)
-    @error "showdevices not implemented"
+    error("showdevices not implemented for $(typeof(daq))")
 end
 
 """
@@ -21,7 +21,7 @@ List available channels of a given channel type and device.
 - `device::String`: A device name, obtained from `showdevices`.
 """
 function showchannels(daq::DAQ,channeltype::String,device::String)
-    @error "showchannels not implemented"
+    error("showchannels not implemented for $(typeof(daq))")
 end
 
 """
@@ -38,7 +38,7 @@ Create a task of a given task type and channel.
 - `t::Any`: A Any type.
 """
 function createtask(daq::DAQ,tasktype::String,channel::String)
-    @error "createtask not implemented"
+    error("createtask not implemented for $(typeof(daq))")
 end
 
 """
@@ -53,7 +53,7 @@ Add a channel to a task.
 - `channel::String`: A channel name, obtained from `showchannels`.
 """
 function addchannel!(daq::DAQ,t::Any,tasktype::String, channel::String)
-    @error "addchannel! not implemented"
+    error("addchannel! not implemented for $(typeof(daq))")
 end
 
 """
@@ -70,7 +70,7 @@ Set the voltage of a output task.
 - `ret::Int`: The number of samples written to the task.
 """
 function setvoltage(daq::DAQ,t::Any,voltage::Any)
-    @error "setvoltage not implemented"
+    error("setvoltage not implemented for $(typeof(daq))")
 end
 
 """
@@ -86,7 +86,7 @@ Read the voltage of a input task.
 - `voltage::Float64`: The voltage read from the task, unit: volt.
 """
 function readvoltage(daq::DAQ,t::Any)
-    @error "readvoltage not implemented"
+    error("readvoltage not implemented for $(typeof(daq))")
 end
 
 """
@@ -99,5 +99,5 @@ Delete a task.
 - `t::Any`: A Any type.
 """
 function deletetask(daq::DAQ,t::Any)
-    @error "deletetask not implemented"
+    error("deletetask not implemented for $(typeof(daq))")
 end 

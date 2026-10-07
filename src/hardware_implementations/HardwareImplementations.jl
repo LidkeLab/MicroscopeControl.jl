@@ -1,33 +1,97 @@
 """
-HardwareImplementations module is a container for all hardware implementations
+HardwareImplementations module is a container for all hardware implementations.
+Uses Reexport.jl to automatically propagate exports from submodules.
 """
 module HardwareImplementations
 
+using Reexport
 using ..MicroscopeControl
 
+# Camera implementations
 include("simulated_camera/SimulatedCamera.jl")
+@reexport using .SimulatedCamera
+
 include("dcam4_camera/DCAM4.jl")
-include("pi_stage/PI.jl")
-include("simulated_stage/SimulatedStage.jl")
-include("mcl_stage/MadCityLabs.jl")
-include("pi_N472/PI_N472.jl")
+@reexport using .DCAM4
 
 include("thorcam_csc/ThorCamCSC.jl")
-include("thorcam_dcx/ThorCamDCx.jl")
-include("simulated_light/SimulatedLight.jl")
-include("nidaq/NIDAQcard.jl")
-include("tcube_laser/TCubeLaserControl.jl")
-include("daq_transmission_light/TransmissionDaqControl.jl")
-include("crysta_laser_561/CrystaLaserControl.jl")
-include("vortran_laser_488/VortranLaserControl.jl")
-include("ok_xem/OK_XEM.jl")
-include("meadowlark_slm/Meadowlark.jl")
-include("triggerscope/Triggerscope.jl")
-include("mcl_micro_positioner/MCLMicroPositioner.jl")
+@reexport using .ThorCamCSC
 
-# Beam steering: the backends first, then the devices built on top of them.
+include("thorcam_dcx/ThorCamDCx.jl")
+@reexport using .ThorCamDCx
+
+# Stage implementations
+include("pi_stage/PI.jl")
+@reexport using .PI
+
+include("simulated_stage/SimulatedStage.jl")
+@reexport using .SimulatedStage
+
+include("mcl_stage/MadCityLabs.jl")
+@reexport using .MadCityLabs
+
+include("pi_n472/PI_N472.jl")
+@reexport using .PI_N472
+
+include("smaract_stage/MCS2Stage_module.jl")
+@reexport using .MCS2Stage_mod
+
+# DAQ implementation (must come before modules that depend on it)
+include("nidaq/NIDAQcard.jl")
+@reexport using .NIDAQcard
+
+# Light source implementations
+include("simulated_light/SimulatedLight.jl")
+@reexport using .SimulatedLight
+
+include("tcube_laser/TCubeLaserControl.jl")
+@reexport using .TCubeLaserControl
+
+include("simulated_diode_laser/SimulatedDiodeLaser.jl")
+@reexport using .SimulatedDiodeLaser
+
+include("daq_transmission_light/TransmissionDaqControl.jl")
+@reexport using .TransmissionDaqControl
+
+include("crysta_laser_561/CrystaLaserControl.jl")
+@reexport using .CrystaLaserControl
+
+# Triggerscope V4 (serial DAC/TTL controller; must come before modules that depend on it)
+include("triggerscope/Triggerscope.jl")
+@reexport using .Triggerscope
+
+# Attenuator implementation (depends on Triggerscope)
+include("lcc1620_attenuator/LCC1620Attenuator.jl")
+@reexport using .LCC1620Attenuator
+
+include("vortran_laser_488/VortranLaserControl.jl")
+@reexport using .VortranLaserControl
+
+# FPGA implementation (depends on NIDAQcard)
+include("ok_xem/OK_XEM.jl")
+@reexport using .OK_XEM
+
+# SLM implementation
+include("meadowlark_slm/Meadowlark.jl")
+@reexport using .Meadowlark
+
+# FPGA DAC implementation
+include("xem_dac/XEM_DAC.jl")
+@reexport using .XEM_DAC
+
+# Beam steering (depends on Triggerscope): the backends first, then the devices
+# built on top of them.
 include("beam_steering_backends/BeamSteeringBackends.jl")
+@reexport using .BeamSteeringBackends
+
 include("galvo_mirrors/GalvoControl.jl")
+@reexport using .GalvoControl
+
 include("eod_deflector/EODControl.jl")
+@reexport using .EODControl
+
+# Work in progress - uncomment when ready
+# include("mcl_micro_positioner/MCLMicroPositioner.jl")
+# @reexport using .MCLMicroPositioner
 
 end

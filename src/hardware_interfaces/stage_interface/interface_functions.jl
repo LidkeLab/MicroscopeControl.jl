@@ -50,7 +50,7 @@ This function is responsible for moving the stage to a specified position. The s
 """
 function move(stage::Stage, x::Float64, y::Float64, z::Float64)
     #function to move stage to a position
-    @error "move not implemented"
+    error("move not implemented for $(typeof(stage))")
 end
 
 """
@@ -70,7 +70,7 @@ This function is responsible for retrieving the current position of the stage. T
 """
 function getposition(stage::Stage)
     #function to get stage position
-    @error "getposition not implemented"
+    error("getposition not implemented for $(typeof(stage))")
 end
 
 """
@@ -90,7 +90,7 @@ This function is responsible for retrieving the range of motion of the stage. Th
 """
 function getrange(stage::Stage)
     #function to get stage range
-    @error "getrange not implemented"
+    error("getrange not implemented for $(typeof(stage))")
 end
 
 """
@@ -107,7 +107,7 @@ This function is responsible for stopping any ongoing motion of the stage. The s
 """
 function stopmotion(stage::Stage)
     #function to stop stage motion
-    @error "stopmotion not implemented"
+    error("stopmotion not implemented for $(typeof(stage))")
 end
 
 """
@@ -124,7 +124,7 @@ This function is responsible for moving the stage to its home position. The home
 """
 function home(stage::Stage)
     #function to move stage to home position
-    @error "home not implemented"
+    error("home not implemented for $(typeof(stage))")
 end
 
 """
@@ -144,7 +144,7 @@ This function is responsible for setting the servo state of the stage. The speci
 """
 function servo(stage::Stage, xtoggle::Bool, ytoggle::Bool, ztoggle::Bool)
     #function to set stage servo state
-    @error "servo not implemented"
+    error("servo not implemented for $(typeof(stage))")
 end
 
 """
@@ -164,5 +164,5 @@ This function is responsible for setting the drift correction state of the stage
 """
 function driftcorrection(stage::Stage, xtoggle::Bool, ytoggle::Bool, ztoggle::Bool)
     #function to set stage drift correction state
-    @error "driftcorrection not implemented"
+    error("driftcorrection not implemented for $(typeof(stage))")
 end

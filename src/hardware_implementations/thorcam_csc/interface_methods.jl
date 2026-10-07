@@ -11,13 +11,16 @@ end
 
 function CameraInterface.getlastframe(camera::ThorCamCSCCamera)
     last_frame = ThorCamCSC.getlastframeornothing(camera)    #Gets last frame, loop insures that frame is collected
-    if last_frame == Nothing 
-        return zeros(UInt16, camera.roi.width, camera.roi.height)   #returns all zeros if frame not collected
-        #return zeros(UInt16, 1080, 1440)
-    else 
-        last_frame = reshape(last_frame, camera.roi.width, camera.roi.height)
-        return last_frame'
-        #return rotr90(last_frame)
+    if last_frame == Nothing
+        # (H, W), matching the real frame below — the empty frame used to come back
+        # transposed relative to it.
+        return zeros(UInt16, camera.roi.height, camera.roi.width)
+    else
+        # Reshape from the row-major C buffer and permute to column-major Julia (H, W).
+        # Sized from the ROI rather than the full sensor, so a cropped frame is read back
+        # with the dimensions it was actually captured at.
+        last_frame = permutedims(reshape(last_frame, camera.roi.width, camera.roi.height), (2, 1))
+        return last_frame
     end
 end
 
@@ -114,8 +117,8 @@ end
 
 function CameraInterface.getdata(camera::ThorCamCSCCamera)
     if camera.capture_mode == SEQUENCE
-        sequence_array = zeros(UInt16, camera.roi.width, camera.roi.height, camera.sequence_length)
-        #sequence_array = zeros(UInt16, 1080, 1440, camera.sequence_length)
+        # (H, W, N), sized from the ROI so it matches what getlastframe returns.
+        sequence_array = zeros(UInt16, camera.roi.height, camera.roi.width, camera.sequence_length)
         for i in 1:camera.sequence_length
             single_image = CameraInterface.getlastframe(camera)
             sequence_array[:,:, i] = single_image

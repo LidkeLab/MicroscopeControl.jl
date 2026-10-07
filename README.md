@@ -55,7 +55,8 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 - Simulated stage for testing
 
 ### Light Sources
-- Thorlabs TCube laser diode controller
+- Thorlabs TCube laser diode controller (TLD001), open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`)
+- Simulated laser diode (`SimDiodeLaser`) for testing either mode
 - CrystaLaser 561nm
 - Vortran 488nm laser
 - Simulated light source for testing
@@ -69,12 +70,76 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 
 ## Installation Notes
 
-Since this package is under active development and not yet registered, install it using:
+Since this package is under active development and not yet registered, install it pinned to a released tag:
 
 ```julia
 using Pkg
-Pkg.develop(url="https://github.com/LidkeLab/MicroscopeControl.jl.git")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
 ```
+
+**You must also declare this package's unregistered dependency in your own
+`Project.toml`.** A `[sources]` entry in a *dependency* is not reliably used
+when resolving your project, so the one MicroscopeControl declares for `DAQmx`
+may do nothing for you, and a clean `Pkg.instantiate` then fails with
+`DAQmx has no known versions`.
+
+The simplest fix is to add `DAQmx` by URL **before** MicroscopeControl, which
+writes both entries for you:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
+```
+
+If you write the TOML by hand, `[sources]` alone is **not** enough — Julia
+rejects a project whose `[sources]` names something absent from `[deps]` with
+`Sources for DAQmx not listed in deps or extras section`. You need both:
+
+```toml
+[deps]
+DAQmx = "bc903ccc-f951-4f60-9748-ff64248ad6aa"
+
+[sources]
+DAQmx = {url = "https://github.com/LidkeLab/DAQmx.jl.git"}
+```
+
+This surfaces on an environment that has not already resolved `DAQmx`, which
+is why it tends to appear first on a fresh instrument PC rather than on a
+development box. Registering `DAQmx.jl`, or publishing a lab registry, would
+remove the requirement entirely.
+
+Advance the pinned tag deliberately when you want a newer release. `Pkg.develop` (tracking `main` directly, no tag) is for contributors working on the package itself, not for rig code that depends on it.
+
+This package follows Julia's pre-1.0 versioning convention: while the version is `0.x.y`, `x` is the breaking component and `y` is the non-breaking one, so `0.2.0 -> 0.3.0` declares a breaking release and `0.2.0 -> 0.2.1` a compatible one. A release is tagged `vX.Y.Z` when it merges to `main` (`.github/workflows/TagOnMerge.yml`), and only once a recorded test run covers that exact tree; between releases `main` carries the next version with `-DEV` and is not tagged. Hardware verification is not tracked here; it is recorded by the downstream rig repo that pins to a given tag.
+
+## Claude Code skills
+
+Downstream repos that build an instrument out of MicroscopeControl.jl devices,
+or write a driver against it, can install a set of Claude Code skills describing
+this package's design and API, from the downstream repo's own root:
+
+```julia
+using MicroscopeControl
+install_skills()
+```
+
+This copies skill sources into `.claude/skills/` in the current directory,
+one subdirectory per skill, each stamped with the installed package version
+and tracked in a manifest so a locally edited skill file is never silently
+overwritten (pass `install_skills(force=true)` to overwrite anyway). The
+five skills:
+
+- `mc-system-design` — start here: the driver/system responsibility split, the upstream/downstream boundary test, the design principles the source expresses, and a worked composition example with rollback and provenance.
+- `mc-extend` — in order of commitment: diagnose a misbehaving driver (usually the rig), report upstream and work around without type piracy, implement an existing interface for a new device, define a new device class.
+- `mc-acquire` — capture/sequence/live patterns, safe live-view stop order, z-stacks, the `(H, W, N)` convention.
+- `mc-testing` — validate the composed system with simulators and fakes, then what hardware acceptance must still establish; headless under xvfb.
+- `mc-api-map` — a per-version dispatch inventory of which methods each device type has, plus the fields the shared GUI panels read.
+
+Reinstalling (`install_skills()` again) after advancing the pinned tag
+refreshes all five, including the generated API map, to match the new
+version.
+
 ---
 
 

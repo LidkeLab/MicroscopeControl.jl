@@ -12,7 +12,7 @@ Put `vx` volts on the X axis and `vy` volts on the Y axis. Called by `setvoltage
 the limit check, so a backend does not need to range-check again.
 """
 function write_voltages!(backend::SteeringBackend, vx::Float64, vy::Float64)
-    @error "write_voltages! not implemented for $(typeof(backend))"
+    error("write_voltages! not implemented for $(typeof(backend))")
 end
 
 """
@@ -21,7 +21,7 @@ end
 Claim the hardware and park both axes at 0 V. Called by `initialize`.
 """
 function openbackend!(backend::SteeringBackend)
-    @error "openbackend! not implemented for $(typeof(backend))"
+    error("openbackend! not implemented for $(typeof(backend))")
 end
 
 """
@@ -30,7 +30,7 @@ end
 Park both axes at 0 V and release the hardware. Called by `shutdown`.
 """
 function closebackend!(backend::SteeringBackend)
-    @error "closebackend! not implemented for $(typeof(backend))"
+    error("closebackend! not implemented for $(typeof(backend))")
 end
 
 """

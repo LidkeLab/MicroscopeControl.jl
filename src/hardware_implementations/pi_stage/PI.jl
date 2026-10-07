@@ -5,6 +5,7 @@ module PI
 
     global const gcs2path = "C:\\Program Files (x86)\\Physik Instrumente (PI)\\Software Suite\\Development\\C++\\API\\PI_GCS2_DLL_x64.dll"
 
+    include("gcs2.jl")
     include("types.jl")
     include("move_methods.jl")
     include("query_methods.jl")
@@ -13,8 +14,13 @@ module PI
 
     export PIStage
     # export initialize, shutdown
-    export servoxy, servox, servoy, driftcorrection
-    export immediatestop, referencemove, stopmotion
-    export movexy, movex, movey, getposition, getxposition, getyposition, ismoving, isxmoving, isymoving, moveandwait
+    # `servo`, `stopmotion` and `getposition` are PI-local implementations wrapped
+    # by the StageInterface methods in interface_methods.jl; exporting them here
+    # would shadow the generic interface functions at the top level.
+    # `servoxy`, `movexy`, `isxmoving`, `isymoving` were exported but never
+    # implemented (dead exports left MicroscopeControl.<name> undefined); dropped.
+    export servox, servoy, driftcorrection
+    export immediatestop, referencemove
+    export movex, movey, getxposition, getyposition, ismoving, moveandwait
     export gui
 end
