@@ -86,6 +86,35 @@ controller. [`setmodulation!`](@ref) does not wait for it: it refuses when it is
 with_setpoint_lock(f, light::TCubeLaser) = lock(f, light.modulation.lock)
 
 """
+    MOD_SETTLE_S
+
+Seconds after a setpoint write (`LD_SetLaserSetPoint`) during which a MOD IN change is NOT
+safe. Measured on a TLD001 in closed loop (2026-10-14, rig scripts `settle_window*.jl`): a
+change up to about 0.95 s after the last write was LOST, entirely or in part. The light kept
+the old total, and every later change counted from it, so the light and the driver's record
+differed by that step (±5 mW in the test) until the next write. From 1.0 s on, every change was
+applied. Status and photocurrent reads do not cause it, and MOD IN changes alone are applied
+at any rate tested (2 kHz). 1.3 s leaves a 30 % margin. A `Ref`, so tests can shorten it.
+
+With modulation enabled and the output on, `light_on`, `setoutputpower!` and `setcurrent!` wait
+until this long after their last write before they return (holding the setpoint lock), and
+[`setmodulation!`](@ref) refuses inside the window. A base change therefore takes about 0.35 s
+more, and every modulation change after it is applied.
+"""
+const MOD_SETTLE_S = Ref(1.3)
+
+"Seconds left until a MOD IN change is safe after the last setpoint write (≤ 0 when it is)."
+modulation_settle_left(light::TCubeLaser) = light.modulation.written_at + MOD_SETTLE_S[] - time()
+
+"With modulation enabled and the output on, wait out [`MOD_SETTLE_S`](@ref) after the last setpoint write."
+function wait_modulation_settled(light::TCubeLaser)
+    (light.modulation.enabled && light.properties.is_on) || return nothing
+    t = modulation_settle_left(light)
+    t > 0 && sleep(t)
+    return nothing
+end
+
+"""
     enable_modulation!(light::TCubeLaser; ao_channel, daq_device = nothing, v_range = nothing)
     enable_modulation!(light::TCubeLaser; writer, v_range, output_id, close = nothing)
 
@@ -263,6 +292,11 @@ an enable/disable. Nothing is written then and the level stays what it was. With
 level checked against the old setpoint could land on top of the new one and exceed
 `max_power`. Set the base before a fast run, not during it.
 
+Also refused while the output is on within [`MOD_SETTLE_S`](@ref) of the last setpoint write:
+the controller loses a MOD IN change made that soon (measured). The slow calls already wait
+that out before they return, so this only fires after a write from a path that does not
+(e.g. modulation enabled right after a base change).
+
 The volts-per-unit scale is recomputed on every call ([`modulation_scale`](@ref)). If the
 writer throws, the voltage it left is unknown: 0 V is written and the level recorded as 0;
 if that fails too, the level keeps its previous value, an error is logged, and the writer's
@@ -276,6 +310,11 @@ function setmodulation!(light::TCubeLaser, level::Real)
         "$(m.level). Set the base power before a fast run, not during it.")
     try
         m.enabled || error("TCubeLaser $(light.serialNo): setmodulation! needs enable_modulation! first")
+        left = modulation_settle_left(light)
+        (light.properties.is_on && left > 0) && error(
+            "TCubeLaser $(light.serialNo): setmodulation!($level) refused: the controller is still settling after a setpoint " *
+            "write ($(round(Int, 1000 * left)) ms left of MOD_SETTLE_S = $(MOD_SETTLE_S[]) s); a MOD IN change now would be " *
+            "lost and leave the light off the driver's record. Nothing was written.")
         isfinite(level) || throw(ArgumentError("TCubeLaser $(light.serialNo): modulation must be finite, got $level"))
         per_volt = modulation_scale(light)
         v = level / per_volt

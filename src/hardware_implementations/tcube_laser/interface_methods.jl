@@ -575,6 +575,7 @@ software it may be anything up to full scale, bounded only by the current limit
 function send_setpoint(light::TCubeLaser, code::UInt16)
     serialNo = light.serialNo
     check_err(LD_SetLaserSetPoint(serialNo, code), "LD_SetLaserSetPoint", serialNo)
+    light.modulation.written_at = time()   # MOD IN changes right after a write are lost (modulation.jl, MOD_SETTLE_S)
     close_enough(r) = abs(Int(r) - Int(code)) <= SETPOINT_READBACK_TOLERANCE
     deadline = time() + SETPOINT_CONFIRM_TIMEOUT_S[]
     readback = LD_GetLaserSetPoint(serialNo)
@@ -608,6 +609,7 @@ function send_setpoint_ramped(light::TCubeLaser{ConstantPhotocurrent}, code::UIn
     if 0 <= from && Int(code) - from > step
         for c in (from + step):step:(Int(code) - 1)
             check_err(LD_SetLaserSetPoint(serialNo, UInt16(c)), "LD_SetLaserSetPoint", serialNo)
+            light.modulation.written_at = time()
             sleep(pd.ramp_step_s)
         end
     end
@@ -1098,6 +1100,7 @@ function _light_on(light::TCubeLaser)
         disable_after_failure(light, "enable or setpoint after enable")
         rethrow()
     end
+    wait_modulation_settled(light)   # MOD IN changes too soon after the write are lost (MOD_SETTLE_S)
     println("$(light.laser_color)" * "_laser is on")
     return nothing
 end
@@ -1211,6 +1214,7 @@ function _setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     on = light.properties.is_on || read_status_fresh(light.serialNo) & STATUS_BITS.output_enabled != 0
     on && send_setpoint(light, code)
     light.drive_current = current
+    wait_modulation_settled(light)
     light.properties.power = legacy_power(light, current) # deprecated; see legacy_power
     println("Laser current set to $current mA", on ? "" : " (output off: applied at light_on)")
     return nothing
@@ -1308,6 +1312,7 @@ function _setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Flo
         end
     end
     pd.output_power_requested = power_mW
+    wait_modulation_settled(light)   # MOD IN changes too soon after the write are lost (MOD_SETTLE_S)
     pd.photocurrent_requested = photocurrent_from_code(light, photocurrent_code(light, power_mW / 1000 / pd.wa_calibration), pd.tia_range)
     println("Laser output power set to $power_mW mW (photocurrent setpoint $(pd.photocurrent_requested) A)",
             on ? "" : " (output off: applied at light_on)")
@@ -1397,6 +1402,7 @@ to report.
 function zero_setpoint(light::TCubeLaser)
     try
         status = LD_SetLaserSetPoint(light.serialNo, UInt16(0))
+        light.modulation.written_at = time()
         return status == 0 ? nothing : "status $status"
     catch err
         return err

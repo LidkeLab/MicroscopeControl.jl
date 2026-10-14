@@ -424,3 +424,4 @@ end
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.REQUEST_WAIT_S[] = 0.0
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.CLAMP_WAIT_S[] = 0.0
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.SETPOINT_CONFIRM_TIMEOUT_S[] = 0.05
+MicroscopeControl.HardwareImplementations.TCubeLaserControl.MOD_SETTLE_S[] = 0.0   # the fake has no MOD IN settle window

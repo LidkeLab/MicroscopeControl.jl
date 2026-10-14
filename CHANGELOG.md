@@ -83,6 +83,26 @@ in open loop and `setupIO` has no default output (breaking).
     recorded as 0; `photocurrent_requested` is documented as the request alone; the test
     fake reads a control source of 2 or 3 back as 1, like the cube, and the test writer no
     longer clips negative voltages.
+  - **New hardware fact, found while checking these fixes on the rig: a MOD IN change made
+    within about 1 s of a setpoint write is lost by the TLD001.** Measured 2026-10-14 in
+    closed loop: a change up to ~0.95 s after the last `LD_SetLaserSetPoint` was lost,
+    entirely or in part. The light kept the old total, and every later change counted from
+    it, so the light and the driver's record differed by the step (±5 mW) until the next
+    write. From 1.0 s every change was applied; status reads do not cause it, and MOD IN
+    changes alone were applied at every rate tried (to 2 kHz). The slow calls used to return
+    ~0.95 s after their write, just inside the window. Now `MOD_SETTLE_S` (1.3 s): with
+    modulation enabled and the output on, `light_on`, `setoutputpower!` and `setcurrent!`
+    return only that long after their last write (≈ 0.35 s more per base change), and
+    `setmodulation!` refuses inside the window. The driver records each write's time
+    (`light.modulation.written_at`).
+  - Hardware check of `v0.3.0-rc3` on a TLD001 + NI USB-6008 (2026-10-14, 38 of 38): the 17
+    checks of 2026-10-13; 10 enable/disable cycles on one AO channel, each leaving the
+    channel free; the review's race at 200 Hz (1602 attempts refused while a setpoint
+    change held the lock, none above the 30 mW ceiling on the record or the photodiode, no
+    false lock-check trip); a DAQ task deleted under the driver (writes refused, `light_off`
+    still switches off, disable restores the source, a re-enable works); control source
+    5 → 3 with the output on (no potentiometer step: 0.14 mW, the DAQ's 0 V offset); and a
+    modulation change the instant `light_on`/`setoutputpower!` returns is applied (9 of 9).
 
 ### Changed
 

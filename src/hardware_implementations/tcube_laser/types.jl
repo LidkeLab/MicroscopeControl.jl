@@ -29,6 +29,9 @@ drives it: see [`enable_modulation!`](@ref). Every `TCubeLaser` carries one
   `setoutputpower!`, `enable_modulation!`, `disable_modulation!` and `setmodulation!`.
   The slow calls wait for it. `setmodulation!` only tries it and refuses when it is held,
   so a fast write never waits behind a verified USB setpoint and never lands inside one.
+- `written_at`: `time()` of the last setpoint write to the controller (`LD_SetLaserSetPoint`),
+  0 before the first. A MOD IN change too soon after one is lost by the controller
+  ([`MOD_SETTLE_S`](@ref)).
 """
 mutable struct ExternalModulation
     enabled::Bool
@@ -41,8 +44,9 @@ mutable struct ExternalModulation
     output::Union{Nothing,String}
     close::Any
     lock::ReentrantLock
+    written_at::Float64
 end
-ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing, nothing, ReentrantLock())
+ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing, nothing, ReentrantLock(), 0.0)
 
 """
     TCubeLaser{M<:RegulationMode} <: DiodeLaser

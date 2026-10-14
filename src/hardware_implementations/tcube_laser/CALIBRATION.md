@@ -337,6 +337,14 @@ lasers except the analogue-output guard below):
   to change (the race the PR #83 review reproduced: 25 + 5 mW held against a 28 mW ceiling).
   Set the base before a fast run and only modulate during it; when free, `setmodulation!`
   adds well under 0.1 ms to the output's own write.
+- **No MOD IN change within ~1 s of a setpoint write.** On a TLD001 (2026-10-14) a change
+  up to about 0.95 s after the last `LD_SetLaserSetPoint` was lost, entirely or in part:
+  the light kept the old total and later changes counted from it, so it differed from the
+  driver's record by the step until the next write. From 1.0 s on every change was applied.
+  Status reads do not cause it, and MOD IN changes alone were applied at every rate tried
+  (to 2 kHz). The driver waits `MOD_SETTLE_S` (1.3 s) after its last write before
+  `light_on`, `setoutputpower!` and `setcurrent!` return (with modulation enabled and the
+  output on), and `setmodulation!` refuses inside that window.
 - **Failures.** `light_on` re-checks the recorded request and request + modulation against
   the current ceiling before the enable. If writing 0 V fails while the restored control
   source still includes the external input, `disable_modulation!` keeps modulation enabled

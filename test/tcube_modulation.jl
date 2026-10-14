@@ -339,4 +339,33 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
         @test_throws "serial timeout" setmodulation!(l, 5.0)
         @test applied[end] == 0.0 && modulation_level(l) == 0.0   # put back at a known 0 V
     end
+
+    # Rig 2026-10-14 (settle_window*.jl): a MOD IN change up to ~0.95 s after a setpoint write was LOST by the TLD001
+    # (the light kept the old total, later changes counted from it); from 1.0 s on every change was applied.
+    @testset "MOD_SETTLE_S: the slow calls wait it out, setmodulation! refuses inside it" begin
+        old = TCube.MOD_SETTLE_S[]
+        TCube.MOD_SETTLE_S[] = 0.3
+        try
+            l = ready(); enable!(l)
+            quiet(() -> setoutputpower!(l, 10.0))                 # output off: no write, no wait
+            quiet(() -> light_on(l))
+            @test time() - l.modulation.written_at >= 0.3          # light_on returned only once settled
+            setmodulation!(l, 5.0); @test modulation_level(l) == 5.0
+            quiet(() -> setoutputpower!(l, 12.0))
+            @test time() - l.modulation.written_at >= 0.3          # so did setoutputpower!
+            setmodulation!(l, 0.0)
+            l.modulation.written_at = time()                       # a write from a path that does not wait
+            @test_throws "still settling" setmodulation!(l, 6.0)
+            @test modulation_level(l) == 0.0                       # nothing written
+            sleep(0.35); setmodulation!(l, 6.0); @test modulation_level(l) == 6.0
+            quiet(() -> light_off(l))                              # light_off zeroes: a write, but the output is off
+            setmodulation!(l, 2.0); @test modulation_level(l) == 2.0   # allowed while off (light_on re-sends the total)
+            disable_modulation!(l)
+            t = @elapsed quiet(() -> (light_on(l); setoutputpower!(l, 11.0)))   # no modulation: no waiting
+            @test t < 0.3 + 0.1 * 2 + 0.2                          # two lock checks (0.1 s each) and no settle waits
+            quiet(() -> light_off(l))
+        finally
+            TCube.MOD_SETTLE_S[] = old
+        end
+    end
 end
