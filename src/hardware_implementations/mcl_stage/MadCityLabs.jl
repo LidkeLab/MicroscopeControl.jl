@@ -11,7 +11,7 @@ module MadCityLabs
 
     import ...MicroscopeControl: export_state, initialize, shutdown
 
-    madlibpath = "C:\\Program Files\\Mad City Labs\\NanoDrive\\Madlib.dll"
+    using ...Libraries: libmadlib
 
     include("types.jl")
     include("interface_methods.jl")
