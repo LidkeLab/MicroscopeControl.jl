@@ -15,7 +15,10 @@ drives it: see [`enable_modulation!`](@ref). Every `TCubeLaser` carries one
 - `v_min`, `v_max`: the DAQ channel's output range in volts.
 - `prev_source`: the control-source flags read by `enable_modulation!`, restored by
   `disable_modulation!`.
-- `write`: `v -> nothing`, one voltage to the DAQ channel (a seam for tests).
+- `write`: `v -> nothing`, one voltage to the output (the DAQ channel, or any writer passed
+  to `enable_modulation!`).
+- `output`: the name of the analogue output this laser has claimed (the DAQ channel, or the
+  `output_id` given with a writer), or `nothing`. No two lasers can hold the same one.
 """
 mutable struct ExternalModulation
     enabled::Bool
@@ -25,8 +28,9 @@ mutable struct ExternalModulation
     v_max::Float64
     prev_source::Int
     write::Any
+    output::Union{Nothing,String}
 end
-ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing)
+ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing)
 
 """
     TCubeLaser{M<:RegulationMode} <: DiodeLaser

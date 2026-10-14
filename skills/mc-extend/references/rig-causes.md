@@ -46,3 +46,5 @@ say so; most `ccall` defects reproduce from the REPL. The Sim devices cannot
 reproduce hardware defects, so a report needs the rig; note in the report that the
 simulated path (if any) behaves correctly, which localizes the defect to the
 `ccall` layer.
+| `enable_modulation!` refused: "modulation output ... is already driving the MOD IN of TCubeLaser ..." | Two lasers asked for the same analogue output; with `ao_channel` left at its default both resolve to the second DAQ device's second channel. **[guarantee]** each output is held by one laser until its `disable_modulation!`/`shutdown`. | Name a different `ao_channel` (or `output_id` with a writer) for each laser. |
+| `enable_modulation!` refused in open loop | On a TLD001 (2026-10-13) MOD IN in open loop acted only after the control source was set while the output was on, was disarmed by every `setcurrent!` or off/on, and after re-arming the current was up to 5 mA off what the driver records. **[guarantee]** refused rather than wrong. | Use closed loop (`ConstantPhotocurrent`) for modulation. |

@@ -38,6 +38,11 @@ the next version with `-DEV`).
   `light_off` writing 0 V, the control source restored; `setmodulation!` 0.48 ms median).
   A 0 mW base is dark (OFF < 0.01 % of ON on the camera), never locked high (15 jumps from 0 V),
   and a +20 mW pulse from it lands within one 5 ms frame even after 2 s dark.
+  Several lasers: each claims its analogue output (DAQ channel or `output_id` with a writer)
+  and a second laser asking for a held one is refused. Open loop + MOD IN is REFUSED: on the
+  rig it acted only after the source was set while on, every `setcurrent!` or off/on disarmed
+  it, and re-arming left the current up to 5 mA off; open loop itself verified (75/85 mA).
+  Removed the unused `tcube_laser/tcubeapi.jl` (an old script with a hard-coded serial).
   See CALIBRATION.md, "External modulation".
 
 ## [0.2.6] - 2026-10-01

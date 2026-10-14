@@ -338,6 +338,33 @@ light_off(laser)                                # writes 0 V first
 disable_modulation!(laser)                      # restores the previous control source
 ```
 
+**What the driver supports, per laser** (each `TCubeLaser` is opened by its own serial and
+holds its own mode, calibration, clamp and modulation state; nothing is shared between
+lasers except the analogue-output guard below):
+
+| | without MOD IN | with MOD IN |
+|---|---|---|
+| closed loop (`ConstantPhotocurrent`, mW) | `setoutputpower!` | `setoutputpower!` + `setmodulation!` (verified on hardware) |
+| open loop (`ConstantCurrent`, mA) | `setcurrent!` (verified on hardware 2026-10-13: holds 75 / 85 mA, refuses above `max_current`) | **refused** by `enable_modulation!` (see below) |
+
+- **Open loop + MOD IN is refused.** On the 642 nm rig's TLD001 (2026-10-13, scripts
+  `openloop_mod_*` in MicroscopeAdapt's `dev/rig_scripts/2026-10-13/`) the input scaled as
+  expected when it acted (10.1 mA per volt against 9.97 predicted), but it acted only after
+  the control source was set **while the output was on**. Any `setcurrent!` or off/on
+  disarmed it again. After re-arming, the first voltage change was sometimes ignored and
+  later ones counted from it, leaving the current 5 mA off what the driver would record. A
+  driver cannot promise a current under those rules, so it refuses rather than guess.
+- **Several lasers.** Each laser claims its analogue output (the DAQ channel, or the
+  `output_id` passed with a `writer`); a second laser asking for one that is held is refused
+  until the first releases it (`disable_modulation!`/`shutdown`). Name the channel for every
+  laser: two lasers left at the default would both resolve to the second device's second
+  channel. A laser that never calls `enable_modulation!` never touches a DAQ.
+- **Any analogue output.** `enable_modulation!(laser; writer = v -> ..., v_range = (lo, hi),
+  output_id = "...")` drives MOD IN from anything that can set a voltage (a Triggerscope DAC,
+  another card). Mind the range: 10 V is full scale (224 mW on the 642 nm rig's 1 mA range),
+  far above most diodes' rating; the driver refuses totals above `properties.max_power`, and the
+  controller's current clamp is the hardware backstop.
+
 - **Scale.** 0-10 V = 0 to full scale: the photodiode's full-scale power (`tia_range x
   wa_calibration`, 224 mW on the 642 nm rig, so 22.4 mW per volt) in closed loop, the
   controller's current limit in open loop. It adds to the setpoint; a negative voltage

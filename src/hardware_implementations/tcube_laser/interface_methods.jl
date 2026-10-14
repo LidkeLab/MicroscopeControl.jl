@@ -1528,6 +1528,18 @@ where it used to raise a bare `BoundsError` on a single-device rig, it says
 what it found and what to pass instead.
 """
 function setupIO(light::TCubeLaser)
+    _, channel = resolve_ao(light)
+    light.task_mod = NIDAQcard.createtask(light.daq, "AO", channel)
+    return nothing
+end
+
+"""
+    resolve_ao(light::TCubeLaser) -> (device, channel)
+
+The DAQ device and AO channel [`setupIO`](@ref) uses: `light.daq_device`/`light.ao_channel`
+when set (validated against discovery), else the second device's second channel.
+"""
+function resolve_ao(light::TCubeLaser)
     devs = NIDAQcard.showdevices(light.daq)
     device = if light.daq_device === nothing
         length(devs) >= 2 || error("TCubeLaser $(light.serialNo): setupIO defaults to the 2nd DAQ device, but discovery found $(length(devs)): $(join(devs, ", ")). Pass `daq_device=` to TCubeLaser to name one.")
@@ -1545,9 +1557,7 @@ function setupIO(light::TCubeLaser)
         light.ao_channel in channelsAO || error("TCubeLaser $(light.serialNo): ao_channel \"$(light.ao_channel)\" is not among the AO channels of \"$device\": $(join(channelsAO, ", ")).")
         light.ao_channel
     end
-
-    light.task_mod = NIDAQcard.createtask(light.daq, "AO", channel)
-    return nothing
+    return String(device), String(channel)
 end
 
 function set_modvoltage(light::TCubeLaser, voltage::Float64)

@@ -82,35 +82,88 @@ Drive the controller's rear MOD IN from a DAQ analog output: create the AO task
 control source to software + external (`3`; the front potentiometer, which would add its
 own offset, is left out). The previous source is kept and restored by
 [`disable_modulation!`](@ref). Then [`setmodulation!`](@ref) adds power (or current) in one
-DAQ write. `writer` (`v -> nothing`) and `v_range` (`(v_min, v_max)`) replace the DAQ, for
-tests. A no-op when already enabled.
+DAQ write. `writer` (`v -> nothing`) and `v_range` (`(v_min, v_max)`) replace the DAQ: any
+analogue output can drive MOD IN (a Triggerscope DAC, another card); give it an
+`output_id` (e.g. `"Triggerscope COM3 DAC 3"`) so the guard below covers it. A no-op when
+already enabled.
 
-Wiring: a BNC/SMA cable from the AO channel to MOD IN; on the 642 nm rig `Dev2/ao1`
-(USB-6008, 0-5 V).
+Several lasers: each laser enables its own modulation, and each claims its output. A
+second laser asking for an output another laser holds (the same DAQ channel, or the same
+`output_id`) is refused until the first one's `disable_modulation!`/`shutdown`. Name the
+channel for every laser: left at the default, two lasers would both resolve to the second
+device's second channel, and the second one is refused.
+
+Wiring: a BNC/SMA cable from the AO channel to the controller's MOD IN (for example
+`Dev2/ao1` on a USB-6008, 0-5 V).
 """
 function enable_modulation!(light::TCubeLaser; daq_device=light.daq_device, ao_channel=light.ao_channel,
-                            writer=nothing, v_range=nothing)
+                            writer=nothing, v_range=nothing, output_id::Union{Nothing,AbstractString}=nothing)
     m = light.modulation
     m.enabled && return nothing
+    light isa TCubeLaser{ConstantCurrent} && error(
+        "TCubeLaser $(light.serialNo): MOD IN modulation is refused in open loop (ConstantCurrent). Measured on a TLD001 " *
+        "(2026-10-13): the input acts only after the control source is set while the output is on, every setcurrent! " *
+        "or off/on disarms it, and after re-arming the delivered current was up to 5 mA off what the driver would " *
+        "record. Use closed loop (ConstantPhotocurrent), where it is verified; see CALIBRATION.md, \"External modulation\".")
     per_volt = modulation_scale(light)
     if writer === nothing
         light.daq_device = daq_device
         light.ao_channel = ao_channel
-        setupIO(light)
-        device = something(light.daq_device, String(split(something(light.ao_channel, ""), "/")[1]))
-        isempty(device) && (device = NIDAQcard.showdevices(light.daq)[2])   # setupIO's historical default
+        device, channel = resolve_ao(light)
+        output = channel
+        claim_output!(light, output)
+        try
+            setupIO(light)
+        catch
+            release_output!(light, output)
+            rethrow()
+        end
         if v_range === nothing
             r = NIDAQcard.DAQmx.ao_voltage_ranges(device)
             v_range = isempty(r) ? (-10.0, 10.0) : (r[1, 1], r[1, 2])
         end
         writer = v -> (NIDAQcard.setvoltage(light.daq, light.task_mod, Float64(v)); nothing)
+    else
+        output = output_id === nothing ? nothing : String(output_id)
+        claim_output!(light, output)
     end
     v_range === nothing && (v_range = (-10.0, 10.0))
-    writer(0.0)
-    prev = control_source(light)
-    set_control_source!(light, LD_SOURCE_SOFTWARE | LD_SOURCE_EXTERNAL)
-    m.per_volt, m.v_min, m.v_max = per_volt, Float64(v_range[1]), Float64(v_range[2])
-    m.prev_source, m.write, m.level, m.enabled = prev, writer, 0.0, true
+    try
+        writer(0.0)
+        prev = control_source(light)
+        set_control_source!(light, LD_SOURCE_SOFTWARE | LD_SOURCE_EXTERNAL)
+        m.per_volt, m.v_min, m.v_max = per_volt, Float64(v_range[1]), Float64(v_range[2])
+        m.prev_source, m.write, m.level, m.output, m.enabled = prev, writer, 0.0, output, true
+    catch
+        release_output!(light, output)
+        rethrow()
+    end
+    return nothing
+end
+
+# Which laser (serial number) holds each modulation output, process-wide.
+const MODULATION_OUTPUTS = Dict{String,String}()
+const MODULATION_OUTPUTS_LOCK = ReentrantLock()
+
+"Claim `output` for this laser, or refuse when another laser holds it. `nothing` claims nothing."
+function claim_output!(light::TCubeLaser, output)
+    output === nothing && return nothing
+    lock(MODULATION_OUTPUTS_LOCK) do
+        holder = get(MODULATION_OUTPUTS, output, nothing)
+        (holder === nothing || holder == light.serialNo) || error(
+            "TCubeLaser $(light.serialNo): modulation output \"$output\" is already driving the MOD IN of TCubeLaser $holder. " *
+            "Give each laser its own output (ao_channel=, or output_id= with a writer), or disable the other laser's modulation first.")
+        MODULATION_OUTPUTS[output] = light.serialNo
+    end
+    return nothing
+end
+
+"Release `output` if this laser holds it."
+function release_output!(light::TCubeLaser, output)
+    output === nothing && return nothing
+    lock(MODULATION_OUTPUTS_LOCK) do
+        get(MODULATION_OUTPUTS, output, nothing) == light.serialNo && delete!(MODULATION_OUTPUTS, output)
+    end
     return nothing
 end
 
@@ -201,7 +254,10 @@ function disable_modulation!(light::TCubeLaser)
         e
     end
     # Still enabled if the source was not restored: the input may still be live.
-    isnothing(serr) && ((m.enabled, m.write, m.level) = (false, nothing, 0.0))
+    if isnothing(serr)
+        release_output!(light, m.output)
+        m.enabled, m.write, m.level, m.output = false, nothing, 0.0, nothing
+    end
     isnothing(zerr) || throw(zerr)
     isnothing(serr) || throw(serr)
     return nothing

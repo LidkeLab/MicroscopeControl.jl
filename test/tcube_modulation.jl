@@ -150,11 +150,41 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
         @test_throws "initialize first" TCube.modulation_scale(l)
         quiet(() -> initialize(l))
         @test TCube.modulation_scale(l) ≈ l.controller_max_current / 10
-        enable_modulation!(l; writer=v -> nothing, v_range=(0.0, 5.0))
-        quiet(() -> setcurrent!(l, 70.0))
-        @test_throws ArgumentError setmodulation!(l, 100.0)   # 70 + 100 mA above the ceiling
-        setmodulation!(l, 20.0)
-        @test modulation_level(l) == 20.0
+        # Refused in open loop: on the rig's TLD001 the input acted only after the source was set while on,
+        # every setcurrent! disarmed it, and re-arming left the current up to 5 mA off (2026-10-13).
+        empty!(FK.calls)
+        @test_throws "refused in open loop" enable_modulation!(l; writer=v -> nothing, v_range=(0.0, 5.0), output_id="Dev2/ao1")
+        @test !l.modulation.enabled && "LD_SetControlSource" ∉ FK.calls && !haskey(TCube.MODULATION_OUTPUTS, "Dev2/ao1")
+        quiet(() -> setcurrent!(l, 70.0))   # open loop without modulation works as before
+        @test l.drive_current == 70.0
+    end
+
+    @testset "several lasers: each claims its own output, one with and one without modulation" begin
+        a = ready()
+        b = cp(); quiet(() -> initialize(b))
+        b2 = TCubeLaser("11111111"; mode=ConstantPhotocurrent(), wa_calibration=224.2, tia_range=1e-3,
+                        tec_stabilised=missing, properties=props(), max_current=160.0, lock_check_s=0.1, ramp_step_s=0.0)
+        quiet(() -> initialize(b2))
+        enable_modulation!(a; writer=writer(a), v_range=(0.0, 5.0), output_id="Dev2/ao1")
+        @test a.modulation.output == "Dev2/ao1" && TCube.MODULATION_OUTPUTS["Dev2/ao1"] == a.serialNo
+        @test_throws "already driving the MOD IN of TCubeLaser 00000000" enable_modulation!(b2; writer=v -> nothing, v_range=(0.0, 5.0), output_id="Dev2/ao1")
+        @test !b2.modulation.enabled && modulation_level(b2) == 0.0   # refused: nothing changed on the second laser
+        quiet() do; setoutputpower!(b2, 10.0); end                  # a laser without modulation works as before
+        @test b2.pd.output_power_requested == 10.0
+        enable_modulation!(b2; writer=v -> nothing, v_range=(0.0, 5.0), output_id="Triggerscope COM3 DAC 3")
+        @test b2.modulation.enabled && b2.modulation.output == "Triggerscope COM3 DAC 3"
+        setmodulation!(a, 5.0)
+        @test modulation_level(a) == 5.0 && modulation_level(b2) == 0.0   # per laser
+        disable_modulation!(a)
+        @test !haskey(TCube.MODULATION_OUTPUTS, "Dev2/ao1")              # released
+        disable_modulation!(b2)
+        enable_modulation!(b2; writer=v -> nothing, v_range=(0.0, 5.0), output_id="Dev2/ao1")
+        @test TCube.MODULATION_OUTPUTS["Dev2/ao1"] == "11111111"          # free again, the other laser can take it
+        disable_modulation!(b2)
+        # a failed enable leaves the output free
+        @test_throws "DAQ gone" enable_modulation!(b; writer=v -> error("DAQ gone"), v_range=(0.0, 5.0), output_id="Dev2/ao0")
+        @test !haskey(TCube.MODULATION_OUTPUTS, "Dev2/ao0") && !b.modulation.enabled
+        @test isempty(TCube.MODULATION_OUTPUTS)
     end
 
     @testset "export_state records the modulation" begin
