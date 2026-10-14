@@ -36,7 +36,8 @@ the next version with `-DEV`).
   driver code on the same rig (LCAs closed, power read on the photodiode): 17 of 17 checks
   (enable, +5 mW, setpoints up and down while modulated, refusals, `export_state`,
   `light_off` writing 0 V, the control source restored; `setmodulation!` 0.48 ms median).
-  A 0 mW base is dark and never locked high (15 jumps from 0 V), but lights up in ≈ 0.4 s.
+  A 0 mW base is dark (OFF < 0.01 % of ON on the camera), never locked high (15 jumps from 0 V),
+  and a +20 mW pulse from it lands within one 5 ms frame even after 2 s dark.
   See CALIBRATION.md, "External modulation".
 
 ## [0.2.6] - 2026-10-01
