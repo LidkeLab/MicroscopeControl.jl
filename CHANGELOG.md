@@ -8,6 +8,16 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
+## [Unreleased]
+
+### Changed
+
+- Compat entries for the two dependencies that had none: `LibSerialPort = "0.5"` (#82) and
+  `SHA = "0.7, 1"` (#77; SHA is a standard library, 0.7.0 on Julia 1.11 and 1.0.0 on 1.13, so a
+  bound of `"0.7"` alone was ignored with a warning on 1.13).
+- CI: `actions/checkout` v7 (#79) and `codecov/codecov-action` v7 (#78). Not shipped; no effect on
+  the package.
+
 ## [0.2.6] - 2026-10-01
 
 A non-breaking release in three parts. Only the DCAM4 part has run on hardware so
