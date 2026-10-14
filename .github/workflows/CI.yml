@@ -75,7 +75,7 @@ jobs:
       # from every push to every branch.
       - uses: julia-actions/julia-processcoverage@v1
         if: github.event_name != 'pull_request'
-      - uses: codecov/codecov-action@v6
+      - uses: codecov/codecov-action@v7
         if: github.event_name != 'pull_request'
         with:
           files: lcov.info
