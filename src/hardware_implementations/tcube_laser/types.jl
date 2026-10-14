@@ -9,16 +9,26 @@ drives it: see [`enable_modulation!`](@ref). Every `TCubeLaser` carries one
 - `enabled`: the control source includes the external input and the DAQ writer exists.
 - `level`: the modulation last written, in the setpoint's unit (mW in closed loop, mA in
   open loop); the controller adds it to the software setpoint.
-- `per_volt`: the controller's scale. 10 V is full scale: the photodiode's full-scale power
-  (`tia_range x wa_calibration`) in closed loop, the current limit in open loop (TLD001
-  manual, section 5.5).
+- `per_volt`: the controller's scale at the last write. 10 V is full scale: the photodiode's
+  full-scale power (`tia_range x wa_calibration`) in closed loop, the current limit in open
+  loop (TLD001 manual, section 5.5). `setmodulation!` recomputes it on every write, so an
+  edit of `pd.wa_calibration` takes effect at once.
 - `v_min`, `v_max`: the DAQ channel's output range in volts.
 - `prev_source`: the control-source flags read by `enable_modulation!`, restored by
   `disable_modulation!`.
 - `write`: `v -> nothing`, one voltage to the output (the DAQ channel, or any writer passed
   to `enable_modulation!`).
 - `output`: the name of the analogue output this laser has claimed (the DAQ channel, or the
-  `output_id` given with a writer), or `nothing`. No two lasers can hold the same one.
+  `output_id` given with a writer), or `nothing`. No two laser objects can hold the same
+  one, even two for the same serial number.
+- `close`: `() -> nothing`, run when the output is released (`disable_modulation!`,
+  `shutdown`, a failed `enable_modulation!`): deletes the DAQ task, or a writer's own
+  `close=`. `nothing` when there is nothing to release.
+- `lock`: the laser's setpoint lock. Everything that writes the controller's setpoint
+  register holds it: `initialize`, `light_on`, `light_off`, `shutdown`, `setcurrent!`,
+  `setoutputpower!`, `enable_modulation!`, `disable_modulation!` and `setmodulation!`.
+  The slow calls wait for it. `setmodulation!` only tries it and refuses when it is held,
+  so a fast write never waits behind a verified USB setpoint and never lands inside one.
 """
 mutable struct ExternalModulation
     enabled::Bool
@@ -29,8 +39,10 @@ mutable struct ExternalModulation
     prev_source::Int
     write::Any
     output::Union{Nothing,String}
+    close::Any
+    lock::ReentrantLock
 end
-ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing)
+ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing, nothing, ReentrantLock())
 
 """
     TCubeLaser{M<:RegulationMode} <: DiodeLaser

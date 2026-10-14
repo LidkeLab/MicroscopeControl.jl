@@ -407,7 +407,10 @@ end
     LD_RequestControlSource(serialNo) = Main.FakeKinesis.record!("LD_RequestControlSource")
     function LD_GetControlSource(serialNo)
         Main.FakeKinesis.record!("LD_GetControlSource")
-        return source_flags(Main.FakeKinesis.source[])
+        # As the rig's TLD001 (2026-10-13): a source of 2 or 3 reads back as 1, although the
+        # external input demonstrably works; 5 (and, assumed, 7) read back as set.
+        s = Main.FakeKinesis.source[]
+        return source_flags(s in (2, 3) ? 1 : s)
     end
     function LD_SetControlSource(serialNo, src)
         s = Main.FakeKinesis.record!("LD_SetControlSource")

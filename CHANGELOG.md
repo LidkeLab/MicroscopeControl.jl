@@ -62,6 +62,26 @@ in open loop and `setupIO` has no default output (breaking).
   disarmed it, and re-arming left the current several mA off; open loop itself verified.
   Removed the unused `tcube_laser/tcubeapi.jl` (an old script with a hard-coded serial).
   See CALIBRATION.md, "External modulation".
+- **TCube laser: fixes from the PR #83 review (`v0.3.0-rc3`).**
+  - A per-laser setpoint lock (`light.modulation.lock`) serialises everything that writes
+    the controller's setpoint register: `initialize`, `light_on`, `light_off`, `shutdown`,
+    `setcurrent!`, `setoutputpower!`, `enable_modulation!`, `disable_modulation!`.
+    `setmodulation!` tries it and REFUSES at once while it is held, so a level is never
+    checked against a setpoint in flight (reproduced before the fix: 25 + 5 mW held against
+    a 28 mW ceiling) and the fast path never waits behind a verified USB write.
+  - Closed-loop `light_on` re-checks the recorded request and request + modulation against
+    the current `max_power` before the enable (open loop already re-checked the request).
+  - `disable_modulation!` stays enabled, with its output and claim, when 0 V could not be
+    written and the restored control source still includes the external input.
+  - The AO task is deleted on `disable_modulation!`, `shutdown` and a failed enable (the
+    range query moved inside the guarded block); a writer can pass `close=` for its own
+    release. A failed release keeps the claim.
+  - Smaller: outputs are claimed per laser OBJECT (two objects for one serial cannot share
+    one); the volts-per-mW scale is recomputed on every `setmodulation!` (an edited
+    `wa_calibration` takes effect); a writer that throws gets 0 V written and the level
+    recorded as 0; `photocurrent_requested` is documented as the request alone; the test
+    fake reads a control source of 2 or 3 back as 1, like the cube, and the test writer no
+    longer clips negative voltages.
 
 ## [0.2.6] - 2026-10-01
 

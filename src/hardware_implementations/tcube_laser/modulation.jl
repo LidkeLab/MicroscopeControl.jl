@@ -73,8 +73,21 @@ function modulation_scale(light::TCubeLaser{ConstantCurrent})
 end
 
 """
+    with_setpoint_lock(f, light::TCubeLaser)
+
+Run `f()` holding the laser's setpoint lock (`light.modulation.lock`, reentrant). Every
+call that writes the controller's setpoint register holds it, because the register is
+shared: a USB setpoint write replaces it outright and a MOD IN change adds its difference
+(see the top of this file). Two writers interleaving would leave the register at a total
+nobody checked against the ceiling, and a modulation change inside a verified setpoint
+write (ramp, read-back, lock check) would make the driver's record disagree with the
+controller. [`setmodulation!`](@ref) does not wait for it: it refuses when it is held.
+"""
+with_setpoint_lock(f, light::TCubeLaser) = lock(f, light.modulation.lock)
+
+"""
     enable_modulation!(light::TCubeLaser; ao_channel, daq_device = nothing, v_range = nothing)
-    enable_modulation!(light::TCubeLaser; writer, v_range, output_id)
+    enable_modulation!(light::TCubeLaser; writer, v_range, output_id, close = nothing)
 
 Drive the controller's rear MOD IN from an analogue output, named by the caller: there is
 no default output, because which output is wired to which controller belongs to the rig's
@@ -82,24 +95,36 @@ own code. Either
 
 - a DAQ channel: `ao_channel = "<device>/ao<n>"` (or set on the constructor; `daq_device`
   defaults to the channel's device part). The AO task is created ([`setupIO`](@ref)) and
-  `v_range` defaults to the channel's own range from NI-DAQmx; or
+  `v_range` defaults to the channel's own range from NI-DAQmx. The task is deleted when the
+  output is released; or
 - any other output (a Triggerscope DAC, another card): `writer` (`v -> nothing`), its
   `v_range` (`(v_min, v_max)`, required: the driver cannot read it) and an `output_id`
-  naming it (e.g. `"Triggerscope <port> DAC <n>"`, required, for the guard below).
+  naming it (e.g. `"Triggerscope <port> DAC <n>"`, required, for the guard below). An
+  optional `close` (`() -> nothing`) runs when the output is released.
 
 Then 0 V is written and the control source set to software + external (`3`; the front
 potentiometer, which would add its own offset, is left out). The previous source is kept
 and restored by [`disable_modulation!`](@ref). [`setmodulation!`](@ref) then adds power in
-one write. A no-op when already enabled. Refused in open loop (see below).
+one write. A no-op when already enabled. Refused in open loop (see below). If any step
+fails, the output is released (the DAQ task deleted, the claim dropped) and the error
+rethrown. Holds the setpoint lock ([`with_setpoint_lock`](@ref)).
 
 Several lasers: each laser enables its own modulation and claims its output. A second
-laser asking for an output another laser holds (the same DAQ channel, or the same
-`output_id`) is refused until the first one's `disable_modulation!`/`shutdown`.
+laser object asking for an output another one holds (the same DAQ channel, or the same
+`output_id`) is refused until the first one's `disable_modulation!`/`shutdown`, also when
+both objects are for the same serial number.
 
 Wiring: a BNC/SMA cable from the output to the controller's MOD IN.
 """
 function enable_modulation!(light::TCubeLaser; daq_device=light.daq_device, ao_channel=light.ao_channel,
-                            writer=nothing, v_range=nothing, output_id::Union{Nothing,AbstractString}=nothing)
+                            writer=nothing, v_range=nothing, output_id::Union{Nothing,AbstractString}=nothing,
+                            close=nothing)
+    with_setpoint_lock(light) do
+        _enable_modulation!(light, daq_device, ao_channel, writer, v_range, output_id, close)
+    end
+end
+
+function _enable_modulation!(light::TCubeLaser, daq_device, ao_channel, writer, v_range, output_id, closer)
     m = light.modulation
     m.enabled && return nothing
     light isa TCubeLaser{ConstantCurrent} && error(
@@ -107,66 +132,92 @@ function enable_modulation!(light::TCubeLaser; daq_device=light.daq_device, ao_c
         "(2026-10-13): the input acts only after the control source is set while the output is on, every setcurrent! " *
         "or off/on disarms it, and after re-arming the delivered current was up to 5 mA off what the driver would " *
         "record. Use closed loop (ConstantPhotocurrent), where it is verified; see CALIBRATION.md, \"External modulation\".")
-    per_volt = modulation_scale(light)
-    if writer === nothing
+    daq = writer === nothing
+    if daq
+        closer === nothing || throw(ArgumentError(
+            "TCubeLaser $(light.serialNo): close= is for a writer; the driver deletes its own DAQ task"))
         light.daq_device = daq_device
         light.ao_channel = ao_channel
-        device, channel = resolve_ao(light)
-        output = channel
-        claim_output!(light, output)
-        try
-            setupIO(light)
-        catch
-            release_output!(light, output)
-            rethrow()
-        end
-        if v_range === nothing
-            r = NIDAQcard.DAQmx.ao_voltage_ranges(device)
-            v_range = isempty(r) ? (-10.0, 10.0) : (r[1, 1], r[1, 2])
-        end
-        writer = v -> (NIDAQcard.setvoltage(light.daq, light.task_mod, Float64(v)); nothing)
+        device, output = resolve_ao(light)
     else
         (output_id === nothing || v_range === nothing) && throw(ArgumentError(
             "TCubeLaser $(light.serialNo): with a writer, name the output (output_id = \"...\") and give its voltage " *
             "range (v_range = (v_min, v_max)): the driver cannot read either from an arbitrary output"))
         output = String(output_id)
-        claim_output!(light, output)
     end
+    claim_output!(light, output)
     try
+        if daq
+            setupIO(light)
+            closer = () -> close_daq_output!(light)   # from here on, a failure deletes the task
+            if v_range === nothing
+                r = NIDAQcard.DAQmx.ao_voltage_ranges(device)
+                v_range = isempty(r) ? (-10.0, 10.0) : (r[1, 1], r[1, 2])
+            end
+            writer = v -> (NIDAQcard.setvoltage(light.daq, light.task_mod, Float64(v)); nothing)
+        end
         writer(0.0)
         prev = control_source(light)
         set_control_source!(light, LD_SOURCE_SOFTWARE | LD_SOURCE_EXTERNAL)
-        m.per_volt, m.v_min, m.v_max = per_volt, Float64(v_range[1]), Float64(v_range[2])
-        m.prev_source, m.write, m.level, m.output, m.enabled = prev, writer, 0.0, output, true
+        m.per_volt, m.v_min, m.v_max = modulation_scale(light), Float64(v_range[1]), Float64(v_range[2])
+        m.prev_source, m.write, m.close, m.level, m.output, m.enabled = prev, writer, closer, 0.0, output, true
     catch
-        release_output!(light, output)
+        cerr = run_close(closer)
+        if isnothing(cerr)
+            release_output!(light, output)
+        else
+            @error "TCubeLaser $(light.serialNo): releasing modulation output \"$output\" after a failed enable failed; it stays claimed" exception = cerr
+        end
         rethrow()
     end
     return nothing
 end
 
-# Which laser (serial number) holds each modulation output, process-wide.
-const MODULATION_OUTPUTS = Dict{String,String}()
+"Delete the DAQ task `setupIO` created, if any."
+function close_daq_output!(light::TCubeLaser)
+    t = light.task_mod
+    t isa Integer && return nothing   # no task (the constructor's 0)
+    NIDAQcard.deletetask(light.daq, t)
+    light.task_mod = 0
+    return nothing
+end
+
+"Run a release function: `nothing` on success (or when there is none), else the exception."
+function run_close(closer)
+    closer === nothing && return nothing
+    try
+        closer()
+        return nothing
+    catch e
+        return e
+    end
+end
+
+# Which laser object holds each modulation output, process-wide.
+const MODULATION_OUTPUTS = Dict{String,Any}()
 const MODULATION_OUTPUTS_LOCK = ReentrantLock()
 
-"Claim `output` for this laser, or refuse when another laser holds it. `nothing` claims nothing."
+"Claim `output` for this laser object, or refuse when another one holds it. `nothing` claims nothing."
 function claim_output!(light::TCubeLaser, output)
     output === nothing && return nothing
     lock(MODULATION_OUTPUTS_LOCK) do
         holder = get(MODULATION_OUTPUTS, output, nothing)
-        (holder === nothing || holder == light.serialNo) || error(
-            "TCubeLaser $(light.serialNo): modulation output \"$output\" is already driving the MOD IN of TCubeLaser $holder. " *
-            "Give each laser its own output (ao_channel=, or output_id= with a writer), or disable the other laser's modulation first.")
-        MODULATION_OUTPUTS[output] = light.serialNo
+        if !(holder === nothing || holder === light)
+            who = holder.serialNo == light.serialNo ? "another TCubeLaser object for the same serial $(holder.serialNo)" :
+                "TCubeLaser $(holder.serialNo)"
+            error("TCubeLaser $(light.serialNo): modulation output \"$output\" is already driving the MOD IN of $who. " *
+                "Give each laser its own output (ao_channel=, or output_id= with a writer), or disable the other laser's modulation first.")
+        end
+        MODULATION_OUTPUTS[output] = light
     end
     return nothing
 end
 
-"Release `output` if this laser holds it."
+"Release `output` if this laser object holds it."
 function release_output!(light::TCubeLaser, output)
     output === nothing && return nothing
     lock(MODULATION_OUTPUTS_LOCK) do
-        get(MODULATION_OUTPUTS, output, nothing) == light.serialNo && delete!(MODULATION_OUTPUTS, output)
+        get(MODULATION_OUTPUTS, output, nothing) === light && delete!(MODULATION_OUTPUTS, output)
     end
     return nothing
 end
@@ -204,17 +255,50 @@ the output is on; `light_off`, `shutdown` and every failure cleanup write 0 V fi
 Drive MOD IN only through this function: the driver adds the level to every USB setpoint
 it sends (the controller's one setpoint register, see the top of this file), so a voltage
 written by other code would be absorbed by the next `setoutputpower!`.
+
+**Refused at once, without waiting, while another call holds the laser's setpoint lock**
+([`with_setpoint_lock`](@ref)): `setoutputpower!`/`setcurrent!` (over a second with the
+verified write and the lock check), `light_on`, `light_off`, `shutdown`, `initialize`, or
+an enable/disable. Nothing is written then and the level stays what it was. Without this, a
+level checked against the old setpoint could land on top of the new one and exceed
+`max_power`. Set the base before a fast run, not during it.
+
+The volts-per-unit scale is recomputed on every call ([`modulation_scale`](@ref)). If the
+writer throws, the voltage it left is unknown: 0 V is written and the level recorded as 0;
+if that fails too, the level keeps its previous value, an error is logged, and the writer's
+error is rethrown.
 """
 function setmodulation!(light::TCubeLaser, level::Real)
     m = light.modulation
-    m.enabled || error("TCubeLaser $(light.serialNo): setmodulation! needs enable_modulation! first")
-    isfinite(level) || throw(ArgumentError("TCubeLaser $(light.serialNo): modulation must be finite, got $level"))
-    v = level / m.per_volt
-    m.v_min <= v <= m.v_max || throw(ArgumentError(
-        "TCubeLaser $(light.serialNo): modulation $level $(modulation_unit(light)) needs $v V, outside the DAQ channel's [$(m.v_min), $(m.v_max)] V"))
-    check_total(light, modulation_base(light), level)
-    m.write(v)
-    m.level = Float64(level)
+    trylock(m.lock) || error(
+        "TCubeLaser $(light.serialNo): setmodulation!($level) refused: a setpoint change, switch-on/off or modulation " *
+        "change is in progress on this laser (it holds the setpoint lock). Nothing was written; the modulation stays at " *
+        "$(m.level). Set the base power before a fast run, not during it.")
+    try
+        m.enabled || error("TCubeLaser $(light.serialNo): setmodulation! needs enable_modulation! first")
+        isfinite(level) || throw(ArgumentError("TCubeLaser $(light.serialNo): modulation must be finite, got $level"))
+        per_volt = modulation_scale(light)
+        v = level / per_volt
+        m.v_min <= v <= m.v_max || throw(ArgumentError(
+            "TCubeLaser $(light.serialNo): modulation $level $(modulation_unit(light)) needs $v V, outside the DAQ channel's [$(m.v_min), $(m.v_max)] V"))
+        check_total(light, modulation_base(light), level)
+        try
+            m.write(v)
+        catch
+            # The writer may have applied the voltage before it threw: put the input back at a known 0 V.
+            try
+                m.write(0.0)
+                m.level = 0.0
+            catch zerr
+                @error "TCubeLaser $(light.serialNo): writing 0 V after a failed modulation write failed too; the voltage on MOD IN is unknown" exception = zerr
+            end
+            rethrow()
+        end
+        m.per_volt = per_volt
+        m.level = Float64(level)
+    finally
+        unlock(m.lock)
+    end
     return nothing
 end
 
@@ -225,17 +309,20 @@ modulation_level(light::TCubeLaser) = light.modulation.enabled ? light.modulatio
     zero_modulation(light) -> Nothing or the exception
 
 Write 0 V when modulation is enabled; never throws (the switch-off paths call it first and
-must go on to disable the output whatever happens here).
+must go on to disable the output whatever happens here). Holds the setpoint lock, so the
+0 V and the recorded level change together.
 """
 function zero_modulation(light::TCubeLaser)
-    m = light.modulation
-    m.enabled || return nothing
-    try
-        m.write(0.0)
-        m.level = 0.0
-        return nothing
-    catch e
-        return e
+    with_setpoint_lock(light) do
+        m = light.modulation
+        m.enabled || return nothing
+        try
+            m.write(0.0)
+            m.level = 0.0
+            return nothing
+        catch e
+            return e
+        end
     end
 end
 
@@ -243,26 +330,40 @@ end
     disable_modulation!(light::TCubeLaser)
 
 Write 0 V, restore the control source read by [`enable_modulation!`](@ref) (software only if
-it was not read) and mark modulation disabled. Both steps are attempted; the first failure
-is rethrown, and a failed restore leaves it marked enabled (the input may still be live).
-A no-op when not enabled.
+it was not read), then release the output (delete the DAQ task, drop the claim) and mark
+modulation disabled. Every step is attempted and the first failure rethrown.
+
+It stays **enabled**, keeping its output and its claim, whenever a voltage may still add to
+the setpoint: the source was not restored, or the 0 V write failed and the restored source
+still includes the external input (3 or 7). The level is then still added to every USB
+setpoint, as it is still on the input, and a retry can finish the job. If only the release
+fails, modulation is marked disabled but the output stays claimed (the task may still hold
+the channel). A no-op when not enabled. Holds the setpoint lock.
 """
 function disable_modulation!(light::TCubeLaser)
-    m = light.modulation
-    m.enabled || return nothing
-    zerr = zero_modulation(light)
-    serr = try
-        set_control_source!(light, m.prev_source > 0 ? m.prev_source : LD_SOURCE_SOFTWARE)
-        nothing
-    catch e
-        e
+    with_setpoint_lock(light) do
+        m = light.modulation
+        m.enabled || return nothing
+        zerr = zero_modulation(light)
+        restore = m.prev_source > 0 ? m.prev_source : LD_SOURCE_SOFTWARE
+        serr = try
+            set_control_source!(light, restore)
+            nothing
+        catch e
+            e
+        end
+        # Nothing can add any more when the source was restored and either 0 V is on the input or the
+        # restored source ignores the input.
+        input_dead = isnothing(serr) && (isnothing(zerr) || restore & LD_SOURCE_EXTERNAL == 0)
+        cerr = nothing
+        if input_dead
+            cerr = run_close(m.close)
+            isnothing(cerr) && (release_output!(light, m.output); m.output = nothing)
+            m.enabled, m.write, m.close, m.level = false, nothing, nothing, 0.0
+        end
+        isnothing(zerr) || throw(zerr)
+        isnothing(serr) || throw(serr)
+        isnothing(cerr) || throw(cerr)
+        return nothing
     end
-    # Still enabled if the source was not restored: the input may still be live.
-    if isnothing(serr)
-        release_output!(light, m.output)
-        m.enabled, m.write, m.level, m.output = false, nothing, 0.0, nothing
-    end
-    isnothing(zerr) || throw(zerr)
-    isnothing(serr) || throw(serr)
-    return nothing
 end

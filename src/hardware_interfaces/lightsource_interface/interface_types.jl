@@ -119,9 +119,13 @@ delivered power drifts while photocurrent is held steady. That is why
   refuses [`setoutputpower!`](@ref).
 - `output_power_requested::Float64`: mW at the laser output, the last request
   [`setoutputpower!`](@ref) completed. `NaN` before the first.
-- `photocurrent_requested::Float64`: A. The DECODED setpoint the loop was
-  actually given, which the downward-rounding encoding makes differ from
+- `photocurrent_requested::Float64`: A. The DECODED setpoint of the request
+  alone, which the downward-rounding encoding makes differ from
   `output_power_requested / wa_calibration`. `NaN` before the first command.
+  With external modulation on (a `TCubeLaser`'s MOD IN) the controller holds
+  this plus the modulation level, which is NOT included here: the total is
+  `output_power_requested + modulation_level(laser)` mW (`export_state` records
+  both).
 - `ramp_step_mW::Float64`: `Inf` (the default) sends every setpoint as one
   write, ~10 ms. A finite value in mW makes the driver walk any larger upward
   step in increments of that size, `ramp_step_s` apart; downward steps are

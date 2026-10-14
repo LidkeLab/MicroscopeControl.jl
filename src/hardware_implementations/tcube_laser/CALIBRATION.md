@@ -324,10 +324,24 @@ lasers except the analogue-output guard below):
   disarmed it again. After re-arming, the first voltage change was sometimes ignored and
   later ones counted from it, leaving the current several mA off what the driver would record.
   A driver cannot promise a current under those rules, so it refuses rather than guess.
-- **Several lasers.** Each laser claims its analogue output (the DAQ channel, or the
-  `output_id` passed with a `writer`); a second laser asking for one that is held is refused
-  until the first releases it (`disable_modulation!`/`shutdown`). A laser that never calls
+- **Several lasers.** Each laser object claims its analogue output (the DAQ channel, or the
+  `output_id` passed with a `writer`); a second one asking for an output that is held is
+  refused until the first releases it (`disable_modulation!`/`shutdown`), also when both
+  objects are for the same serial. Releasing deletes the DAQ task (a writer's own `close=`
+  runs), on disable, on shutdown and on a failed enable. A laser that never calls
   `enable_modulation!` never touches a DAQ.
+- **One setpoint change at a time.** The slow calls (`setoutputpower!`, `setcurrent!`,
+  `light_on`, `light_off`, `shutdown`, `initialize`, enable/disable) hold a per-laser lock
+  and wait for each other. `setmodulation!` does not wait: while any of them runs it refuses
+  at once and writes nothing, so a level is never checked against a setpoint that is about
+  to change (the race the PR #83 review reproduced: 25 + 5 mW held against a 28 mW ceiling).
+  Set the base before a fast run and only modulate during it; when free, `setmodulation!`
+  adds well under 0.1 ms to the output's own write.
+- **Failures.** `light_on` re-checks the recorded request and request + modulation against
+  the current ceiling before the enable. If writing 0 V fails while the restored control
+  source still includes the external input, `disable_modulation!` keeps modulation enabled
+  (a stale voltage may still add) and a retry finishes. A writer that throws gets 0 V written
+  and the level recorded as 0.
 - **Any analogue output.** `enable_modulation!(laser; writer = v -> ..., v_range = (lo, hi),
   output_id = "...")` drives MOD IN from anything that can set a voltage (a Triggerscope DAC,
   another card). Mind the range: 10 V is the photodiode's full scale (`tia_range x

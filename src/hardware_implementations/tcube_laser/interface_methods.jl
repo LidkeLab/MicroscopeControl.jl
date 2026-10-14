@@ -775,18 +775,26 @@ end
 
 The setpoint the driver's recorded request asks for: `setpoint_code(drive_current)`
 in `ConstantCurrent` mode, `photocurrent_code(output_power_requested)` in
-`ConstantPhotocurrent` mode, and 0 when nothing has been requested. What
-`light_on` sends right after enabling the output.
+`ConstantPhotocurrent` mode, plus the modulation level, and 0 when nothing has been
+requested. What `light_on` sends right after enabling the output. Both modes re-check
+the recorded request, and request + modulation, against the CURRENT bounds and throw
+if either fails: the ceiling (`max_current`, `properties.max_power`) may have been
+lowered since the request was accepted, and `light_on` calls this before the enable.
 """
 function intended_code(light::TCubeLaser{ConstantCurrent})
     isnan(light.drive_current) && return UInt16(0)
     check_current(light, light.drive_current) # the ceiling may have dropped since setcurrent!
+    light.modulation.enabled && check_total(light, light.drive_current, modulation_level(light))
     return setpoint_code(light, light.drive_current + modulation_level(light))
 end
 # Plus the modulation level: a USB write replaces the controller's whole register (modulation.jl).
-intended_code(light::TCubeLaser{ConstantPhotocurrent}) =
-    isnan(light.pd.output_power_requested) ? UInt16(0) :
-    photocurrent_code(light, (light.pd.output_power_requested + modulation_level(light)) / 1000 / light.pd.wa_calibration)
+function intended_code(light::TCubeLaser{ConstantPhotocurrent})
+    p = light.pd.output_power_requested
+    isnan(p) && return UInt16(0)
+    check_power(light, p)   # properties.max_power may have dropped since setoutputpower!
+    light.modulation.enabled && check_total(light, p, modulation_level(light))
+    return photocurrent_code(light, (p + modulation_level(light)) / 1000 / light.pd.wa_calibration)
+end
 
 "Whether a setpoint has been requested since construction: what `light_on` sends if not is 0."
 has_request(light::TCubeLaser{ConstantCurrent}) = !isnan(light.drive_current)
@@ -870,7 +878,8 @@ controller reports is the truth, not the header's scale; entering closed loop
 sets status bit `0x4`; the W/A factor reads back. `[limitation]` the second flag
 of `LD_EnableMaxCurrentAdjust` (always passed `false`) is not verified.
 """
-function initialize(light::TCubeLaser)
+initialize(light::TCubeLaser) = with_setpoint_lock(() -> _initialize(light), light)
+function _initialize(light::TCubeLaser)
     reset_loop_state!(light)
     serialNo = light.serialNo
     check_err(TLI_BuildDeviceList(), "TLI_BuildDeviceList", serialNo)
@@ -1047,8 +1056,18 @@ controller power cycle can restore the pot).
 `[limitation]` those checks add two fresh reads (about 4 x `REQUEST_WAIT_S`), and
 `check_lock` adds `lock_check_s` plus about 4 x `REQUEST_WAIT_S`, to every closed-loop
 `light_on` and `setoutputpower!`; unvalidated on hardware.
+
+Before the enable, the recorded request and request + modulation are re-checked against
+the current ceiling ([`intended_code`](@ref)): lowering `max_power` or `max_current` after a
+request makes the next `light_on` refuse instead of emitting the old total.
+
+Holds the laser's setpoint lock for the whole call ([`with_setpoint_lock`](@ref)), as do
+`initialize`, `light_off`, `shutdown`, `setcurrent!` and `setoutputpower!`: they wait for
+each other (a `light_off` waits for a `setoutputpower!` in flight, up to its lock check),
+and `setmodulation!` refuses while any of them runs.
 """
-function LightSourceInterface.light_on(light::TCubeLaser)
+LightSourceInterface.light_on(light::TCubeLaser) = with_setpoint_lock(() -> _light_on(light), light)
+function _light_on(light::TCubeLaser)
     require_clamp(regulation_mode(light), light, "light_on")
     try
         check_scale!(light)
@@ -1061,7 +1080,12 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     serialNo = light.serialNo
     light.pd isa PhotodiodeLoop && light.pd.zero_failed && @warn "TCubeLaser $serialNo: the last setpoint zero failed, so the controller's stored setpoint may be stale (after a failed re-check, the calibration-reference word read as a power target); the first moments after this enable may run toward it, bounded by the programmed clamp"
     has_request(light) || @warn "TCubeLaser $(serialNo): light_on before any setpoint was requested; sending setpoint 0, since the controller's stored setpoint cannot be trusted"
-    code = intended_code(light)
+    code = try
+        intended_code(light)   # re-checks the recorded request (+ modulation) against the current ceiling
+    catch
+        output_may_be_on(light) && disable_after_failure(light, "light_on (the recorded request is above the current ceiling while the output may be on)")
+        rethrow()
+    end
     # On (or unknown) from the moment the enable is sent (Codex C3); a failed
     # enable is rolled back like a failed setpoint, since the SDK may report a
     # failure for an enable that took (C2).
@@ -1176,7 +1200,9 @@ in 0.2.4.
 throws and leaves the output on, at a setpoint that may be the new or the old
 one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 """
-function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
+LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64) =
+    with_setpoint_lock(() -> _setcurrent!(light, current), light)
+function _setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
     light.modulation.enabled && check_total(light, current, modulation_level(light))
     code = setpoint_code(light, current + modulation_level(light))   # the register holds request + modulation (modulation.jl)
@@ -1222,7 +1248,13 @@ Command the optical power at the laser output, in mW -- the plane where
    below 1/`lock_ratio` of the request zeroes and disables the output, logs, and
    rethrows ([`disable_after_failure`](@ref)); `properties.is_on` is `true`
    afterwards only if the disable failed. The request is not recorded.
-7. Record `pd.output_power_requested` and the DECODED `pd.photocurrent_requested`.
+7. Record `pd.output_power_requested` and the DECODED `pd.photocurrent_requested`, both
+   for the request alone: with MOD IN modulation on, the controller holds them plus
+   `modulation_level`.
+
+The whole call holds the laser's setpoint lock ([`with_setpoint_lock`](@ref)), so a
+`setmodulation!` from another task during it is refused rather than checked against the
+old setpoint.
 
 A safety check that refuses while the output may be on zeroes and disables it first.
 
@@ -1233,7 +1265,9 @@ It never touches `drive_current`: the loop owns the current. Whether the light
 at the output matches is a question for a power meter; see
 [`indicated_output_power`](@ref) and [`loop_status`](@ref).
 """
-function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64)
+LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64) =
+    with_setpoint_lock(() -> _setoutputpower!(light, power_mW), light)
+function _setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64)
     bits = require_clamp(ConstantPhotocurrent(), light, "setoutputpower!")
     check_power(light, power_mW)
     light.modulation.enabled && check_total(light, power_mW, modulation_level(light))
@@ -1378,7 +1412,8 @@ throw, since the output is still turned off; a failed disable throws and leaves
 `properties.is_on` unchanged. The recorded request (`drive_current`, or
 `pd.output_power_requested`) is kept, so `light_on` returns to it.
 """
-function LightSourceInterface.light_off(light::TCubeLaser)
+LightSourceInterface.light_off(light::TCubeLaser) = with_setpoint_lock(() -> _light_off(light), light)
+function _light_off(light::TCubeLaser)
     zero_then_disable(light)
     println("$(light.laser_color)" * "_laser is off")
     return nothing
@@ -1392,7 +1427,8 @@ polling and close the connection. A failed zero is logged; a failed disable
 throws, but the connection is closed either way: leaving the Kinesis handle open
 would also block the reconnection a caller needs in order to retry the disable.
 """
-function shutdown(light::TCubeLaser)
+shutdown(light::TCubeLaser) = with_setpoint_lock(() -> _shutdown(light), light)
+function _shutdown(light::TCubeLaser)
     serialNo = light.serialNo
     try
         zero_then_disable(light)
