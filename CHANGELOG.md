@@ -8,6 +8,29 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
+## [Unreleased]
+
+### Added
+
+- **TCube laser: external modulation through the rear MOD IN, from a DAQ analog output.**
+  `enable_modulation!(laser; daq_device, ao_channel)` creates the AO task, writes 0 V and
+  sets the controller's control source to software + external (the previous source is
+  restored by `disable_modulation!`). `setmodulation!(laser, level)` then adds `level` to the
+  software setpoint (mW in closed loop, mA in open loop) in ONE DAQ write: no USB call to the
+  controller, no lock check. Every path that switches the output off (`light_off`,
+  `shutdown`, the failure cleanup) writes 0 V first; `setoutputpower!`/`setcurrent!` and
+  `setmodulation!` refuse a setpoint + modulation above the ceiling or below 0; `check_lock`
+  expects setpoint + modulation; `export_state` gains `modulation_enabled`,
+  `modulation_level`, `modulation_per_volt`. Also `control_source`/`set_control_source!`,
+  which take flag sums (3, 5, 7) that the `LD_InputSourceFlags` enum cannot represent.
+  Off by default and per laser: a laser whose MOD IN is not cabled behaves exactly as
+  before. Rig check (642 nm, TLD001 64849775, closed loop, USB-6008 `Dev2/ao1`, 2026-10-13,
+  the same calls by hand before this code): +22.5 mW per volt (the manual's scaling predicts
+  22.42); a DAQ write 0.50 ms median, 0.74 ms p99, 3 ms max, against 1.3-1.6 s for a
+  `setoutputpower!`; on beads at 200 Hz a 1 -> 21 mW step lands within one 5 ms frame,
+  without overshoot; the input is ignored with control source 5 (software + pot). This code
+  itself not yet run on hardware. See CALIBRATION.md, "External modulation".
+
 ## [0.2.6] - 2026-10-01
 
 A non-breaking release in three parts. Only the DCAM4 part has run on hardware so

@@ -320,3 +320,43 @@ Set `tec_stabilised` from what you find.
 `LD_SetWACalibFactor`, so the front-panel display agrees with the driver. That
 setting scales the **display** only; the loop regulates photocurrent regardless,
 and this driver does its own conversion.
+
+## External modulation (MOD IN from a DAQ)
+
+The fast way to change the power during an acquisition. `setoutputpower!` sends a setpoint
+over USB and then waits `lock_check_s` to verify the loop: 1.3-1.6 s on the 642 nm rig.
+The TLD001 also adds the voltage on its rear SMA **MOD IN** to the software setpoint
+(manual section 5.5), and a DAQ analog output can drive it in one write:
+
+```julia
+TC = MicroscopeControl.HardwareImplementations.TCubeLaserControl
+enable_modulation!(laser; daq_device = "Dev2", ao_channel = "Dev2/ao1")  # 0 V, then source = software + external
+setoutputpower!(laser, 1.0); light_on(laser)   # the slow, verified base setpoint, once
+setmodulation!(laser, 20.0)                     # + 20 mW: one DAQ write, ~0.5 ms
+setmodulation!(laser, 0.0)                      # back to the base
+light_off(laser)                                # writes 0 V first
+disable_modulation!(laser)                      # restores the previous control source
+```
+
+- **Scale.** 0-10 V = 0 to full scale: the photodiode's full-scale power (`tia_range x
+  wa_calibration`, 224 mW on the 642 nm rig, so 22.4 mW per volt) in closed loop, the
+  controller's current limit in open loop. It adds to the setpoint; a negative voltage
+  subtracts. The driver refuses a setpoint + modulation above `properties.max_power` (or the
+  current ceiling) or below 0, and a voltage outside the DAQ channel's range.
+- **Control source.** The input is ignored unless the controller's control source includes
+  the external flag (2): the 642 nm rig's cube came up with 5 (software + front potentiometer)
+  and ignored 0.2 V. `enable_modulation!` sets 3 (software + external; the potentiometer's own
+  offset left out), not persisted, and `disable_modulation!`/`shutdown` restore what it read.
+  The cube reads back 1 after 2 or 3 although the input works, so the read-back cannot
+  confirm the flag.
+- **What "off" means.** The modulation only adds to a running setpoint, and a 0-5 V card
+  (USB-6008) cannot subtract, so the low level is the base setpoint (`min_power`, 1 mW on the
+  642 nm rig, plus the card's 0 V offset, about +0.2 mW there). For a dark state use an
+  attenuator or shutter, or a ±10 V output with a negative voltage.
+- **Rig results (642 nm, closed loop, USB-6008 `Dev2/ao1`, 2026-10-13, same calls by hand):**
+  +22.5 mW/V; write 0.50 ms median, 0.74 ms p99, 3 ms max (software-timed); on beads at
+  200 Hz a 1 -> 21 mW step lands within one 5 ms frame: one transition frame per edge, the
+  next frame at full level, no overshoot (the manual gives 20 kHz full-depth bandwidth).
+- **Lock check and safety.** `check_lock` expects setpoint + modulation, so a later
+  `setoutputpower!` or `light_on` with modulation active does not trip; every switch-off path
+  writes 0 V before it disables the output.

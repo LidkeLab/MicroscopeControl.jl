@@ -26,8 +26,12 @@ include("constants_Tlaser.jl")
 include("functions_Tlaser.jl")
 include("types.jl")
 include("interface_methods.jl")
+include("modulation.jl")
 
 export TCubeLaser
+# Fast power changes through the rear MOD IN input, driven by a DAQ analog output.
+export enable_modulation!, setmodulation!, modulation_level, disable_modulation!
+export control_source, set_control_source!
 export red_laser_gui
 export light_on, light_off, shutdown, tcube_get_current
 # `tcube_refresh` is an exported name from before v0.2.3 and stays one: the

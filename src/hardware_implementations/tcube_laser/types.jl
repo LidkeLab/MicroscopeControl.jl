@@ -1,5 +1,34 @@
 
 """
+    ExternalModulation
+
+State of the TLD001's analog control input (rear SMA `MOD IN`) when a DAQ analog output
+drives it: see [`enable_modulation!`](@ref). Every `TCubeLaser` carries one
+(`light.modulation`), disabled until `enable_modulation!`.
+
+- `enabled`: the control source includes the external input and the DAQ writer exists.
+- `level`: the modulation last written, in the setpoint's unit (mW in closed loop, mA in
+  open loop); the controller adds it to the software setpoint.
+- `per_volt`: the controller's scale. 10 V is full scale: the photodiode's full-scale power
+  (`tia_range x wa_calibration`) in closed loop, the current limit in open loop (TLD001
+  manual, section 5.5).
+- `v_min`, `v_max`: the DAQ channel's output range in volts.
+- `prev_source`: the control-source flags read by `enable_modulation!`, restored by
+  `disable_modulation!`.
+- `write`: `v -> nothing`, one voltage to the DAQ channel (a seam for tests).
+"""
+mutable struct ExternalModulation
+    enabled::Bool
+    level::Float64
+    per_volt::Float64
+    v_min::Float64
+    v_max::Float64
+    prev_source::Int
+    write::Any
+end
+ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing)
+
+"""
     TCubeLaser{M<:RegulationMode} <: DiodeLaser
 
 A laser diode on a Thorlabs TLD001 T-Cube controller, in one of two regulation
@@ -66,6 +95,8 @@ so that an 80 mA call can never become an 80 mW one.
 - `pd::Union{Nothing,PhotodiodeLoop}`: The photodiode loop's calibration and
   state; a [`PhotodiodeLoop`](@ref) exactly when `M === ConstantPhotocurrent`,
   `nothing` otherwise.
+- `modulation::ExternalModulation`: the analog control input's state
+  ([`enable_modulation!`](@ref)); not a constructor argument, always starts disabled.
 
 The first fourteen fields are in the order they have always been in, and the
 two added in 0.2.5 are at the end, so the pre-0.2.5 positional forms still
@@ -103,6 +134,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     drive_current::Float64
     threshold_current::Float64
     pd::Union{Nothing,PhotodiodeLoop}
+    modulation::ExternalModulation
 
     function TCubeLaser{M}(unique_id, properties, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
@@ -127,7 +159,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
             controller_max_current, daq_device, ao_channel, drive_current,
-            threshold_current, pd)
+            threshold_current, pd, ExternalModulation())
     end
 end
 

@@ -1771,6 +1771,7 @@ lab_summary("Core") do
         end
 
         include("tcube_output_order.jl")
+        include("tcube_modulation.jl")
     end
 
     @testset "NIdaq digital output" begin

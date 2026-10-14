@@ -196,8 +196,21 @@ const output_on = OutputOn()
 "The stored setpoint at each successful `LD_EnableOutput`, i.e. what it ran on."
 const enable_log = Int[]
 
+"Control-source flags (1 software, 2 external, 4 pot; they add). 5 is what the 642 nm rig's cube reported."
+const source = Ref{Int}(5)
+"""
+The external input's contribution in setpoint words (a test's DAQ writer sets it); the
+controller adds it to the held setpoint only while `source` includes the external flag.
+"""
+const ext_words = Ref{Int}(0)
+"Voltages the test writer received, in order (also recorded in `calls` as \"MOD <v>\")."
+const mod_volts = Float64[]
+
 "Forget the recorded history and restore the default responses."
 function reset!(; limit_raw::Integer=23830, stored::Integer=0)
+    source[] = 5
+    ext_words[] = 0
+    empty!(mod_volts)
     empty!(calls)
     empty!(status)
     empty!(setpoints)
@@ -255,15 +268,17 @@ closed() = bits[] & CLOSED != 0
 "The controller's limit in mA, ignoring `limit_raw_queue` (the queue shapes what reads return, not the physics)."
 limit_mA_live() = limit_follows_pot[] ? limit_mA_for(digpot[]) : diode_limit_raw[] / 32767 * 220
 setpoint_mA() = setpoint_held[] / 32767 * 220
+"The setpoint word the controller regulates to: the held setpoint plus the external input when the source includes it."
+held_total() = Int(setpoint_held[]) + (source[] & 2 != 0 ? ext_words[] : 0)
 "The drive current the closed loop needs to hold the held setpoint word."
-needed_mA() = pd_threshold_mA[] + setpoint_held[] / (pd_scale[] * pd_words_per_mA[])
+needed_mA() = pd_threshold_mA[] + held_total() / (pd_scale[] * pd_words_per_mA[])
 pd_word_at(mA) = mA <= pd_threshold_mA[] ? PD_DARK_RAW :
     round(Int, pd_scale[] * pd_words_per_mA[] * (mA - pd_threshold_mA[]))
 saturated_now() = enabled() && (closed() ? needed_mA() > limit_mA_live() : setpoint_mA() > limit_mA_live())
 function photocurrent_now()
     photocurrent_raw[] === nothing || return photocurrent_raw[]
     enabled() || return PD_DARK_RAW
-    (closed() && !saturated_now()) && return Int(setpoint_held[])   # the loop holds its setpoint
+    (closed() && !saturated_now()) && return held_total()   # the loop holds its setpoint (+ the external input)
     return pd_word_at(min(closed() ? needed_mA() : setpoint_mA(), limit_mA_live()))
 end
 function capture(kind::Symbol)
@@ -379,6 +394,16 @@ end
         return Main.FakeKinesis.polling_ok[]
     end
     LD_StopPolling(serialNo) = (Main.FakeKinesis.record!("LD_StopPolling"); nothing)
+    LD_RequestControlSource(serialNo) = Main.FakeKinesis.record!("LD_RequestControlSource")
+    function LD_GetControlSource(serialNo)
+        Main.FakeKinesis.record!("LD_GetControlSource")
+        return source_flags(Main.FakeKinesis.source[])
+    end
+    function LD_SetControlSource(serialNo, src)
+        s = Main.FakeKinesis.record!("LD_SetControlSource")
+        s == 0 && (Main.FakeKinesis.source[] = Int(src))
+        return s
+    end
 end
 
 # The driver waits between a Kinesis request and the read of its answer; the

@@ -654,9 +654,10 @@ check_lock(light::TCubeLaser{ConstantCurrent}, code) = nothing
 function check_lock(light::TCubeLaser{ConstantPhotocurrent}, code)
     pd, serialNo = light.pd, light.serialNo
     sleep(pd.lock_check_s)
-    requested = photocurrent_from_code(light, code, pd.tia_range)
+    # The controller holds setpoint + MOD IN, so the expected photocurrent includes the modulation.
+    requested = photocurrent_from_code(light, code, pd.tia_range) + modulation_level(light) / 1000 / pd.wa_calibration
     measured = NaN
-    if code > 0
+    if requested > 0
         measured = photocurrent_from_raw(light, read_photocurrent_word(light), pd.tia_range)
         measured > pd.lock_ratio * requested && error(
             "TCubeLaser $(light.serialNo): loop lock suspected: the photodiode reads $(measured) A for a request of $(requested) A " *
@@ -666,10 +667,10 @@ function check_lock(light::TCubeLaser{ConstantPhotocurrent}, code)
     bits = read_status_fresh(serialNo)
     bits & STATUS_BITS.saturated != 0 && error(
         "TCubeLaser $serialNo: the controller reports its current limit reached (status 0x400) holding a request of $(requested) A" *
-        "$(code > 0 ? "; the photodiode reads $(measured) A" : " (a zero request)"). The loop is at the clamp and the power is not being held: the request needs more " *
+        "$(requested > 0 ? "; the photodiode reads $(measured) A" : " (a zero request)"). The loop is at the clamp and the power is not being held: the request needs more " *
         "current than the clamp allows, or the photodiode gives fewer counts per mW than at calibration (a moved DIP switch or " *
         "a changed TIA gain; see CALIBRATION.md).")
-    code > 0 && measured < requested / pd.lock_ratio && error(
+    requested > 0 && measured < requested / pd.lock_ratio && error(
         "TCubeLaser $serialNo: the photodiode reads $(measured) A for a request of $(requested) A, below 1/$(pd.lock_ratio) " *
         "of it after $(pd.lock_check_s) s: the loop is not holding its setpoint. Check the photodiode and the calibration (CALIBRATION.md).")
     return nothing
@@ -1176,6 +1177,7 @@ one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 """
 function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
+    light.modulation.enabled && check_total(light, current, modulation_level(light))
     code = setpoint_code(light, current)
     # Fresh when the driver recorded the output off: the polled word can still
     # say on just after a light_off, and a send then would wait out its confirm.
@@ -1233,6 +1235,7 @@ at the output matches is a question for a power meter; see
 function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64)
     bits = require_clamp(ConstantPhotocurrent(), light, "setoutputpower!")
     check_power(light, power_mW)
+    light.modulation.enabled && check_total(light, power_mW, modulation_level(light))
     pd, serialNo = light.pd, light.serialNo
     on = light.properties.is_on || bits & STATUS_BITS.output_enabled != 0
     on && (pd.scale_refused || !pd.scale_checked) && @warn "TCubeLaser $serialNo: the photodiode scale is unchecked (the calibration re-check was refused or has not run), so the delivered power may differ from the request (twice it at half the photodiode gain); " *
@@ -1287,6 +1290,8 @@ request is kept, and `light_on` re-applies it.
 """
 function zero_then_disable(light::TCubeLaser)
     serialNo = light.serialNo
+    moderr = zero_modulation(light)   # MOD IN first: it adds to whatever the setpoint is
+    isnothing(moderr) || @error "TCubeLaser $serialNo: writing 0 V to the modulation input before the disable failed ($moderr)"
     zeroed = zero_setpoint(light)
     isnothing(zeroed) || @error "TCubeLaser $serialNo: zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
     note_zero!(light, zeroed)
@@ -1307,6 +1312,8 @@ the next enable must start dark, not on a stale setpoint.
 """
 function disable_after_failure(light::TCubeLaser, what::AbstractString)
     serialNo = light.serialNo
+    moderr = zero_modulation(light)   # MOD IN first: it adds to whatever the setpoint is
+    isnothing(moderr) || @error "TCubeLaser $serialNo: writing 0 V to the modulation input failed ($moderr) during the cleanup of $what"
     zeroed = zero_setpoint(light)
     note_zero!(light, zeroed)
     disabled, offerr = false, nothing
@@ -1385,6 +1392,11 @@ function shutdown(light::TCubeLaser)
     try
         zero_then_disable(light)
     finally
+        try
+            disable_modulation!(light)   # 0 V (already written by zero_then_disable) and the control source restored
+        catch moderr
+            @error "TCubeLaser $serialNo: disabling the modulation input during shutdown failed" exception = moderr
+        end
         try
             LD_StopPolling(serialNo) # returns Cvoid: no status to check
         catch stoperr
@@ -1577,6 +1589,10 @@ function export_state(light::TCubeLaser)
         "daq_device" => something(light.daq_device, ""), "ao_channel" => something(light.ao_channel, ""),
         "drive_current" => light.drive_current,
         "is_on" => light.properties.is_on,
+        # MOD IN (enable_modulation!): the level is in the setpoint's unit and adds to it.
+        "modulation_enabled" => light.modulation.enabled,
+        "modulation_level" => modulation_level(light),
+        "modulation_per_volt" => light.modulation.per_volt,
         # 0.2.4's keys, kept next to the new ones.
         "min_current" => light.min_current, "max_current" => light.max_current,
         "power_unit" => light.properties.power_unit, "power" => light.properties.power,

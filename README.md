@@ -55,7 +55,7 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 - Simulated stage for testing
 
 ### Light Sources
-- Thorlabs TCube laser diode controller (TLD001), open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`)
+- Thorlabs TCube laser diode controller (TLD001), open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`); fast power changes (about a millisecond instead of a verified setpoint's second or more) through the rear MOD IN from a DAQ analog output: `enable_modulation!`, `setmodulation!` (same file, "External modulation")
 - Simulated laser diode (`SimDiodeLaser`) for testing either mode
 - CrystaLaser 561nm
 - Vortran 488nm laser
