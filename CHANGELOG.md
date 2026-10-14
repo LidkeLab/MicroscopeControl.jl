@@ -10,7 +10,9 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
-Release candidate `v0.3.0-rc1` (tag on the PR #83 branch, 2026-10-14) carries everything below; the
+Release candidates (tags on the PR #83 branch, 2026-10-14): `v0.3.0-rc2` carries everything below and is
+the one verified on hardware; `v0.3.0-rc1` had a bug (a channel's device part passed to NIDAQcard as a
+`SubString`, so `enable_modulation!(laser; ao_channel)` threw a MethodError on a real DAQ). The
 final 0.3.0 is tagged from main after the merge. 0.3.0, not 0.2.7: `max_current` is now required
 in open loop and `setupIO` has no default output (breaking).
 

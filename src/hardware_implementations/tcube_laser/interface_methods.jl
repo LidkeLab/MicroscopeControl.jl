@@ -1549,7 +1549,7 @@ function resolve_ao(light::TCubeLaser)
             "Pass `ao_channel=` (and optionally `daq_device=`) to TCubeLaser or enable_modulation!. AO channels found: $found")
     end
     devs = NIDAQcard.showdevices(light.daq)
-    device = something(light.daq_device, first(split(light.ao_channel, '/')))
+    device = something(light.daq_device, String(first(split(light.ao_channel, '/'))))   # NIDAQcard takes String, not SubString
     device in devs || error("TCubeLaser $(light.serialNo): DAQ device \"$device\" is not among the DAQ devices found: $(join(devs, ", ")).")
     channelsAO = NIDAQcard.showchannels(light.daq, "AO", device)
     light.ao_channel in channelsAO || error("TCubeLaser $(light.serialNo): ao_channel \"$(light.ao_channel)\" is not among the AO channels of \"$device\": $(join(channelsAO, ", ")).")
