@@ -55,7 +55,7 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 - Simulated stage for testing
 
 ### Light Sources
-- Thorlabs TCube laser diode controller (TLD001), open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`); fast power changes (about a millisecond instead of a verified setpoint's second or more) through the rear MOD IN from a DAQ analog output: `enable_modulation!`, `setmodulation!` (same file, "External modulation")
+- Thorlabs TCube laser diode controller (TLD001), any number of them, each opened by its own serial: open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`); fast power changes in closed loop (one write of about 0.5 ms instead of a verified setpoint's second or more; on a camera a step lands within about 2 ms) through the rear MOD IN from an analogue output you name: `enable_modulation!(laser; ao_channel = "<device>/ao<n>")`, `setmodulation!` (same file, "External modulation"). The driver holds no laser's serial, calibration or wiring: pass them from your rig's code
 - Simulated laser diode (`SimDiodeLaser`) for testing either mode
 - CrystaLaser 561nm
 - Vortran 488nm laser
@@ -70,11 +70,13 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 
 ## Installation Notes
 
-Since this package is under active development and not yet registered, install it pinned to a released tag:
+Since this package is under active development and not yet registered, install it pinned to a released tag
+(release candidates such as `v0.3.0-rc2` are tagged on a pull request's branch so rigs can verify it before the
+release; once the release is tagged on main, move to it):
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.6")
 ```
 
 **You must also declare this package's unregistered dependency in your own
@@ -89,7 +91,7 @@ writes both entries for you:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.6")
 ```
 
 If you write the TOML by hand, `[sources]` alone is **not** enough — Julia

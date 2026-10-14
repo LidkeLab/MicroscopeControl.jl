@@ -354,8 +354,10 @@ lasers except the analogue-output guard below):
   few % above the settled level). A base just below threshold is nearly as dark; above
   threshold the "off" leaks the base power. The controller's own photodiode and current
   READINGS lag the light by a few hundred ms: time the light on a detector, not on them.
-- **Speed.** One write (about 0.5 ms on an NI USB DAQ, software-timed); on a camera at
-  200 Hz a step lands within one 5 ms frame: one transition frame per edge, the next frame at
+- **Speed.** One write (about 0.5 ms on an NI USB DAQ, software-timed). The light takes about 2 ms to settle
+  (10-90 %, measured on a camera at 200, 500 and 800 Hz on 2026-10-14, base 0 mW: one transition frame then full
+  level at 200 Hz, 1-2 frames at 500-800 Hz; OFF dark at every rate). Earlier, on a camera at
+  200 Hz a step landed within one 5 ms frame: one transition frame per edge, the next frame at
   full level, no overshoot (the manual gives 20 kHz full-depth bandwidth).
 - **One setpoint register (TLD001, 2026-10-13).** The controller does not keep "software
   setpoint" and "external input" apart: it has ONE setpoint register. A USB setpoint write
