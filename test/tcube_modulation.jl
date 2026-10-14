@@ -74,6 +74,29 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
         quiet() do; light_off(l); end
     end
 
+    # Rig 2026-10-13: the TLD001 keeps ONE setpoint register; a USB write sets it outright and MOD IN
+    # changes add their difference. Sending only the request while modulated absorbed the modulation:
+    # 10 on, +5, setoutputpower! 12 read 12 mW, and +0 then read 7. The driver now sends request + level.
+    @testset "a setpoint written while modulated keeps the modulation on top" begin
+        l = ready(); enable!(l)
+        word(mW) = Int(TCube.photocurrent_code(l, mW / 1000 / 224.2))
+        near(mW) = abs(FK.held_total() - word(mW)) <= 2
+        quiet() do; setoutputpower!(l, 10.0); light_on(l); end
+        setmodulation!(l, 5.0);                @test near(15.0)
+        quiet(() -> setoutputpower!(l, 20.0)); @test near(25.0)   # up, with the ramp
+        setmodulation!(l, 0.0);                @test near(20.0)
+        setmodulation!(l, 5.0)
+        quiet(() -> setoutputpower!(l, 12.0)); @test near(17.0)   # down
+        setmodulation!(l, 0.0);                @test near(12.0)   # the request alone, not 12 - 5
+        @test l.pd.output_power_requested == 12.0
+        @test l.pd.photocurrent_requested ≈ 12.0 / 1000 / 224.2 atol = 1e-7   # the request without the modulation (one code is 3e-8 A)
+        quiet() do; light_off(l); end
+        setmodulation!(l, 8.0)                 # set while off: light_on sends 12 + 8
+        quiet(() -> light_on(l));              @test near(20.0)
+        setmodulation!(l, 0.0);                @test near(12.0)
+        quiet() do; light_off(l); end
+    end
+
     @testset "light_off, failures and shutdown write 0 V before the disable" begin
         l = ready(); enable!(l)
         quiet() do; setoutputpower!(l, 20.0); light_on(l); end

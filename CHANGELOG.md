@@ -19,8 +19,12 @@ the next version with `-DEV`).
   software setpoint (mW in closed loop, mA in open loop) in ONE DAQ write: no USB call to the
   controller, no lock check. Every path that switches the output off (`light_off`,
   `shutdown`, the failure cleanup) writes 0 V first; `setoutputpower!`/`setcurrent!` and
-  `setmodulation!` refuse a setpoint + modulation above the ceiling or below 0; `check_lock`
-  expects setpoint + modulation; `export_state` gains `modulation_enabled`,
+  `setmodulation!` refuse a setpoint + modulation above the ceiling or below 0. The
+  controller keeps ONE setpoint register (a USB write sets it outright, MOD IN changes add
+  their difference), so while modulation is enabled `setoutputpower!`, `setcurrent!` and
+  `light_on` send request + modulation level, and `check_lock` checks that total (sending
+  the request alone absorbed the modulation on the rig: 12 + 5, then 0 V, read 7 mW);
+  `export_state` gains `modulation_enabled`,
   `modulation_level`, `modulation_per_volt`. Also `control_source`/`set_control_source!`,
   which take flag sums (3, 5, 7) that the `LD_InputSourceFlags` enum cannot represent.
   Off by default and per laser: a laser whose MOD IN is not cabled behaves exactly as
@@ -28,8 +32,12 @@ the next version with `-DEV`).
   the same calls by hand before this code): +22.5 mW per volt (the manual's scaling predicts
   22.42); a DAQ write 0.50 ms median, 0.74 ms p99, 3 ms max, against 1.3-1.6 s for a
   `setoutputpower!`; on beads at 200 Hz a 1 -> 21 mW step lands within one 5 ms frame,
-  without overshoot; the input is ignored with control source 5 (software + pot). This code
-  itself not yet run on hardware. See CALIBRATION.md, "External modulation".
+  without overshoot; the input is ignored with control source 5 (software + pot). This
+  driver code on the same rig (LCAs closed, power read on the photodiode): 17 of 17 checks
+  (enable, +5 mW, setpoints up and down while modulated, refusals, `export_state`,
+  `light_off` writing 0 V, the control source restored; `setmodulation!` 0.48 ms median).
+  A 0 mW base is dark and never locked high (15 jumps from 0 V), but lights up in ≈ 0.4 s.
+  See CALIBRATION.md, "External modulation".
 
 ## [0.2.6] - 2026-10-01
 

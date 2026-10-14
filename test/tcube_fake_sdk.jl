@@ -200,9 +200,15 @@ const enable_log = Int[]
 const source = Ref{Int}(5)
 """
 The external input's contribution in setpoint words (a test's DAQ writer sets it); the
-controller adds it to the held setpoint only while `source` includes the external flag.
+controller adds its change since the last setpoint write (`ext_at_write`) only while `source` includes the external flag.
 """
 const ext_words = Ref{Int}(0)
+"""
+The external input at the last setpoint write. The rig's TLD001 (2026-10-13) keeps ONE setpoint register:
+a USB write sets it outright and later MOD IN changes add only their DIFFERENCE, so the register holds
+the written word plus (ext_words - ext_at_write), and `LD_GetLaserSetPoint` reads that sum.
+"""
+const ext_at_write = Ref{Int}(0)
 "Voltages the test writer received, in order (also recorded in `calls` as \"MOD <v>\")."
 const mod_volts = Float64[]
 
@@ -210,6 +216,7 @@ const mod_volts = Float64[]
 function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     source[] = 5
     ext_words[] = 0
+    ext_at_write[] = 0
     empty!(mod_volts)
     empty!(calls)
     empty!(status)
@@ -268,8 +275,8 @@ closed() = bits[] & CLOSED != 0
 "The controller's limit in mA, ignoring `limit_raw_queue` (the queue shapes what reads return, not the physics)."
 limit_mA_live() = limit_follows_pot[] ? limit_mA_for(digpot[]) : diode_limit_raw[] / 32767 * 220
 setpoint_mA() = setpoint_held[] / 32767 * 220
-"The setpoint word the controller regulates to: the held setpoint plus the external input when the source includes it."
-held_total() = Int(setpoint_held[]) + (source[] & 2 != 0 ? ext_words[] : 0)
+"The setpoint register the controller regulates to: the written word plus the external input's change since that write, when the source includes it."
+held_total() = max(0, Int(setpoint_held[]) + (source[] & 2 != 0 ? ext_words[] - ext_at_write[] : 0))
 "The drive current the closed loop needs to hold the held setpoint word."
 needed_mA() = pd_threshold_mA[] + held_total() / (pd_scale[] * pd_words_per_mA[])
 pd_word_at(mA) = mA <= pd_threshold_mA[] ? PD_DARK_RAW :
@@ -332,7 +339,10 @@ end
         push!(Main.FakeKinesis.setpoints, laserDiodeCurrent)
         s = Main.FakeKinesis.record!("LD_SetLaserSetPoint")
         on = Main.FakeKinesis.bits[] & Main.FakeKinesis.ENABLED != 0
-        (s == 0 && on) && (Main.FakeKinesis.setpoint_held[] = laserDiodeCurrent) # ignored with the output off
+        if s == 0 && on   # ignored with the output off
+            Main.FakeKinesis.setpoint_held[] = laserDiodeCurrent
+            Main.FakeKinesis.ext_at_write[] = Main.FakeKinesis.ext_words[]   # the write replaces the whole register
+        end
         return s
     end
     LD_RequestLaserSetPoint(serialNo) = Main.FakeKinesis.record!("LD_RequestLaserSetPoint")
@@ -340,7 +350,7 @@ end
         Main.FakeKinesis.record!("LD_GetLaserSetPoint")
         Main.FakeKinesis.setpoint_readback[] === nothing || return Main.FakeKinesis.setpoint_readback[]
         on = Main.FakeKinesis.bits[] & Main.FakeKinesis.ENABLED != 0
-        return on ? Main.FakeKinesis.setpoint_held[] : Main.FakeKinesis.STALE_SETPOINT
+        return on ? UInt16(Main.FakeKinesis.held_total()) : Main.FakeKinesis.STALE_SETPOINT   # the register, MOD IN changes included
     end
     function LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         Main.FakeKinesis.record!("LD_GetLaserDiodeMaxCurrentLimit")

@@ -362,6 +362,14 @@ disable_modulation!(laser)                      # restores the previous control 
   +22.5 mW/V; write 0.50 ms median, 0.74 ms p99, 3 ms max (software-timed); on beads at
   200 Hz a 1 -> 21 mW step lands within one 5 ms frame: one transition frame per edge, the
   next frame at full level, no overshoot (the manual gives 20 kHz full-depth bandwidth).
-- **Lock check and safety.** `check_lock` expects setpoint + modulation, so a later
-  `setoutputpower!` or `light_on` with modulation active does not trip; every switch-off path
-  writes 0 V before it disables the output.
+- **One setpoint register (rig, 2026-10-13).** The controller does not keep "software
+  setpoint" and "external input" apart: it has ONE setpoint register. A USB setpoint write
+  sets that register outright, and a later MOD IN change adds only its DIFFERENCE;
+  `LD_GetLaserSetPoint` reads the sum. Measured: on at 10 mW, +5 mW -> register and light 15;
+  a USB write of 12 mW with the +5 still applied -> 12 (the modulation absorbed); then 0 V ->
+  7 mW, not 12. So `setoutputpower!`, `setcurrent!` and `light_on` send request + modulation
+  level whenever modulation is enabled, and `check_lock` checks that total. With that, the same
+  sequence reads 15 / 17 / 12 mW (`dev/rig_scripts/2026-10-13/driver_mod_test.jl` in
+  MicroscopeAdapt, 17 of 17 checks on hardware). Driving MOD IN from other code (a raw DAQ
+  task the driver does not know about) still breaks this: the next USB write absorbs it.
+- **Safety.** Every switch-off path writes 0 V before it disables the output.

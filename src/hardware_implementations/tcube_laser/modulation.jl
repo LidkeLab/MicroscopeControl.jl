@@ -15,6 +15,14 @@
 # step lands within one 5 ms frame (one transition frame per edge, no overshoot); the
 # USB-6008's 0 V reads as about +0.2 mW (its output offset); with control source 5
 # (software + potentiometer) the input is ignored.
+#
+# ONE setpoint register (same rig and day): the controller does not hold "software setpoint"
+# and "external input" separately. A USB setpoint write sets its register outright, and a
+# later MOD IN change adds only its DIFFERENCE (`LD_GetLaserSetPoint` reads the sum). A write
+# of the request alone while modulated therefore absorbs the modulation (10 on, +5, write 12
+# -> 12 mW, then 0 V -> 7 mW). So every USB write here sends request + `modulation_level`
+# (`setoutputpower!`, `setcurrent!`, `light_on` via `intended_code`), and `check_lock`
+# checks what was sent.
 
 "Control-source flags of `LD_SetControlSource` (Kinesis `LD_InputSourceFlags`); they add."
 const LD_SOURCE_SOFTWARE = 1
@@ -136,6 +144,9 @@ one DAQ write, no USB call to the controller, no lock check, so it returns in ab
 millisecond. Refused when modulation is not enabled, when the voltage is outside the DAQ
 channel's range, or when setpoint + `level` is outside [0, ceiling]. Takes effect only while
 the output is on; `light_off`, `shutdown` and every failure cleanup write 0 V first.
+Drive MOD IN only through this function: the driver adds the level to every USB setpoint
+it sends (the controller's one setpoint register, see the top of this file), so a voltage
+written by other code would be absorbed by the next `setoutputpower!`.
 """
 function setmodulation!(light::TCubeLaser, level::Real)
     m = light.modulation

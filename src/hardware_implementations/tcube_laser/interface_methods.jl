@@ -654,8 +654,8 @@ check_lock(light::TCubeLaser{ConstantCurrent}, code) = nothing
 function check_lock(light::TCubeLaser{ConstantPhotocurrent}, code)
     pd, serialNo = light.pd, light.serialNo
     sleep(pd.lock_check_s)
-    # The controller holds setpoint + MOD IN, so the expected photocurrent includes the modulation.
-    requested = photocurrent_from_code(light, code, pd.tia_range) + modulation_level(light) / 1000 / pd.wa_calibration
+    # `code` is what was sent; with MOD IN active the senders already include the modulation in it.
+    requested = photocurrent_from_code(light, code, pd.tia_range)
     measured = NaN
     if requested > 0
         measured = photocurrent_from_raw(light, read_photocurrent_word(light), pd.tia_range)
@@ -781,11 +781,12 @@ in `ConstantCurrent` mode, `photocurrent_code(output_power_requested)` in
 function intended_code(light::TCubeLaser{ConstantCurrent})
     isnan(light.drive_current) && return UInt16(0)
     check_current(light, light.drive_current) # the ceiling may have dropped since setcurrent!
-    return setpoint_code(light, light.drive_current)
+    return setpoint_code(light, light.drive_current + modulation_level(light))
 end
+# Plus the modulation level: a USB write replaces the controller's whole register (modulation.jl).
 intended_code(light::TCubeLaser{ConstantPhotocurrent}) =
     isnan(light.pd.output_power_requested) ? UInt16(0) :
-    photocurrent_code(light, light.pd.output_power_requested / 1000 / light.pd.wa_calibration)
+    photocurrent_code(light, (light.pd.output_power_requested + modulation_level(light)) / 1000 / light.pd.wa_calibration)
 
 "Whether a setpoint has been requested since construction: what `light_on` sends if not is 0."
 has_request(light::TCubeLaser{ConstantCurrent}) = !isnan(light.drive_current)
@@ -1178,7 +1179,7 @@ one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
     light.modulation.enabled && check_total(light, current, modulation_level(light))
-    code = setpoint_code(light, current)
+    code = setpoint_code(light, current + modulation_level(light))   # the register holds request + modulation (modulation.jl)
     # Fresh when the driver recorded the output off: the polled word can still
     # say on just after a light_off, and a send then would wait out its confirm.
     on = light.properties.is_on || read_status_fresh(light.serialNo) & STATUS_BITS.output_enabled != 0
@@ -1256,10 +1257,14 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
     # the 1 mA range, 2026-09-29) while the loop regulated correctly. Warn only.
     (bits & STATUS_BITS.tia_under != 0 && on) && @warn(
         "TCubeLaser $serialNo: the photodiode amplifier reports UNDER range with the output on; the photocurrent is small for the selected range and its resolution is reduced")
-    code = photocurrent_code(light, power_mW / 1000 / pd.wa_calibration)
+    # With MOD IN active the controller's register holds request + modulation, and a USB write
+    # replaces the whole register (see `modulation.jl`), so the total is what is sent.
+    level = modulation_level(light)
+    code = photocurrent_code(light, (power_mW + level) / 1000 / pd.wa_calibration)
     if on
-        # What the controller holds is the previous request (read BEFORE `pd` is updated).
-        from = isnan(pd.photocurrent_requested) ? 0 : Int(photocurrent_code(light, pd.photocurrent_requested))
+        # What the controller holds is the previous request plus the modulation (read BEFORE `pd` is updated).
+        from = isnan(pd.output_power_requested) ? 0 :
+            Int(photocurrent_code(light, (pd.output_power_requested + level) / 1000 / pd.wa_calibration))
         try
             send_setpoint_ramped(light, code, from)
             check_lock(light, code)
@@ -1269,7 +1274,7 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
         end
     end
     pd.output_power_requested = power_mW
-    pd.photocurrent_requested = photocurrent_from_code(light, code, pd.tia_range)
+    pd.photocurrent_requested = photocurrent_from_code(light, photocurrent_code(light, power_mW / 1000 / pd.wa_calibration), pd.tia_range)
     println("Laser output power set to $power_mW mW (photocurrent setpoint $(pd.photocurrent_requested) A)",
             on ? "" : " (output off: applied at light_on)")
     return nothing
