@@ -22,52 +22,31 @@ session: `threshold_current` (mA, where the diode starts lasing) and
 `properties.min_power` / `max_power` (mW, the range `setoutputpower!` accepts
 and the endpoints of `setlevel!` and the panel slider).
 
-## The 642 nm rig's current calibration
+## Where a laser's numbers live
 
-| | |
-|---|---|
-| Controller | Thorlabs TLD001, serial `64849775` |
-| TIA range | 1 mA (`tia_range = 1e-3`) |
-| W/A factor | **224.2** W/A |
-| Measurement plane | power meter **before the fibre** (coupling efficiency drifts, so the meter is never read after it) |
-| Measured by | Ali Kazemi Nasaban Shotorban, recorded in `helpers.jl`, Oct 2024 |
-| Threshold | ~65 mA |
-| Calibration reference | none recorded yet (see step 3b) |
+This driver ships **no** laser's numbers: no serial, no W/A factor, no threshold, no
+ceiling, no analogue output. Each is a property of one diode, one controller and one rig's
+wiring, so it belongs in the rig's own code, next to the line that constructs the laser,
+with the record of how it was measured (the table of step 5, the date, who measured it).
+The driver takes everything as constructor keywords and refuses to guess what it was not
+given (`max_current`, and in closed loop `wa_calibration`, `tia_range`, `tec_stabilised`
+and `properties`). The same code drives any number of TCube lasers, each with its own
+serial, mode, calibration and (optional) modulation output.
 
-Verification, in closed loop with those two factors: power commanded through
-the formula above versus power measured before the fibre, in mW. Single
-readings, no repeats or statistics:
-
-| commanded | measured |
-|---:|---:|
-| 0.0 | < 0.001 |
-| 10.0 | 9.31 |
-| 20.0 | 19.11 |
-| 30.0 | 29.11 |
-| 40.0 | 39.06 |
-| 50.0 | 48.97 |
-| 60.0 | 59.22 |
-| 70.0 | 69.65 |
-| 80.0 | 79.50 |
-
-Measured power sits 0.35–1.03 mW below the command at every point: within
-1.5 % from 60 mW up, 2–4.5 % at 20–50 mW, and 7 % at 10 mW. The offset is not
-modelled by the driver.
-
-Constructing the laser with it:
+Constructing a laser once it is calibrated (the numbers are placeholders):
 
 ```julia
 using MicroscopeControl
 
-laser = TCubeLaser("00000000";
+laser = TCubeLaser("<serial>";
     mode              = ConstantPhotocurrent(),
-    wa_calibration    = 224.2,     # W/A, this document
-    tia_range         = 1e-3,      # A, the rear-panel DIP switch
+    wa_calibration    = 200.0,     # W/A, step 3
+    tia_range         = 1e-3,      # A, the rear-panel DIP switch (step 1)
     tec_stabilised    = missing,   # true / false once known; `missing` is honest until then
-    threshold_current = 65.0,      # mA
-    # ref_current_mA = 90.0, ref_photocurrent_A = <measured>,  # step 3b; without it light_on warns
-    max_current       = 150.0,     # mA, your diode's rating: programmed into the controller as the loop's clamp
-    properties        = LightSourceProperties("mW", 0.0, false, 1.0, 70.0))  # [1 mW, 70 mW]: the 70 is max_power, your diode's rating
+    threshold_current = 60.0,      # mA, step 2
+    # ref_current_mA = 80.0, ref_photocurrent_A = <measured>,  # step 3b; without it light_on warns
+    max_current       = 120.0,     # mA, your diode's rating: programmed into the controller as the loop's clamp
+    properties        = LightSourceProperties("mW", 0.0, false, 0.0, 50.0))  # [0, 50] mW: max_power at or below your diode's rating
 
 initialize(laser)            # checks key, interlock and the DIP switch; programs the clamp; never emits
 setoutputpower!(laser, 20.0) # mW at the laser output
@@ -77,14 +56,14 @@ loop_status(laser)           # photocurrent, drive current, saturated / TIA flag
 
 ## Controller facts (TLD001)
 
-Kept from the session diary cut from this file (2026-09-28/29, the 642 nm
-rig's TLD001, serial `64849775`). Facts the driver's docstrings already state
-are marked with where.
+Seen on a TLD001 in 2026-09-28/29 (kept from a session diary cut from this file); they
+are the controller model's behaviour, not one rig's numbers. Facts the driver's docstrings
+already state are marked with where.
 
 - A plain `LD_SetMaxCurrentDigPot` is ignored: adjust mode (`LD_EnableMaxCurrentAdjust`) and a pause before leaving it are needed, 2026-09-28 (driver: `set_digpot!`, `CLAMP_WAIT_S`).
 - The header's potentiometer scale (`position * 220 / 255` mA) is wrong for this unit: position 204 gave 160.74 mA and 194 gave 152.43 mA, 2026-09-28; the manual gives about 0.7 mA per step (p.28, p.38); position 203 read 159.9 mA, and the limit readback is stable across fresh reads, 2026-09-29. The limit readback is what the driver trusts; `DIGPOT_STEP_ESTIMATE_mA` keeps the header's 220/255 mA, the larger step, only to choose the next position, so moves approach `max_current` from below.
 - The potentiometer position does not survive a controller power cycle, 2026-09-29; `initialize` re-programs it every time and power-mode `light_on` re-checks it.
-- The controller ignores a setpoint sent while its output is off and then runs on a stale stored setpoint (on this rig the diode went to its ~160 mA limit); the setpoint read-back is stale with the output off (65530), 2026-09-28 (driver: `send_setpoint`).
+- The controller ignores a setpoint sent while its output is off and then runs on a stale stored setpoint (the diode went to its current limit); the setpoint read-back is stale with the output off (65530), 2026-09-28 (driver: `send_setpoint`).
 - The photodiode UNDER-range flag was set at 1 mW (4.5 uA on the 1 mA range) while the loop regulated correctly, 2026-09-29; the driver warns and does not refuse.
 - The photocurrent reading is signed and `0x8000` means over range (seen at 110 mA open loop on the 1 mA range), 2026-09-28 (driver: `measured_photocurrent`).
 - The controller answers one request behind: the first `LD_RequestStatusBits` after an enable returned the pre-enable bits even 0.5 s later; readings behave the same, 2026-09-29 (driver: `request_twice`).
@@ -130,7 +109,7 @@ read on ManualsLib, manual 1891386, pages 18, 27, 28 and 46, 2026-09-28):
    driver does not do either (the API call is `LD_FindTIAGain`).
 5. **Re-measure the W/A factor on that range** (steps 3 and 5 of the procedure
    below). A W/A factor belongs to one range and one gain setting; do not carry
-   224.2 over.
+   an old factor over.
 6. Construct the laser with `tia_range` set to the range you chose;
    `initialize` refuses if the controller reports a different one.
 
@@ -145,17 +124,11 @@ optimisation, done with the diode at its current limit. A reading that clips at
 ~10 % of full scale (as on 2026-09-28) points to a gain that no longer matches
 the range and diode -- for example one optimised on another range or at another
 current limit. **Re-optimising the gain changes the counts per mW, so the W/A
-factor must be measured again afterwards**; 224.2 belongs to the gain the
-controller had in 2024, which the 1-5 mW closed-loop points of 2026-09-28 still
-matched. The manuals are on the lab share: `Z:\Computers and Software\isos and
-Install Files\ThorLabs\TLD001 Laser Diode Driver\` (17874-d03.pdf = Kinesis,
-17874-d01.pdf = APT).
+factor must be measured again afterwards** (record which gain a factor belongs
+to). The manuals are Thorlabs 17874-D03 (Kinesis) and 17874-D01 (APT).
 
-Done on the 642 nm rig on 2026-09-28: the 1 mA range showed "In Range" with
-386 µA at the 160 mA limit (10 mA showed 383 µA, i.e. under range), and the
-gain was re-optimised and persisted. It did not change the light (110 mA gave
-39.43 mW before and after); the ~98 µA "ceiling" seen that day turned out to
-be the setpoint-jump lock (see "Controller facts" above), not the photodiode channel.
+A "ceiling" in the photocurrent near 100 µA that the gain does not explain can be
+the setpoint-jump lock (see "Controller facts" above), not the photodiode channel.
 
 ## When to recalibrate
 
@@ -186,7 +159,7 @@ do not have yet.
 
 ```julia
 using MicroscopeControl
-laser = TCubeLaser("64849775"; mode = ConstantCurrent(), min_current = 0.0, max_current = 132.0)
+laser = TCubeLaser("<serial>"; mode = ConstantCurrent(), min_current = 0.0, max_current = 120.0)  # max_current: your diode's rating
 initialize(laser)
 ```
 
@@ -263,7 +236,7 @@ Do this inside step 3, with the laser still on, on the same range and gain as th
 factor; the block below ends step 3 with `light_off(laser)` and `shutdown(laser)`. Pick one
 current from the sweep at least 20 mA above threshold and at most the power-mode
 `max_current`, whose indicated power is at most `max_power` (the constructor refuses
-otherwise). On the 642 nm rig that is 90 mA (about 99 uA, about 22 mW at 224.2 W/A).
+otherwise).
 
 ```julia
 TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
@@ -278,11 +251,8 @@ diode in open loop at `ref_current_mA`, reads the photodiode, and refuses unless
 is within a factor `ref_ratio` (default 1.5) of `ref_photocurrent_A`, in either direction; the
 output is off after the check. A range the reading does not follow, or a `tia_range`
 relabelled with W/A kept, fails that check. Re-measure W/A and the reference whenever the
-switch moves.
-
-`[limitation]` the 642 nm rig's words of 2026-09-29 (375 / 1802 / 6172 at 70 / 80 / 110 mA)
-are **not** a reference for its W/A factor. That factor dates from Oct 2024, and the gain was
-re-optimised on 2026-09-28 (see above). Record the reference at the next W/A verification.
+switch moves. A reference read on another day than the W/A factor, or after the gain was
+re-optimised, is not a reference for that factor.
 
 ### 4. Build the laser in closed loop
 
@@ -294,8 +264,8 @@ power at threshold and `max_power` at or below the highest power you verified.
 ### 5. Verify
 
 In closed loop, command a set of powers across `[min_power, max_power]` with
-`setoutputpower!`, and read the power meter at each. Record the table beside
-this document's, with the date. Agreement within a few percent means the factor
+`setoutputpower!`, and read the power meter at each. Record the table, with the
+date, beside the rig code that constructs the laser. Agreement within a few percent means the factor
 holds; a constant offset is expected, a slope error means the factor is wrong.
 
 Watch `loop_status` while you do it: `saturated` means the loop hit the current
@@ -309,9 +279,7 @@ Closed loop holds the **photocurrent**, not the light. Without a
 temperature-stabilised mount the photodiode's responsivity drifts with
 temperature, so the delivered power can drift while every number the driver
 reports stays flat. To measure how much, log the power meter (or a camera signal
-from a fixed reflection) for 20 minutes from a cold start in closed loop. The
-rig probe in MicroscopeAdapt, `dev/test_tcube_power.jl` (`:drift_log` and
-`:closed_loop_trial` steps), automates this and the clamp and scan checks.
+from a fixed reflection) for 20 minutes from a cold start in closed loop.
 Set `tec_stabilised` from what you find.
 
 ## What the controller's own W/A setting does
@@ -324,13 +292,13 @@ and this driver does its own conversion.
 ## External modulation (MOD IN from a DAQ)
 
 The fast way to change the power during an acquisition. `setoutputpower!` sends a setpoint
-over USB and then waits `lock_check_s` to verify the loop: 1.3-1.6 s on the 642 nm rig.
+over USB and then waits `lock_check_s` to verify the loop (over a second on the TLD001 tested).
 The TLD001 also adds the voltage on its rear SMA **MOD IN** to the software setpoint
 (manual section 5.5), and a DAQ analog output can drive it in one write:
 
 ```julia
 TC = MicroscopeControl.HardwareImplementations.TCubeLaserControl
-enable_modulation!(laser; daq_device = "Dev2", ao_channel = "Dev2/ao1")  # 0 V, then source = software + external
+enable_modulation!(laser; ao_channel = "<device>/ao<n>")  # your wiring; 0 V, then source = software + external
 setoutputpower!(laser, 1.0); light_on(laser)   # the slow, verified base setpoint, once
 setmodulation!(laser, 20.0)                     # + 20 mW: one DAQ write, ~0.5 ms
 setmodulation!(laser, 0.0)                      # back to the base
@@ -345,62 +313,57 @@ lasers except the analogue-output guard below):
 | | without MOD IN | with MOD IN |
 |---|---|---|
 | closed loop (`ConstantPhotocurrent`, mW) | `setoutputpower!` | `setoutputpower!` + `setmodulation!` (verified on hardware) |
-| open loop (`ConstantCurrent`, mA) | `setcurrent!` (verified on hardware 2026-10-13: holds 75 / 85 mA, refuses above `max_current`) | **refused** by `enable_modulation!` (see below) |
+| open loop (`ConstantCurrent`, mA) | `setcurrent!` (verified on hardware 2026-10-13) | **refused** by `enable_modulation!` (see below) |
 
-- **Open loop + MOD IN is refused.** On the 642 nm rig's TLD001 (2026-10-13, scripts
-  `openloop_mod_*` in MicroscopeAdapt's `dev/rig_scripts/2026-10-13/`) the input scaled as
-  expected when it acted (10.1 mA per volt against 9.97 predicted), but it acted only after
-  the control source was set **while the output was on**. Any `setcurrent!` or off/on
+- **The output is the caller's to name.** There is no default: `ao_channel = "<device>/ao<n>"`
+  for an NI-DAQmx channel, or `writer`, `v_range` and `output_id` for anything else (below).
+  Which output is wired to which controller is the rig's wiring, kept in the rig's code.
+- **Open loop + MOD IN is refused.** On a TLD001 tested 2026-10-13 the input scaled as
+  expected when it acted (within 1.5 % of the controller's limit / 10 V), but it acted only
+  after the control source was set **while the output was on**. Any `setcurrent!` or off/on
   disarmed it again. After re-arming, the first voltage change was sometimes ignored and
-  later ones counted from it, leaving the current 5 mA off what the driver would record. A
-  driver cannot promise a current under those rules, so it refuses rather than guess.
+  later ones counted from it, leaving the current several mA off what the driver would record.
+  A driver cannot promise a current under those rules, so it refuses rather than guess.
 - **Several lasers.** Each laser claims its analogue output (the DAQ channel, or the
   `output_id` passed with a `writer`); a second laser asking for one that is held is refused
-  until the first releases it (`disable_modulation!`/`shutdown`). Name the channel for every
-  laser: two lasers left at the default would both resolve to the second device's second
-  channel. A laser that never calls `enable_modulation!` never touches a DAQ.
+  until the first releases it (`disable_modulation!`/`shutdown`). A laser that never calls
+  `enable_modulation!` never touches a DAQ.
 - **Any analogue output.** `enable_modulation!(laser; writer = v -> ..., v_range = (lo, hi),
   output_id = "...")` drives MOD IN from anything that can set a voltage (a Triggerscope DAC,
-  another card). Mind the range: 10 V is full scale (224 mW on the 642 nm rig's 1 mA range),
-  far above most diodes' rating; the driver refuses totals above `properties.max_power`, and the
-  controller's current clamp is the hardware backstop.
-
+  another card). Mind the range: 10 V is the photodiode's full scale (`tia_range x
+  wa_calibration`, often far above the diode's rating); the driver refuses totals above
+  `properties.max_power`, and the controller's current clamp is the hardware backstop.
 - **Scale.** 0-10 V = 0 to full scale: the photodiode's full-scale power (`tia_range x
-  wa_calibration`, 224 mW on the 642 nm rig, so 22.4 mW per volt) in closed loop, the
-  controller's current limit in open loop. It adds to the setpoint; a negative voltage
-  subtracts. The driver refuses a setpoint + modulation above `properties.max_power` (or the
-  current ceiling) or below 0, and a voltage outside the DAQ channel's range.
+  wa_calibration`, so `modulation_scale` mW per volt) in closed loop, the controller's current
+  limit in open loop. It adds to the setpoint; a negative voltage subtracts. The driver refuses
+  a setpoint + modulation above `properties.max_power` (or the current ceiling) or below 0,
+  and a voltage outside the output's range. Measured on a TLD001 in closed loop: within 0.4 %
+  of `modulation_scale`.
 - **Control source.** The input is ignored unless the controller's control source includes
-  the external flag (2): the 642 nm rig's cube came up with 5 (software + front potentiometer)
-  and ignored 0.2 V. `enable_modulation!` sets 3 (software + external; the potentiometer's own
-  offset left out), not persisted, and `disable_modulation!`/`shutdown` restore what it read.
-  The cube reads back 1 after 2 or 3 although the input works, so the read-back cannot
-  confirm the flag.
-- **What "off" means.** The modulation only adds to a running setpoint, and a 0-5 V card
-  (USB-6008) cannot subtract, so the low level is the base setpoint (`min_power`, 1 mW on the
-  642 nm rig, plus the card's 0 V offset, about +0.2 mW there). For a dark state use an
-  attenuator or shutter, or a ±10 V output with a negative voltage. A **0 mW base** with the
-  output on (642 nm rig, 2026-10-13, `min_power` lowered to 0 for the test) is truly dark
-  (diode current ≈ 0 mA) and 15 jumps up from 0 V to 0.2-20 mW never locked high. On the
-  camera (beads, 200 Hz TIRF, +20 mW through MOD IN) it is also FAST: the pulse lands within
-  one 5 ms frame even after 2 s dark (first ON frames 3-8 % above the settled level), and OFF
-  reads below 0.01 % of ON. OFF/ON by base: 1 mW 3.2 %, 0.5 mW 0.57 %, 0.3 mW 0.03 %, 0.2 and
-  0 mW at the noise. (The controller's own photodiode and current READINGS lag: timed on them,
-  the same step looked like ≈ 0.4 s.) So a 0 mW base + modulation gives a dark "off" and a
-  one-frame "on"; `properties.min_power` must allow 0 for it. Small steps (≤ 1 mW) from 0 are
-  not yet checked on a camera.
-- **Rig results (642 nm, closed loop, USB-6008 `Dev2/ao1`, 2026-10-13, same calls by hand):**
-  +22.5 mW/V; write 0.50 ms median, 0.74 ms p99, 3 ms max (software-timed); on beads at
-  200 Hz a 1 -> 21 mW step lands within one 5 ms frame: one transition frame per edge, the
-  next frame at full level, no overshoot (the manual gives 20 kHz full-depth bandwidth).
-- **One setpoint register (rig, 2026-10-13).** The controller does not keep "software
+  the external flag (2); a cube can come up with 5 (software + front potentiometer) and ignore
+  it. `enable_modulation!` sets 3 (software + external; the potentiometer's own offset left
+  out), not persisted, and `disable_modulation!`/`shutdown` restore what it read. A TLD001
+  read back 1 after 2 or 3 although the input worked, so the read-back cannot confirm the flag.
+- **What "off" means.** The modulation only adds to a running setpoint, and a 0-5 V output
+  cannot subtract, so the low level is the base setpoint plus the output's 0 V offset (a
+  fraction of a mW on the NI USB DAQ tested). For a truly dark "off", set the base to **0 mW**
+  (`properties.min_power` must allow 0) or use a ±10 V output with a negative voltage. Tested
+  on a TLD001 (2026-10-13): a 0 mW base with the output on is dark (diode current ≈ 0 mA, no
+  current-limit bit), 15 jumps up from 0 V never locked high, and on a camera at 200 Hz a
+  +20 mW pulse from it landed within one 5 ms frame even after 2 s dark (the first ON frames a
+  few % above the settled level). A base just below threshold is nearly as dark; above
+  threshold the "off" leaks the base power. The controller's own photodiode and current
+  READINGS lag the light by a few hundred ms: time the light on a detector, not on them.
+- **Speed.** One write (about 0.5 ms on an NI USB DAQ, software-timed); on a camera at
+  200 Hz a step lands within one 5 ms frame: one transition frame per edge, the next frame at
+  full level, no overshoot (the manual gives 20 kHz full-depth bandwidth).
+- **One setpoint register (TLD001, 2026-10-13).** The controller does not keep "software
   setpoint" and "external input" apart: it has ONE setpoint register. A USB setpoint write
   sets that register outright, and a later MOD IN change adds only its DIFFERENCE;
   `LD_GetLaserSetPoint` reads the sum. Measured: on at 10 mW, +5 mW -> register and light 15;
   a USB write of 12 mW with the +5 still applied -> 12 (the modulation absorbed); then 0 V ->
   7 mW, not 12. So `setoutputpower!`, `setcurrent!` and `light_on` send request + modulation
   level whenever modulation is enabled, and `check_lock` checks that total. With that, the same
-  sequence reads 15 / 17 / 12 mW (`dev/rig_scripts/2026-10-13/driver_mod_test.jl` in
-  MicroscopeAdapt, 17 of 17 checks on hardware). Driving MOD IN from other code (a raw DAQ
-  task the driver does not know about) still breaks this: the next USB write absorbs it.
+  sequence reads 15 / 17 / 12 mW on hardware. Driving MOD IN from other code (a raw DAQ task
+  the driver does not know about) still breaks this: the next USB write absorbs it.
 - **Safety.** Every switch-off path writes 0 V before it disables the output.

@@ -14,7 +14,7 @@ end
 
 ## TCube Laser Control ###
 file_name = "Y:/Personal Folders/Ali/test_output.h5"
-tcube_light = TCubeLaser("64849775")
+tcube_light = TCubeLaser("<serial>"; max_current = 100.0)  # your controller's serial and your diode's ceiling
 MicroscopeControl.TCubeLaserControl.initialize(tcube_light)
 MicroscopeControl.TCubeLaserControl.light_on(tcube_light)
 MicroscopeControl.TCubeLaserControl.setpower(tcube_light, 70.0)

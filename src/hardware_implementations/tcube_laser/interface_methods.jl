@@ -43,7 +43,7 @@ const REQUEST_WAIT_S = Ref(0.1)
     request_twice(request, name, serialNo)
 
 Send `request` (an `LD_Request*` wrapper) twice, waiting `REQUEST_WAIT_S` after each, so the
-`LD_Get*` that follows returns the controller's state at the first request. The 642 nm rig's
+`LD_Get*` that follows returns the controller's state at the first request. One TLD001's
 TLD001 answers one request behind (2026-09-29): the first request after a change returned the
 state before it, even 0.5 s later, and the next one was current. Every fresh read in this
 driver goes through here.
@@ -277,7 +277,7 @@ Open loop only, run by `initialize` after the controller's limit is recorded: if
 `max_current` the potentiometer is not touched: a rig that lowered it by hand
 keeps it. Closed loop programs its clamp in `enter_mode!` and this does nothing.
 
-If no potentiometer position gives a limit at or below `max_current` (the 642 nm
+If no potentiometer position gives a limit at or below `max_current` (one tested
 rig's reads 16.74 mA at the lowest), the search fails and it warns as below; `light_on`
 then refuses while the current limit stored in the controller is above `max_current`
 (see [`light_on`](@ref)). The search runs with `raise = false`, so no position above
@@ -329,7 +329,7 @@ const TLD001_TIA_RANGES = (10e-6, 100e-6, 1e-3, 10e-3)
 The TLD001's max-current potentiometer: positions 20..255. The manual gives a step of
 about 0.863 mA per position (the header's step, 220/255), used only to choose the next
 position. The header's scale, `position * 220 / 255` mA, is **not** the limit: the
-controller does not follow it. On the 642 nm rig's TLD001 (64849775, 2026-09-28)
+controller does not follow it. On a TLD001 (2026-09-28)
 position 204 gave a limit of 160.74 mA and 194 gave 152.43 mA -- about 0.83 mA per
 step. So no clamp value is ever computed from a position. The estimate is at least the
 measured step, so estimated moves fall short and the search approaches `max_current`
@@ -418,7 +418,7 @@ return. It never raises the potentiometer in that mode. The default,
 `raise = true`, is closed loop's search, which may move up toward the ceiling.
 
 `[limitation]` lowering the open-loop potentiometer is not validated on hardware
-beyond the 642 nm rig's closed-loop sequence; not yet run on hardware in open loop.
+beyond a tested rig's closed-loop sequence; not yet run on hardware in open loop.
 
 `[limitation]` that the controller clamps to the limit it reports (manual p.41, p.50;
 header :711), and not to the header's position scale, is inferred, not measured (rig
@@ -546,7 +546,7 @@ Only call it with the output enabled. Nothing is recorded by this function.
 
 # The setpoint only takes while the output is ON
 
-Hardware-verified on the 642 nm rig's TLD001 (64849775, 2026-09-28), and the
+Hardware-verified on a TLD001 (2026-09-28), and the
 single most important fact about this controller:
 
 - `LD_SetLaserSetPoint` sent while the output is **disabled** is **ignored**.
@@ -641,7 +641,7 @@ REQUEST_WAIT_S` (`+ 2 x` at `code == 0`). It never disables the output by itself
 loop.
 
 `[limitation]` the thresholds and the wait are unvalidated on hardware (one night's lock
-measured about 98 uA for 44.6 uA requested, 2.2x) and need the 642 nm rig check. A false trip
+measured about 98 uA for 44.6 uA requested, 2.2x) and need a hardware check. A false trip
 refuses, which is the safe direction.
 
 `[limitation]` that `0x400` sets when the *closed* loop saturates is read from the Kinesis
@@ -717,7 +717,7 @@ ceiling, a failure or a mismatch), `light_on` first switches the output off
 rethrows; the log says whether that switch-off worked.
 
 The reference is in amps, decoded with `tia_range`. A range the reading does not follow,
-or a `tia_range` relabelled with W/A kept (the 642 nm rig's fact 6), fails the re-check. A
+or a `tia_range` relabelled with W/A kept (a tested rig's fact 6), fails the re-check. A
 correct range change, where the words do follow, passes.
 
 `[limitation]` the reference emission (open loop at `ref_current_mA` for about
@@ -817,7 +817,7 @@ that results; if it is at or below `max_current` the potentiometer is never
 touched, so a limit a rig set lower by hand stays. If lowering fails, it warns the same way and goes on, so
 `initialize` never fails here where 0.2.4 did not; `light_on` then refuses while
 the current limit stored in the controller is above `max_current`. `[limitation]` the open-loop
-potentiometer lowering is unvalidated on hardware beyond the 642 nm rig's
+potentiometer lowering is unvalidated on hardware beyond a tested rig's
 closed-loop sequence; not yet run on hardware in open loop.
 
 `ConstantPhotocurrent` -- the closed-loop entry sequence. Every step is a
@@ -830,7 +830,7 @@ simplified away:
    throw; and throw if it disagrees with `pd.tia_range`, naming both and the
    rear-panel switch. A range moved between sessions is a silent factor-of-ten
    error in every commanded power. `[limitation]` the check reads the status bits;
-   on the 642 nm rig the photodiode words did not follow a DIP switch move that the
+   on a tested TLD001 the photodiode words did not follow a DIP switch move that the
    bits did (2026-09-29, rig check R4). The calibration reference is the check that
    does not depend on the bits.
 3. Program the clamp, **the only real protection in power mode**, because the
@@ -863,7 +863,7 @@ caller's ceiling for this diode, and overwriting it with the controller's
 (typically 160-220 mA) limit silently widened the range `setcurrent!` validates
 against, so a rig that asked for an 80 mA ceiling got the controller's instead.
 
-Hardware-verified on the 642 nm rig's TLD001 (64849775, 2026-09-28), output
+Hardware-verified on a TLD001 (2026-09-28), output
 off: polling refreshes the setpoint cache; a plain potentiometer set is ignored
 and adjust mode is required, with a pause before leaving it; the limit the
 controller reports is the truth, not the header's scale; entering closed loop
@@ -896,7 +896,7 @@ function initialize(light::TCubeLaser)
         # without it can hand back a stale or never-populated cache -- and this
         # value feeds `effective_max_current`, so a stale one widens or narrows
         # the ceiling `setcurrent!` enforces. Not
-        # hardware-verified: reported by the 642 nm rig from the Kinesis header
+        # hardware-verified: reported on hardware from the Kinesis header
         # while building its probe, which will measure whether the two differ.
         request_twice(LD_RequestLaserDiodeMaxCurrentLimit, "LD_RequestLaserDiodeMaxCurrentLimit", serialNo)
         out = LD_GetLaserDiodeMaxCurrentLimit(serialNo)
@@ -1207,7 +1207,7 @@ Command the optical power at the laser output, in mW -- the plane where
    loop, or if the photodiode amplifier is over range (the status flag, or, with the
    output on, a fresh photocurrent word of -32768). An under-range flag with the output on
    only warns (the resolution is reduced; the loop still regulates, as seen at
-   1 mW on the 642 nm rig); with the output off it is expected and ignored.
+   1 mW on a tested TLD001); with the output off it is expected and ignored.
 4. Convert: photocurrent `= power_mW / 1000 / wa_calibration` A, encoded by
    [`photocurrent_code`](@ref), rounding DOWN; above full scale it throws
    naming the DIP switch.
@@ -1253,7 +1253,7 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
             "TCubeLaser $serialNo: setoutputpower! refused: the photodiode amplifier reports OVER range, so the loop's feedback is invalid")
     end
     # UNDER range means the photocurrent is small for the selected range, not
-    # that it is invalid: on the 642 nm rig the flag was set at 1 mW (4.5 µA on
+    # that it is invalid: on a tested TLD001 the flag was set at 1 mW (4.5 µA on
     # the 1 mA range, 2026-09-29) while the loop regulated correctly. Warn only.
     (bits & STATUS_BITS.tia_under != 0 && on) && @warn(
         "TCubeLaser $serialNo: the photodiode amplifier reports UNDER range with the output on; the photocurrent is small for the selected range and its resolution is reduced")
@@ -1450,14 +1450,14 @@ end
     PHOTOCURRENT_OVER_RANGE
 
 The raw photocurrent word the controller reports when the photodiode channel is
-over range: `0x8000`, i.e. -32768 read signed. Observed on the 642 nm rig's
+over range: `0x8000`, i.e. -32768 read signed. Observed on a tested rig's
 TLD001 (2026-09-28) at 110 mA and above, where the reading jumped from about
 3200 counts straight to this value. Decoded as `Inf`, and reported by
 `loop_status` as `tia_over`.
 """
 const PHOTOCURRENT_OVER_RANGE = -32768
 
-# Signed: the idle reading is a small negative offset (-3 on the 642 nm rig), so
+# Signed: the idle reading is a small negative offset (-3 on a tested TLD001), so
 # a negative value is a reading, not a protocol error.
 function photocurrent_from_raw(light::TCubeLaser, raw::Int, range::Float64)
     raw == PHOTOCURRENT_OVER_RANGE && return Inf
@@ -1519,13 +1519,11 @@ end
 Create the NI-DAQmx analogue-output task that drives this laser's modulation
 input, and store it in `light.task_mod`.
 
-Pass `daq_device=` and `ao_channel=` to the constructor to name the device and
-channel explicitly. When they are `nothing` the historical behaviour is kept --
-the **second** discovered device and its **second** AO channel -- because
-changing which analogue output a working rig drives is not something a driver
-should do quietly. What changed is that the discovery path now validates:
-where it used to raise a bare `BoundsError` on a single-device rig, it says
-what it found and what to pass instead.
+The output must be named: `ao_channel=` (e.g. `"<device>/ao<n>"`), and optionally
+`daq_device=`, on the constructor or on [`enable_modulation!`](@ref). Which output is
+wired to which controller belongs to the rig's own code, not to this driver, so there
+is no default: with no channel named, `setupIO` refuses and lists the AO channels it
+found. (Up to 0.2.6 it took the second discovered device's second channel.)
 """
 function setupIO(light::TCubeLaser)
     _, channel = resolve_ao(light)
@@ -1536,28 +1534,26 @@ end
 """
     resolve_ao(light::TCubeLaser) -> (device, channel)
 
-The DAQ device and AO channel [`setupIO`](@ref) uses: `light.daq_device`/`light.ao_channel`
-when set (validated against discovery), else the second device's second channel.
+The DAQ device and AO channel [`setupIO`](@ref) uses: `light.ao_channel` (required) and
+`light.daq_device`, which defaults to the device part of the channel name
+(`"<device>/ao<n>"`); both are checked against discovery.
 """
 function resolve_ao(light::TCubeLaser)
+    if light.ao_channel === nothing
+        found = try
+            join(("$d: " * join(NIDAQcard.showchannels(light.daq, "AO", d), ", ") for d in NIDAQcard.showdevices(light.daq)), "; ")
+        catch
+            "(DAQ discovery failed)"
+        end
+        error("TCubeLaser $(light.serialNo): no analogue output is named for its modulation input. " *
+            "Pass `ao_channel=` (and optionally `daq_device=`) to TCubeLaser or enable_modulation!. AO channels found: $found")
+    end
     devs = NIDAQcard.showdevices(light.daq)
-    device = if light.daq_device === nothing
-        length(devs) >= 2 || error("TCubeLaser $(light.serialNo): setupIO defaults to the 2nd DAQ device, but discovery found $(length(devs)): $(join(devs, ", ")). Pass `daq_device=` to TCubeLaser to name one.")
-        devs[2]
-    else
-        light.daq_device in devs || error("TCubeLaser $(light.serialNo): daq_device \"$(light.daq_device)\" is not among the DAQ devices found: $(join(devs, ", ")).")
-        light.daq_device
-    end
-
+    device = something(light.daq_device, first(split(light.ao_channel, '/')))
+    device in devs || error("TCubeLaser $(light.serialNo): DAQ device \"$device\" is not among the DAQ devices found: $(join(devs, ", ")).")
     channelsAO = NIDAQcard.showchannels(light.daq, "AO", device)
-    channel = if light.ao_channel === nothing
-        length(channelsAO) >= 2 || error("TCubeLaser $(light.serialNo): setupIO defaults to the 2nd AO channel of \"$device\", but it has $(length(channelsAO)): $(join(channelsAO, ", ")). Pass `ao_channel=` to TCubeLaser to name one.")
-        channelsAO[2]
-    else
-        light.ao_channel in channelsAO || error("TCubeLaser $(light.serialNo): ao_channel \"$(light.ao_channel)\" is not among the AO channels of \"$device\": $(join(channelsAO, ", ")).")
-        light.ao_channel
-    end
-    return String(device), String(channel)
+    light.ao_channel in channelsAO || error("TCubeLaser $(light.serialNo): ao_channel \"$(light.ao_channel)\" is not among the AO channels of \"$device\": $(join(channelsAO, ", ")).")
+    return String(device), String(light.ao_channel)
 end
 
 function set_modvoltage(light::TCubeLaser, voltage::Float64)

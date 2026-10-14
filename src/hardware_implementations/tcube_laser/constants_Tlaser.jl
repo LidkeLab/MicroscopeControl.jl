@@ -18,8 +18,8 @@ return.
 
 `[limitation]` The vendor headers do **not** declare `BOOL` for these fields.
 Two rigs have now read their own vendor-installed
-`Thorlabs.MotionControl.TCube.LaserDiode.h` — Kinesis 1.14.10 on the seq-sr rig
-and 1.14.47.22504 on quickbeam — and **both declare lowercase C++ `bool` with
+`Thorlabs.MotionControl.TCube.LaserDiode.h` — Kinesis 1.14.10 on one rig
+and 1.14.47.22504 on another rig — and **both declare lowercase C++ `bool` with
 `#pragma pack(1)` active**. This `Cuint` is therefore wrong for
 `TLI_DeviceInfo`, and is left in place only because no single layout fits both
 versions anyway (they disagree on `serialNo`'s length), so there is nothing to
@@ -121,7 +121,7 @@ layout that would match both.**
 
 Two rigs read their installed headers and reported different declarations:
 
-| | Kinesis 1.14.10 (seq-sr rig) | Kinesis 1.14.47.22504 (quickbeam) |
+| | Kinesis 1.14.10 (rig A) | Kinesis 1.14.47.22504 (rig B) |
 |---|---|---|
 | `serialNo` | `char serialNo[9]` | `char serialNo[16]` |
 | flags | 1-byte C++ `bool` | 1-byte C++ `bool` |

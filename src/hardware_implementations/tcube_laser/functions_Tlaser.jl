@@ -218,8 +218,8 @@ function LD_RequestStatusBits(serialNo)
     ccall((:LD_RequestStatusBits, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar},), serialNo)
 end
 
-# Signed in practice, whatever the header says: on the 642 nm rig's TLD001
-# (64849775, 2026-09-28) the reading with the output off was 65533 as a WORD,
+# Signed in practice, whatever the header says: on a TLD001
+# (2026-09-28) the reading with the output off was 65533 as a WORD,
 # i.e. -3, a small negative offset. Read unsigned it decoded to twice full scale.
 function LD_GetPhotoCurrentReading(serialNo)
     ccall((:LD_GetPhotoCurrentReading, Thorlabs_Tcube_laser), Cshort, (Ptr{Cchar},), serialNo)

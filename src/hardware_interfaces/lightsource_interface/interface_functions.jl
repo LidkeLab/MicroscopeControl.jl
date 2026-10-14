@@ -173,7 +173,7 @@ One consistent snapshot of the controller, as a `NamedTuple`:
 - `word::UInt32`: the raw status word;
 - `output_enabled`, `key`, `interlock`, `closed_loop`, `psu_ok`: `Bool`;
 - `current_mA`: `[limitation]` with the output OFF this is not a measurement: the
-  642 nm rig's TLD001 reported a "drive current" equal to its limit after a
+  TLD001 tested reported a "drive current" equal to its limit after a
   potentiometer change, with no current flowing (2026-09-28).
 - `saturated::Bool`: the drive current is at its limit (bit `0x400`), reported
   only while the output is enabled (the raw bit is still in `word`). In

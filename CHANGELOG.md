@@ -10,38 +10,50 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **TCube laser: no rig's numbers in the driver.** The driver now ships no serial, DAQ
+  device, channel or calibration of any one laser: a rig declares them in its own code.
+  - `max_current` is required in open loop too (`TCubeLaser(serial)` alone throws). Up to
+    0.2.6 open loop defaulted to 160 mA, one rig's diode.
+  - `setupIO` no longer picks the second discovered DAQ device's second AO channel: it
+    needs `ao_channel` (`"<device>/ao<n>"`; `daq_device` defaults to its device part) and,
+    with none named, refuses and lists the AO channels it found.
+  - CALIBRATION.md keeps the generic procedure and the TLD001's controller facts; one rig's
+    calibration table and wiring moved to that rig's repository. The constructor examples
+    use placeholder numbers.
+
 ### Added
 
-- **TCube laser: external modulation through the rear MOD IN, from a DAQ analog output.**
-  `enable_modulation!(laser; daq_device, ao_channel)` creates the AO task, writes 0 V and
+- **TCube laser: external modulation through the rear MOD IN, from an analogue output.**
+  `enable_modulation!(laser; ao_channel = "<device>/ao<n>")` (or `writer`, `v_range` and
+  `output_id` for any other output, all three required) creates the AO task, writes 0 V and
   sets the controller's control source to software + external (the previous source is
-  restored by `disable_modulation!`). `setmodulation!(laser, level)` then adds `level` to the
-  software setpoint (mW in closed loop, mA in open loop) in ONE DAQ write: no USB call to the
-  controller, no lock check. Every path that switches the output off (`light_off`,
-  `shutdown`, the failure cleanup) writes 0 V first; `setoutputpower!`/`setcurrent!` and
-  `setmodulation!` refuse a setpoint + modulation above the ceiling or below 0. The
-  controller keeps ONE setpoint register (a USB write sets it outright, MOD IN changes add
-  their difference), so while modulation is enabled `setoutputpower!`, `setcurrent!` and
-  `light_on` send request + modulation level, and `check_lock` checks that total (sending
-  the request alone absorbed the modulation on the rig: 12 + 5, then 0 V, read 7 mW);
-  `export_state` gains `modulation_enabled`,
-  `modulation_level`, `modulation_per_volt`. Also `control_source`/`set_control_source!`,
-  which take flag sums (3, 5, 7) that the `LD_InputSourceFlags` enum cannot represent.
-  Off by default and per laser: a laser whose MOD IN is not cabled behaves exactly as
-  before. Rig check (642 nm, TLD001 64849775, closed loop, USB-6008 `Dev2/ao1`, 2026-10-13,
-  the same calls by hand before this code): +22.5 mW per volt (the manual's scaling predicts
-  22.42); a DAQ write 0.50 ms median, 0.74 ms p99, 3 ms max, against 1.3-1.6 s for a
-  `setoutputpower!`; on beads at 200 Hz a 1 -> 21 mW step lands within one 5 ms frame,
-  without overshoot; the input is ignored with control source 5 (software + pot). This
-  driver code on the same rig (LCAs closed, power read on the photodiode): 17 of 17 checks
-  (enable, +5 mW, setpoints up and down while modulated, refusals, `export_state`,
-  `light_off` writing 0 V, the control source restored; `setmodulation!` 0.48 ms median).
-  A 0 mW base is dark (OFF < 0.01 % of ON on the camera), never locked high (15 jumps from 0 V),
-  and a +20 mW pulse from it lands within one 5 ms frame even after 2 s dark.
+  restored by `disable_modulation!`). There is no default output. `setmodulation!(laser,
+  level)` then adds `level` to the software setpoint (mW in closed loop) in ONE write: no USB
+  call to the controller, no lock check. Every path that switches the output off
+  (`light_off`, `shutdown`, the failure cleanup) writes 0 V first; `setoutputpower!`/
+  `setcurrent!` and `setmodulation!` refuse a setpoint + modulation above the ceiling or
+  below 0. The controller keeps ONE setpoint register (a USB write sets it outright, MOD IN
+  changes add their difference), so while modulation is enabled `setoutputpower!`,
+  `setcurrent!` and `light_on` send request + modulation level, and `check_lock` checks that
+  total (sending the request alone absorbed the modulation on hardware: 12 + 5, then 0 V,
+  read 7 mW); `export_state` gains `modulation_enabled`, `modulation_level`,
+  `modulation_per_volt`. Also `control_source`/`set_control_source!`, which take flag sums
+  (3, 5, 7) that the `LD_InputSourceFlags` enum cannot represent. Off by default and per
+  laser: a laser whose MOD IN is not cabled behaves exactly as before. Hardware check on a
+  TLD001 in closed loop with an NI USB DAQ output (2026-10-13): the volts-to-mW scale within
+  0.4 % of `tia_range x wa_calibration / 10`; a write about 0.5 ms, against over a second for
+  a `setoutputpower!`; on a camera at 200 Hz a step lands within one 5 ms frame, without
+  overshoot; the input is ignored with control source 5 (software + pot); this driver code
+  passed 17 of 17 checks (enable, +5 mW, setpoints up and down while modulated, refusals,
+  `export_state`, `light_off` writing 0 V, the control source restored). A 0 mW base is dark
+  (OFF < 0.01 % of ON on the camera), never locked high (15 jumps from 0 V), and a +20 mW
+  pulse from it lands within one 5 ms frame even after 2 s dark.
   Several lasers: each claims its analogue output (DAQ channel or `output_id` with a writer)
-  and a second laser asking for a held one is refused. Open loop + MOD IN is REFUSED: on the
-  rig it acted only after the source was set while on, every `setcurrent!` or off/on disarmed
-  it, and re-arming left the current up to 5 mA off; open loop itself verified (75/85 mA).
+  and a second laser asking for a held one is refused. Open loop + MOD IN is REFUSED: on a
+  TLD001 it acted only after the source was set while on, every `setcurrent!` or off/on
+  disarmed it, and re-arming left the current several mA off; open loop itself verified.
   Removed the unused `tcube_laser/tcubeapi.jl` (an old script with a hard-coded serial).
   See CALIBRATION.md, "External modulation".
 

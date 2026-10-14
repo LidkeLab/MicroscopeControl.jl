@@ -139,7 +139,7 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
         end
 
         FakeKinesis.reset!()
-        for laser in (TCubeLaser("00000000"; mode=ConstantCurrent()),
+        for laser in (TCubeLaser("00000000"; mode=ConstantCurrent(), max_current=160.0),
                       TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
                                  tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), max_current=160.0,
                                  lock_check_s=0.1))
@@ -153,7 +153,7 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
     # `light_off` that fails leaves the diode on, and the panel must say so.
     @testset "Output toggle reports the driver's state, not the click" begin
         FakeKinesis.reset!()
-        laser = TCubeLaser("00000000"; mode=ConstantCurrent())
+        laser = TCubeLaser("00000000"; mode=ConstantCurrent(), max_current=160.0)
         initialize(laser)
         light_on(laser)
         fig = Figure()

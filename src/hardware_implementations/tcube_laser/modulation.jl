@@ -7,16 +7,15 @@
 # = 0 to the photodiode's full-scale power in closed loop, 0 to the current limit in
 # open loop, regardless of the setpoint; a negative voltage subtracts. Unlike
 # `setoutputpower!`, which sends a setpoint over USB and then waits `lock_check_s` to
-# verify the loop (1.3-1.6 s on the 642 nm rig), a modulation change is one DAQ write.
+# verify the loop (over a second on the TLD001 tested), a modulation change is one write.
 #
-# Measured on the 642 nm rig (TLD001 64849775, closed loop, 1 mA range, 224.2 W/A, USB-6008
-# Dev2/ao1, 2026-10-13): +22.5 mW per volt (the 22.42 the manual's scaling predicts); a
-# DAQ write takes 0.50 ms median, 0.74 ms p99, 3 ms max; on beads at 200 Hz a 1 -> 21 mW
-# step lands within one 5 ms frame (one transition frame per edge, no overshoot); the
-# USB-6008's 0 V reads as about +0.2 mW (its output offset); with control source 5
-# (software + potentiometer) the input is ignored.
+# Verified on a TLD001 in closed loop (2026-10-13, NI USB DAQ output): the measured volts-to-mW
+# scale matched `modulation_scale` (`tia_range x wa_calibration / 10`) to 0.4 %; a DAQ write
+# took about 0.5 ms; on a camera at 200 Hz a step landed within one 5 ms frame (one
+# transition frame per edge, no overshoot); a DAQ's 0 V output offset adds a fraction of a mW;
+# with control source 5 (software + potentiometer) the input is ignored.
 #
-# ONE setpoint register (same rig and day): the controller does not hold "software setpoint"
+# ONE setpoint register (same controller and day): the controller does not hold "software setpoint"
 # and "external input" separately. A USB setpoint write sets its register outright, and a
 # later MOD IN change adds only its DIFFERENCE (`LD_GetLaserSetPoint` reads the sum). A write
 # of the request alone while modulated therefore absorbs the modulation (10 on, +5, write 12
@@ -37,7 +36,7 @@ source_flags(n::Integer) = Core.bitcast(LD_InputSourceFlags, convert(Base.Enums.
     control_source(light::TCubeLaser) -> Int
 
 The controller's control-source flags (1 software, 2 external SMA, 4 front potentiometer;
-they add). `[limitation]` on the 642 nm rig's TLD001 a source of 2 or 3 reads back as 1
+they add). `[limitation]` on the TLD001 tested a source of 2 or 3 reads back as 1
 while the external input demonstrably works, so the read-back cannot confirm the external
 flag; 5 reads back as 5.
 """
@@ -74,27 +73,30 @@ function modulation_scale(light::TCubeLaser{ConstantCurrent})
 end
 
 """
-    enable_modulation!(light::TCubeLaser; daq_device = light.daq_device, ao_channel = light.ao_channel,
-                       writer = nothing, v_range = nothing)
+    enable_modulation!(light::TCubeLaser; ao_channel, daq_device = nothing, v_range = nothing)
+    enable_modulation!(light::TCubeLaser; writer, v_range, output_id)
 
-Drive the controller's rear MOD IN from a DAQ analog output: create the AO task
-([`setupIO`](@ref), with `daq_device`/`ao_channel` if given), write 0 V, then set the
-control source to software + external (`3`; the front potentiometer, which would add its
-own offset, is left out). The previous source is kept and restored by
-[`disable_modulation!`](@ref). Then [`setmodulation!`](@ref) adds power (or current) in one
-DAQ write. `writer` (`v -> nothing`) and `v_range` (`(v_min, v_max)`) replace the DAQ: any
-analogue output can drive MOD IN (a Triggerscope DAC, another card); give it an
-`output_id` (e.g. `"Triggerscope COM3 DAC 3"`) so the guard below covers it. A no-op when
-already enabled.
+Drive the controller's rear MOD IN from an analogue output, named by the caller: there is
+no default output, because which output is wired to which controller belongs to the rig's
+own code. Either
 
-Several lasers: each laser enables its own modulation, and each claims its output. A
-second laser asking for an output another laser holds (the same DAQ channel, or the same
-`output_id`) is refused until the first one's `disable_modulation!`/`shutdown`. Name the
-channel for every laser: left at the default, two lasers would both resolve to the second
-device's second channel, and the second one is refused.
+- a DAQ channel: `ao_channel = "<device>/ao<n>"` (or set on the constructor; `daq_device`
+  defaults to the channel's device part). The AO task is created ([`setupIO`](@ref)) and
+  `v_range` defaults to the channel's own range from NI-DAQmx; or
+- any other output (a Triggerscope DAC, another card): `writer` (`v -> nothing`), its
+  `v_range` (`(v_min, v_max)`, required: the driver cannot read it) and an `output_id`
+  naming it (e.g. `"Triggerscope <port> DAC <n>"`, required, for the guard below).
 
-Wiring: a BNC/SMA cable from the AO channel to the controller's MOD IN (for example
-`Dev2/ao1` on a USB-6008, 0-5 V).
+Then 0 V is written and the control source set to software + external (`3`; the front
+potentiometer, which would add its own offset, is left out). The previous source is kept
+and restored by [`disable_modulation!`](@ref). [`setmodulation!`](@ref) then adds power in
+one write. A no-op when already enabled. Refused in open loop (see below).
+
+Several lasers: each laser enables its own modulation and claims its output. A second
+laser asking for an output another laser holds (the same DAQ channel, or the same
+`output_id`) is refused until the first one's `disable_modulation!`/`shutdown`.
+
+Wiring: a BNC/SMA cable from the output to the controller's MOD IN.
 """
 function enable_modulation!(light::TCubeLaser; daq_device=light.daq_device, ao_channel=light.ao_channel,
                             writer=nothing, v_range=nothing, output_id::Union{Nothing,AbstractString}=nothing)
@@ -124,10 +126,12 @@ function enable_modulation!(light::TCubeLaser; daq_device=light.daq_device, ao_c
         end
         writer = v -> (NIDAQcard.setvoltage(light.daq, light.task_mod, Float64(v)); nothing)
     else
-        output = output_id === nothing ? nothing : String(output_id)
+        (output_id === nothing || v_range === nothing) && throw(ArgumentError(
+            "TCubeLaser $(light.serialNo): with a writer, name the output (output_id = \"...\") and give its voltage " *
+            "range (v_range = (v_min, v_max)): the driver cannot read either from an arbitrary output"))
+        output = String(output_id)
         claim_output!(light, output)
     end
-    v_range === nothing && (v_range = (-10.0, 10.0))
     try
         writer(0.0)
         prev = control_source(light)

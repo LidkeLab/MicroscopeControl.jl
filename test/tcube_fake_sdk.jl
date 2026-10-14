@@ -53,7 +53,7 @@
 # misbehave (a pot that does not take, a mode bit that does not set, a
 # setpoint that reads back wrong) so that every refusal has a test.
 #
-# Since 0.2.6 the fake answers ONE REQUEST BEHIND, as the 642 nm rig's TLD001
+# Since 0.2.6 the fake answers ONE REQUEST BEHIND, as a TLD001
 # does (2026-09-29): a request captures the controller's state, and the getters
 # return the state captured at the PREVIOUS request of the same kind, so two
 # requests in a row answer the state at the first. This holds for the status
@@ -122,9 +122,9 @@ const pending = Dict{Symbol,Any}()
 
 "The status bit the controller sets when the drive current is at its limit."
 const LIMIT = 0x00000400
-"The photocurrent word with no light: raw 65532 read signed (642 nm rig, 2026-09-29)."
+"The photocurrent word with no light: raw 65532 read signed (a TLD001, 2026-09-29)."
 const PD_DARK_RAW = -4
-"The 642 nm rig's photodiode (2026-09-29): threshold 67.6 mA, ~145 words per mA above it on the 1 mA range."
+"An example diode's photodiode (measured 2026-09-29): threshold 67.6 mA, ~145 words per mA above it on the 1 mA range."
 const pd_threshold_mA = Ref(67.6)
 const pd_words_per_mA = Ref(145.0)
 "Counts per unit light relative to calibration: 1.0 is the calibrated setup; 0.5 gives half the words for the same light."
@@ -166,7 +166,7 @@ const digpot_sets = Int[]
 
 """
 When `true`, the diode current limit follows the potentiometer on the scale
-measured on the 642 nm rig's TLD001 (position 204 -> 160.74 mA, 194 -> 152.43
+measured on a TLD001 (position 204 -> 160.74 mA, 194 -> 152.43
 mA, about 0.831 mA per step) instead of returning `diode_limit_raw`. The
 closed-loop tests turn it on; the open-loop ones rely on a fixed limit.
 """
@@ -196,7 +196,7 @@ const output_on = OutputOn()
 "The stored setpoint at each successful `LD_EnableOutput`, i.e. what it ran on."
 const enable_log = Int[]
 
-"Control-source flags (1 software, 2 external, 4 pot; they add). 5 is what the 642 nm rig's cube reported."
+"Control-source flags (1 software, 2 external, 4 pot; they add). 5 is what one cube reported."
 const source = Ref{Int}(5)
 """
 The external input's contribution in setpoint words (a test's DAQ writer sets it); the
