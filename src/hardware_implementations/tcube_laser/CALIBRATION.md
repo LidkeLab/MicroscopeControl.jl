@@ -352,7 +352,12 @@ disable_modulation!(laser)                      # restores the previous control 
 - **What "off" means.** The modulation only adds to a running setpoint, and a 0-5 V card
   (USB-6008) cannot subtract, so the low level is the base setpoint (`min_power`, 1 mW on the
   642 nm rig, plus the card's 0 V offset, about +0.2 mW there). For a dark state use an
-  attenuator or shutter, or a ±10 V output with a negative voltage.
+  attenuator or shutter, or a ±10 V output with a negative voltage. A **0 mW base** with the
+  output on (642 nm rig, 2026-10-13, `min_power` lowered to 0 for the test) is truly dark
+  (diode current ≈ 0 mA) and 15 jumps up from 0 V to 0.2-20 mW never locked high, but the
+  loop then slews the current up from 0 to threshold: a step takes ≈ 0.4 s (about half after
+  0.1 s), and below ≈ 1 mW it barely moves in 1 s. So: a 0 base for a dark state that is
+  lit slowly; a base just above threshold (1 mW there) for one-frame switching.
 - **Rig results (642 nm, closed loop, USB-6008 `Dev2/ao1`, 2026-10-13, same calls by hand):**
   +22.5 mW/V; write 0.50 ms median, 0.74 ms p99, 3 ms max (software-timed); on beads at
   200 Hz a 1 -> 21 mW step lands within one 5 ms frame: one transition frame per edge, the
