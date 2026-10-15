@@ -79,6 +79,17 @@ include("meadowlark_slm/Meadowlark.jl")
 include("xem_dac/XEM_DAC.jl")
 @reexport using .XEM_DAC
 
+# Beam steering (depends on Triggerscope): the backends first, then the devices
+# built on top of them.
+include("beam_steering_backends/BeamSteeringBackends.jl")
+@reexport using .BeamSteeringBackends
+
+include("galvo_mirrors/GalvoControl.jl")
+@reexport using .GalvoControl
+
+include("eod_deflector/EODControl.jl")
+@reexport using .EODControl
+
 # Work in progress - uncomment when ready
 # include("mcl_micro_positioner/MCLMicroPositioner.jl")
 # @reexport using .MCLMicroPositioner
