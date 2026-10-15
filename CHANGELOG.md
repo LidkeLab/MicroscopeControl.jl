@@ -88,8 +88,9 @@ in open loop and `setupIO` has no default output (breaking).
     within about 1 s of a setpoint write is lost by the TLD001.** Measured 2026-10-14 in
     closed loop: a change up to ~0.95 s after the last `LD_SetLaserSetPoint` was lost,
     entirely or in part. The light kept the old total, and every later change counted from
-    it, so the light and the driver's record differed by the step (±5 mW) until the next
-    write. From 1.0 s every change was applied; status reads do not cause it, and MOD IN
+    it, so the light and the driver's record differed by the step until the next write. At
+    1.0 s a change was often partly lost; from 1.1 s every change was applied (bases 2-60 mW,
+    steps 1-10 mW). Status reads do not cause it, and MOD IN
     changes alone were applied at every rate tried (to 2 kHz). The slow calls used to return
     ~0.95 s after their write, just inside the window. Now `MOD_SETTLE_S` (1.3 s): with
     modulation enabled and the output on, `light_on`, `setoutputpower!` and `setcurrent!`
@@ -104,6 +105,14 @@ in open loop and `setupIO` has no default output (breaking).
     still switches off, disable restores the source, a re-enable works); control source
     5 → 3 with the output on (no potentiometer step: 0.14 mW, the DAQ's 0 V offset); and a
     modulation change the instant `light_on`/`setoutputpower!` returns is applied (9 of 9).
+  - Further hardware checks the same night (docs only, no code change after `v0.3.0-rc3`):
+    - the loss window was measured at bases of 2–60 mW with steps of 1–10 mW: changes are
+      always applied from 1.1 s;
+    - a 30-minute run at 400 Hz: 684,194 `setmodulation!` writes, 0 errors, the light
+      matching the record at all 57 checks; write median 0.47 ms, with rare outliers up to
+      12.5 ms;
+    - small steps on a camera: from a 0 mW base, steps of 0.5 mW or less give no light; from
+      a base near threshold every step is linear (CALIBRATION.md, "What off means").
 
 ### Changed
 

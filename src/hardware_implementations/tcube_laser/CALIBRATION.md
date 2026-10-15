@@ -340,7 +340,8 @@ lasers except the analogue-output guard below):
 - **No MOD IN change within ~1 s of a setpoint write.** On a TLD001 (2026-10-14) a change
   up to about 0.95 s after the last `LD_SetLaserSetPoint` was lost, entirely or in part:
   the light kept the old total and later changes counted from it, so it differed from the
-  driver's record by the step until the next write. From 1.0 s on every change was applied.
+  driver's record by the step until the next write. At 1.0 s a change was often partly
+  lost; from 1.1 s every change was applied (bases 2-60 mW, steps 1-10 mW).
   Status reads do not cause it, and MOD IN changes alone were applied at every rate tried
   (to 2 kHz). The driver waits `MOD_SETTLE_S` (1.3 s) after its last write before
   `light_on`, `setoutputpower!` and `setcurrent!` return (with modulation enabled and the
@@ -376,6 +377,12 @@ lasers except the analogue-output guard below):
   few % above the settled level). A base just below threshold is nearly as dark; above
   threshold the "off" leaks the base power. The controller's own photodiode and current
   READINGS lag the light by a few hundred ms: time the light on a detector, not on them.
+  **Small steps need a base near threshold.** On the same TLD001 and diode, on a camera at
+  200 Hz (2026-10-14), from a 0 mW base: steps of 0.1–0.5 mW gave no light, 1 mW only 13 %
+  of it, and 2 mW arrived 2–3 frames late; 5 mW and larger landed within a frame. From a
+  0.5 mW base (OFF ≈ 0.2 mW equivalent) every step from 0.1 to 5 mW was linear (0.8–0.94)
+  and landed within 1–2 frames, and from a 1 mW base likewise (0.9–1.0). So use base 0 for a
+  dark "off" with large pulses, and a base just below threshold for small or graded steps.
 - **Speed.** One write (about 0.5 ms on an NI USB DAQ, software-timed). The light takes about 2 ms to settle
   (10-90 %, measured on a camera at 200, 500 and 800 Hz on 2026-10-14, base 0 mW: one transition frame then full
   level at 200 Hz, 1-2 frames at 500-800 Hz; OFF dark at every rate). Earlier, on a camera at

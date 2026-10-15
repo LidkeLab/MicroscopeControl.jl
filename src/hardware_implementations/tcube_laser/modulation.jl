@@ -92,9 +92,11 @@ Seconds after a setpoint write (`LD_SetLaserSetPoint`) during which a MOD IN cha
 safe. Measured on a TLD001 in closed loop (2026-10-14, rig scripts `settle_window*.jl`): a
 change up to about 0.95 s after the last write was LOST, entirely or in part. The light kept
 the old total, and every later change counted from it, so the light and the driver's record
-differed by that step (±5 mW in the test) until the next write. From 1.0 s on, every change was
-applied. Status and photocurrent reads do not cause it, and MOD IN changes alone are applied
-at any rate tested (2 kHz). 1.3 s leaves a 30 % margin. A `Ref`, so tests can shorten it.
+differed by that step until the next write. At 1.0 s a change was often partly lost; from
+1.1 s every change was applied, at bases of 2 to 60 mW with steps of 1 to 10 mW. Status and
+photocurrent reads do not cause it, and MOD IN changes alone were applied at every rate
+tried (up to 2 kHz). 1.3 s leaves about 0.2 s of margin over 1.1 s. A `Ref`, so tests can
+shorten it.
 
 With modulation enabled and the output on, `light_on`, `setoutputpower!` and `setcurrent!` wait
 until this long after their last write before they return (holding the setpoint lock), and
