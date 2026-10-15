@@ -344,18 +344,29 @@ lasers except the analogue-output guard below):
   lost; from 1.1 s every change was applied (bases 2-60 mW, steps 1-10 mW).
   Status reads do not cause it, and MOD IN changes alone were applied at every rate tried
   (to 2 kHz). The driver waits `MOD_SETTLE_S` (1.3 s) after its last write before
-  `light_on`, `setoutputpower!` and `setcurrent!` return (with modulation enabled and the
-  output on), and `setmodulation!` refuses inside that window.
+  `light_on`, `setoutputpower!` and `setcurrent!` return (with modulation enabled), and
+  `setmodulation!` refuses inside that window. The wait runs after the setpoint lock is
+  released, so a `light_off` is never held up by it, and neither check trusts the driver's
+  on/off record (the front panel can enable the output).
 - **Failures.** `light_on` re-checks the recorded request and request + modulation against
   the current ceiling before the enable. If writing 0 V fails while the restored control
   source still includes the external input, `disable_modulation!` keeps modulation enabled
   (a stale voltage may still add) and a retry finishes. A writer that throws gets 0 V written
-  and the level recorded as 0.
+  and the level recorded as 0. If that 0 V write fails too, or any 0 V write throws, the
+  voltage is unknown: modulation is marked **faulted**, `setmodulation!` accepts only 0, and
+  every setpoint write refuses until a 0 V write succeeds. A release (DAQ task deletion) that
+  fails is retried by the next disable, enable or shutdown. A level set before an edit of
+  `wa_calibration` is re-recorded at the new scale.
 - **Any analogue output.** `enable_modulation!(laser; writer = v -> ..., v_range = (lo, hi),
-  output_id = "...")` drives MOD IN from anything that can set a voltage (a Triggerscope DAC,
-  another card). Mind the range: 10 V is the photodiode's full scale (`tia_range x
-  wa_calibration`, often far above the diode's rating); the driver refuses totals above
-  `properties.max_power`, and the controller's current clamp is the hardware backstop.
+  output_id = "...")` drives MOD IN from anything that can set a voltage. Each laser picks
+  its own: an NI DAQ channel (`ao_channel = "<dev>/ao<n>"`) for one, a Triggerscope DAC for
+  another, and so on. For a Triggerscope DAC use
+  `enable_modulation!(laser; dac_output(scope, n; range = ZEROTOFIVE)...)` (any DAC 1–16).
+  Its commands run under the scope's lock, so attenuators on the same scope cannot
+  interleave with it. Set `scope.compause = 0`: each write costs twice the pause. Mind the
+  range: 10 V is the photodiode's full scale (`tia_range x wa_calibration`, often far above
+  the diode's rating). The driver refuses totals above `properties.max_power`, and the
+  controller's current clamp is the hardware backstop.
 - **Scale.** 0-10 V = 0 to full scale: the photodiode's full-scale power (`tia_range x
   wa_calibration`, so `modulation_scale` mW per volt) in closed loop, the controller's current
   limit in open loop. It adds to the setpoint; a negative voltage subtracts. The driver refuses

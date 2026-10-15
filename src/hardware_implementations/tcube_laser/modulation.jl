@@ -98,21 +98,62 @@ photocurrent reads do not cause it, and MOD IN changes alone were applied at eve
 tried (up to 2 kHz). 1.3 s leaves about 0.2 s of margin over 1.1 s. A `Ref`, so tests can
 shorten it.
 
-With modulation enabled and the output on, `light_on`, `setoutputpower!` and `setcurrent!` wait
-until this long after their last write before they return (holding the setpoint lock), and
-[`setmodulation!`](@ref) refuses inside the window. A base change therefore takes about 0.35 s
-more, and every modulation change after it is applied.
+With modulation enabled, `light_on`, `setoutputpower!` and `setcurrent!` return only once this
+long has passed since the last write, and [`setmodulation!`](@ref) refuses inside the window.
+A base change therefore takes about 0.35 s more, and every modulation change after it is
+applied. The wait runs AFTER the setpoint lock is released ([`wait_modulation_settled`](@ref)),
+so a `light_off` issued meanwhile is not held up by it; the refusal in `setmodulation!` keeps
+the guarantee on its own. Neither trusts the driver's on/off record (`properties.is_on`): the
+output may have been enabled from the front panel.
 """
 const MOD_SETTLE_S = Ref(1.3)
 
 "Seconds left until a MOD IN change is safe after the last setpoint write (≤ 0 when it is)."
 modulation_settle_left(light::TCubeLaser) = light.modulation.written_at + MOD_SETTLE_S[] - time()
 
-"With modulation enabled and the output on, wait out [`MOD_SETTLE_S`](@ref) after the last setpoint write."
+"""
+    wait_modulation_settled(light)
+
+With modulation enabled, sleep until [`MOD_SETTLE_S`](@ref) has passed since the last setpoint
+write. Called by the public `light_on`, `setoutputpower!` and `setcurrent!` after they release
+the setpoint lock. It loops, because another task's write can extend the window meanwhile.
+"""
 function wait_modulation_settled(light::TCubeLaser)
-    (light.modulation.enabled && light.properties.is_on) || return nothing
-    t = modulation_settle_left(light)
-    t > 0 && sleep(t)
+    light.modulation.enabled || return nothing
+    while (t = modulation_settle_left(light)) > 0
+        sleep(t)
+    end
+    return nothing
+end
+
+"""
+    check_not_faulted(light, what)
+
+Refuse `what` (a setpoint write) while the MOD IN voltage is unknown (`modulation.faulted`):
+the register would be set to request + a level that may not be what is on the wire, so the
+total could exceed the ceiling.
+"""
+check_not_faulted(light::TCubeLaser, what::AbstractString) = light.modulation.faulted && error(
+    "TCubeLaser $(light.serialNo): $what refused: the voltage on MOD IN is unknown (a modulation write failed and 0 V " *
+    "could not be confirmed). Write 0 V first: setmodulation!(laser, 0), disable_modulation!(laser) or light_off(laser).")
+
+"""
+    reconcile_scale!(light)
+
+If the volts-per-unit scale changed since the level was written (an edit of
+`pd.wa_calibration`), the voltage on the wire now stands for a different level: record that
+level (voltage × new scale) and the new scale. Called before every use of the level.
+"""
+function reconcile_scale!(light::TCubeLaser)
+    m = light.modulation
+    (m.enabled && m.level != 0 && isfinite(m.per_volt)) || return nothing
+    pv = modulation_scale(light)
+    if pv != m.per_volt
+        old = m.level
+        m.level = m.level / m.per_volt * pv
+        @warn "TCubeLaser $(light.serialNo): the modulation scale changed from $(m.per_volt) to $pv per V; the voltage on MOD IN now adds $(m.level), not $old"
+        m.per_volt = pv
+    end
     return nothing
 end
 
@@ -163,6 +204,7 @@ function _enable_modulation!(light::TCubeLaser, daq_device, ao_channel, writer, 
         "(2026-10-13): the input acts only after the control source is set while the output is on, every setcurrent! " *
         "or off/on disarms it, and after re-arming the delivered current was up to 5 mA off what the driver would " *
         "record. Use closed loop (ConstantPhotocurrent), where it is verified; see CALIBRATION.md, \"External modulation\".")
+    retry_pending_close!(light)   # a release that failed earlier: the old task may still hold its channel
     daq = writer === nothing
     if daq
         closer === nothing || throw(ArgumentError(
@@ -191,16 +233,37 @@ function _enable_modulation!(light::TCubeLaser, daq_device, ao_channel, writer, 
         prev = control_source(light)
         set_control_source!(light, LD_SOURCE_SOFTWARE | LD_SOURCE_EXTERNAL)
         m.per_volt, m.v_min, m.v_max = modulation_scale(light), Float64(v_range[1]), Float64(v_range[2])
-        m.prev_source, m.write, m.close, m.level, m.output, m.enabled = prev, writer, closer, 0.0, output, true
+        m.prev_source, m.write, m.close, m.level, m.output, m.enabled, m.faulted = prev, writer, closer, 0.0, output, true, false
     catch
         cerr = run_close(closer)
         if isnothing(cerr)
             release_output!(light, output)
         else
-            @error "TCubeLaser $(light.serialNo): releasing modulation output \"$output\" after a failed enable failed; it stays claimed" exception = cerr
+            # Keep the claim and the release: the next enable, disable or shutdown retries it.
+            m.close, m.output = closer, output
+            @error "TCubeLaser $(light.serialNo): releasing modulation output \"$output\" after a failed enable failed; it stays claimed and is retried later" exception = cerr
         end
         rethrow()
     end
+    return nothing
+end
+
+"""
+    retry_pending_close!(light)
+
+Retry a release that failed earlier (`modulation.close` kept while disabled): on success drop
+the claim, otherwise refuse, so a new task is never made while the old one may still hold the
+channel and the claim is never dropped under it.
+"""
+function retry_pending_close!(light::TCubeLaser)
+    m = light.modulation
+    (m.enabled || m.close === nothing) && return nothing
+    cerr = run_close(m.close)
+    isnothing(cerr) || error(
+        "TCubeLaser $(light.serialNo): the modulation output \"$(m.output)\" could not be released earlier and still cannot ($cerr); " *
+        "it stays claimed. Fix the output (e.g. reset the DAQ) and call disable_modulation! again.")
+    release_output!(light, m.output)
+    m.close, m.output = nothing, nothing
     return nothing
 end
 
@@ -294,15 +357,18 @@ an enable/disable. Nothing is written then and the level stays what it was. With
 level checked against the old setpoint could land on top of the new one and exceed
 `max_power`. Set the base before a fast run, not during it.
 
-Also refused while the output is on within [`MOD_SETTLE_S`](@ref) of the last setpoint write:
-the controller loses a MOD IN change made that soon (measured). The slow calls already wait
-that out before they return, so this only fires after a write from a path that does not
-(e.g. modulation enabled right after a base change).
+Also refused within [`MOD_SETTLE_S`](@ref) of the last setpoint write, whatever the driver
+records about the output (it may have been enabled from the front panel): the controller
+loses a MOD IN change made that soon (measured). The slow calls already wait that out before
+they return, so this fires only after a write from a path that does not (`light_off`'s zero,
+or modulation enabled right after a base change).
 
-The volts-per-unit scale is recomputed on every call ([`modulation_scale`](@ref)). If the
-writer throws, the voltage it left is unknown: 0 V is written and the level recorded as 0;
-if that fails too, the level keeps its previous value, an error is logged, and the writer's
-error is rethrown.
+The volts-per-unit scale is recomputed on every call ([`modulation_scale`](@ref)); a level
+written at an older scale is first re-recorded at the new one ([`reconcile_scale!`](@ref)).
+If the writer throws, the voltage it left is unknown: 0 V is written and the level recorded
+as 0. If that fails too, modulation is marked **faulted** (`modulation.faulted`): only
+`setmodulation!(laser, 0)` is accepted, and every setpoint write refuses, until a 0 V write
+succeeds. The writer's error is rethrown.
 """
 function setmodulation!(light::TCubeLaser, level::Real)
     m = light.modulation
@@ -312,16 +378,20 @@ function setmodulation!(light::TCubeLaser, level::Real)
         "$(m.level). Set the base power before a fast run, not during it.")
     try
         m.enabled || error("TCubeLaser $(light.serialNo): setmodulation! needs enable_modulation! first")
+        isfinite(level) || throw(ArgumentError("TCubeLaser $(light.serialNo): modulation must be finite, got $level"))
+        (m.faulted && level != 0) && error(
+            "TCubeLaser $(light.serialNo): setmodulation!($level) refused: the voltage on MOD IN is unknown after a failed write. " *
+            "Write 0 V first: setmodulation!(laser, 0) (or disable_modulation!/light_off).")
         left = modulation_settle_left(light)
-        (light.properties.is_on && left > 0) && error(
+        left > 0 && error(
             "TCubeLaser $(light.serialNo): setmodulation!($level) refused: the controller is still settling after a setpoint " *
             "write ($(round(Int, 1000 * left)) ms left of MOD_SETTLE_S = $(MOD_SETTLE_S[]) s); a MOD IN change now would be " *
             "lost and leave the light off the driver's record. Nothing was written.")
-        isfinite(level) || throw(ArgumentError("TCubeLaser $(light.serialNo): modulation must be finite, got $level"))
+        reconcile_scale!(light)
         per_volt = modulation_scale(light)
         v = level / per_volt
         m.v_min <= v <= m.v_max || throw(ArgumentError(
-            "TCubeLaser $(light.serialNo): modulation $level $(modulation_unit(light)) needs $v V, outside the DAQ channel's [$(m.v_min), $(m.v_max)] V"))
+            "TCubeLaser $(light.serialNo): modulation $level $(modulation_unit(light)) needs $v V, outside the output's [$(m.v_min), $(m.v_max)] V"))
         check_total(light, modulation_base(light), level)
         try
             m.write(v)
@@ -329,14 +399,15 @@ function setmodulation!(light::TCubeLaser, level::Real)
             # The writer may have applied the voltage before it threw: put the input back at a known 0 V.
             try
                 m.write(0.0)
-                m.level = 0.0
+                m.level, m.faulted = 0.0, false
             catch zerr
-                @error "TCubeLaser $(light.serialNo): writing 0 V after a failed modulation write failed too; the voltage on MOD IN is unknown" exception = zerr
+                m.faulted = true
+                @error "TCubeLaser $(light.serialNo): writing 0 V after a failed modulation write failed too; the voltage on MOD IN is unknown, modulation marked faulted" exception = zerr
             end
             rethrow()
         end
         m.per_volt = per_volt
-        m.level = Float64(level)
+        m.level, m.faulted = Float64(level), false
     finally
         unlock(m.lock)
     end
@@ -351,7 +422,8 @@ modulation_level(light::TCubeLaser) = light.modulation.enabled ? light.modulatio
 
 Write 0 V when modulation is enabled; never throws (the switch-off paths call it first and
 must go on to disable the output whatever happens here). Holds the setpoint lock, so the
-0 V and the recorded level change together.
+0 V and the recorded level change together. Success clears `faulted`; a failure sets it (the
+write may or may not have applied, so the voltage is unknown).
 """
 function zero_modulation(light::TCubeLaser)
     with_setpoint_lock(light) do
@@ -359,9 +431,10 @@ function zero_modulation(light::TCubeLaser)
         m.enabled || return nothing
         try
             m.write(0.0)
-            m.level = 0.0
+            m.level, m.faulted = 0.0, false
             return nothing
         catch e
+            m.faulted = true
             return e
         end
     end
@@ -377,14 +450,17 @@ modulation disabled. Every step is attempted and the first failure rethrown.
 It stays **enabled**, keeping its output and its claim, whenever a voltage may still add to
 the setpoint: the source was not restored, or the 0 V write failed and the restored source
 still includes the external input (3 or 7). The level is then still added to every USB
-setpoint, as it is still on the input, and a retry can finish the job. If only the release
-fails, modulation is marked disabled but the output stays claimed (the task may still hold
-the channel). A no-op when not enabled. Holds the setpoint lock.
+setpoint, as it is still on the input, and a retry can finish the job. A 0 V write that
+throws marks modulation faulted (its outcome is unknown), so setpoint writes refuse until a
+retry writes 0 V. If only the release fails, modulation is marked disabled but the output stays
+claimed (the task may still hold the channel), and the release is retried by the next
+`disable_modulation!`, `enable_modulation!` or `shutdown`. Otherwise a no-op when not enabled.
+Holds the setpoint lock.
 """
 function disable_modulation!(light::TCubeLaser)
     with_setpoint_lock(light) do
         m = light.modulation
-        m.enabled || return nothing
+        m.enabled || (retry_pending_close!(light); return nothing)
         zerr = zero_modulation(light)
         restore = m.prev_source > 0 ? m.prev_source : LD_SOURCE_SOFTWARE
         serr = try
@@ -399,8 +475,11 @@ function disable_modulation!(light::TCubeLaser)
         cerr = nothing
         if input_dead
             cerr = run_close(m.close)
-            isnothing(cerr) && (release_output!(light, m.output); m.output = nothing)
-            m.enabled, m.write, m.close, m.level = false, nothing, nothing, 0.0
+            if isnothing(cerr)
+                release_output!(light, m.output)
+                m.output, m.close = nothing, nothing
+            end   # else keep m.close and the claim: retried by the next disable, enable or shutdown
+            m.enabled, m.write, m.level, m.faulted = false, nothing, 0.0, false
         end
         isnothing(zerr) || throw(zerr)
         isnothing(serr) || throw(serr)

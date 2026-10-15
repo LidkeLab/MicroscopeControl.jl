@@ -38,6 +38,7 @@ module Triggerscope
     export TriggerMode, RISING, FALLING, CHANGE
     export Range, ZEROTOFIVE, ZEROTOTEN, PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5
     export openport, closeport
+    export dac_output, dac_range_volts
     export SignalArray, CommandType
     export gui
 
@@ -46,4 +47,5 @@ module Triggerscope
     include("direct_control.jl")
     include("sequence_control.jl")
     include("helper_functions.jl")
+    include("analog_output.jl")
 end

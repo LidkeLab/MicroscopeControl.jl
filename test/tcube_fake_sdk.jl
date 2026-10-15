@@ -209,6 +209,24 @@ a USB write sets it outright and later MOD IN changes add only their DIFFERENCE,
 the written word plus (ext_words - ext_at_write), and `LD_GetLaserSetPoint` reads that sum.
 """
 const ext_at_write = Ref{Int}(0)
+"""
+The controller loses a MOD IN change made within `settle_s` of its last setpoint write (rig, 2026-10-14: up to
+~0.95 s): the change is absorbed into the register reference instead of adding (`apply_ext!`). 0 = no window.
+"""
+const settle_s = Ref(0.0)
+"`time()` of the last setpoint write the controller took (output on)."
+const last_write_t = Ref(0.0)
+"""
+    apply_ext!(words)
+
+The test DAQ writer sets the external input to `words`. Inside the settle window the change is lost: the
+register reference moves with it, so the held total does not change.
+"""
+function apply_ext!(words::Integer)
+    time() - last_write_t[] < settle_s[] && (ext_at_write[] += Int(words) - ext_words[])
+    ext_words[] = Int(words)
+    return nothing
+end
 "Voltages the test writer received, in order (also recorded in `calls` as \"MOD <v>\")."
 const mod_volts = Float64[]
 
@@ -217,6 +235,8 @@ function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     source[] = 5
     ext_words[] = 0
     ext_at_write[] = 0
+    settle_s[] = 0.0
+    last_write_t[] = 0.0
     empty!(mod_volts)
     empty!(calls)
     empty!(status)
@@ -342,6 +362,7 @@ end
         if s == 0 && on   # ignored with the output off
             Main.FakeKinesis.setpoint_held[] = laserDiodeCurrent
             Main.FakeKinesis.ext_at_write[] = Main.FakeKinesis.ext_words[]   # the write replaces the whole register
+            Main.FakeKinesis.last_write_t[] = time()
         end
         return s
     end

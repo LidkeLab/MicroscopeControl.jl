@@ -1068,8 +1068,10 @@ Holds the laser's setpoint lock for the whole call ([`with_setpoint_lock`](@ref)
 each other (a `light_off` waits for a `setoutputpower!` in flight, up to its lock check),
 and `setmodulation!` refuses while any of them runs.
 """
-LightSourceInterface.light_on(light::TCubeLaser) = with_setpoint_lock(() -> _light_on(light), light)
+LightSourceInterface.light_on(light::TCubeLaser) = (with_setpoint_lock(() -> _light_on(light), light); wait_modulation_settled(light))
 function _light_on(light::TCubeLaser)
+    check_not_faulted(light, "light_on")
+    reconcile_scale!(light)
     require_clamp(regulation_mode(light), light, "light_on")
     try
         check_scale!(light)
@@ -1100,7 +1102,6 @@ function _light_on(light::TCubeLaser)
         disable_after_failure(light, "enable or setpoint after enable")
         rethrow()
     end
-    wait_modulation_settled(light)   # MOD IN changes too soon after the write are lost (MOD_SETTLE_S)
     println("$(light.laser_color)" * "_laser is on")
     return nothing
 end
@@ -1204,8 +1205,10 @@ throws and leaves the output on, at a setpoint that may be the new or the old
 one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 """
 LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64) =
-    with_setpoint_lock(() -> _setcurrent!(light, current), light)
+    (with_setpoint_lock(() -> _setcurrent!(light, current), light); wait_modulation_settled(light))
 function _setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
+    check_not_faulted(light, "setcurrent!")
+    reconcile_scale!(light)
     check_current(light, current)
     light.modulation.enabled && check_total(light, current, modulation_level(light))
     code = setpoint_code(light, current + modulation_level(light))   # the register holds request + modulation (modulation.jl)
@@ -1214,7 +1217,6 @@ function _setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     on = light.properties.is_on || read_status_fresh(light.serialNo) & STATUS_BITS.output_enabled != 0
     on && send_setpoint(light, code)
     light.drive_current = current
-    wait_modulation_settled(light)
     light.properties.power = legacy_power(light, current) # deprecated; see legacy_power
     println("Laser current set to $current mA", on ? "" : " (output off: applied at light_on)")
     return nothing
@@ -1270,8 +1272,10 @@ at the output matches is a question for a power meter; see
 [`indicated_output_power`](@ref) and [`loop_status`](@ref).
 """
 LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64) =
-    with_setpoint_lock(() -> _setoutputpower!(light, power_mW), light)
+    (with_setpoint_lock(() -> _setoutputpower!(light, power_mW), light); wait_modulation_settled(light))
 function _setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64)
+    check_not_faulted(light, "setoutputpower!")
+    reconcile_scale!(light)
     bits = require_clamp(ConstantPhotocurrent(), light, "setoutputpower!")
     check_power(light, power_mW)
     light.modulation.enabled && check_total(light, power_mW, modulation_level(light))
@@ -1312,7 +1316,6 @@ function _setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Flo
         end
     end
     pd.output_power_requested = power_mW
-    wait_modulation_settled(light)   # MOD IN changes too soon after the write are lost (MOD_SETTLE_S)
     pd.photocurrent_requested = photocurrent_from_code(light, photocurrent_code(light, power_mW / 1000 / pd.wa_calibration), pd.tia_range)
     println("Laser output power set to $power_mW mW (photocurrent setpoint $(pd.photocurrent_requested) A)",
             on ? "" : " (output off: applied at light_on)")
@@ -1402,7 +1405,9 @@ to report.
 function zero_setpoint(light::TCubeLaser)
     try
         status = LD_SetLaserSetPoint(light.serialNo, UInt16(0))
-        light.modulation.written_at = time()
+        # No `written_at` here: this zero is the switch-off path (the output is disabled right after it), and the next
+        # light_on re-sends the register and waits out MOD_SETTLE_S itself; counting it would refuse every
+        # setmodulation! for 1.3 s after a light_off (rig, 2026-10-15).
         return status == 0 ? nothing : "status $status"
     catch err
         return err
@@ -1443,6 +1448,13 @@ function _shutdown(light::TCubeLaser)
             disable_modulation!(light)   # 0 V (already written by zero_then_disable) and the control source restored
         catch moderr
             @error "TCubeLaser $serialNo: disabling the modulation input during shutdown failed" exception = moderr
+        end
+        if !light.modulation.enabled && light.modulation.close === nothing
+            try
+                close_daq_output!(light)   # a task a standalone setupIO made, outside enable_modulation!
+            catch taskerr
+                @error "TCubeLaser $serialNo: deleting the DAQ task during shutdown failed" exception = taskerr
+            end
         end
         try
             LD_StopPolling(serialNo) # returns Cvoid: no status to check
@@ -1598,10 +1610,9 @@ function resolve_ao(light::TCubeLaser)
     return String(device), String(light.ao_channel)
 end
 
-function set_modvoltage(light::TCubeLaser, voltage::Float64)
-    NIDAQcard.setvoltage(light.daq, light.task_mod, voltage)
-    return nothing
-end
+# `set_modvoltage(light, volts)` was removed in 0.3.0: it wrote MOD IN outside the setpoint
+# lock and the driver's bookkeeping, so the next USB setpoint absorbed its voltage (the
+# controller's one setpoint register, modulation.jl). Use `enable_modulation!` + `setmodulation!`.
 
 """
     export_state(light::TCubeLaser)
@@ -1646,6 +1657,7 @@ function export_state(light::TCubeLaser)
         "modulation_enabled" => light.modulation.enabled,
         "modulation_level" => modulation_level(light),
         "modulation_per_volt" => light.modulation.per_volt,
+        "modulation_faulted" => light.modulation.faulted,
         # 0.2.4's keys, kept next to the new ones.
         "min_current" => light.min_current, "max_current" => light.max_current,
         "power_unit" => light.properties.power_unit, "power" => light.properties.power,

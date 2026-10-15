@@ -20,7 +20,7 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
     # A negative voltage subtracts, as on the TLD001 (manual section 5.5); nothing is clipped here.
     writer(l) = v -> begin
         push!(FK.mod_volts, v); push!(FK.calls, "MOD $v")
-        FK.ext_words[] = sign(v) * Int(TCube.photocurrent_code(l, abs(v) * TCube.modulation_scale(l) / 1000 / l.pd.wa_calibration))
+        FK.apply_ext!(Int(sign(v)) * Int(TCube.photocurrent_code(l, abs(v) * TCube.modulation_scale(l) / 1000 / l.pd.wa_calibration)))
         nothing
     end
     enable!(l; v_range=(0.0, 5.0)) = enable_modulation!(l; writer=writer(l), v_range, output_id="test output")
@@ -280,7 +280,9 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
         @test_throws "DAQ gone" disable_modulation!(l)
         @test l.modulation.enabled && modulation_level(l) == 5.0 && closes[] == 0
         @test TCube.MODULATION_OUTPUTS["test output"] === l
-        quiet(() -> setoutputpower!(l, 10.0)); @test l.pd.output_power_requested == 10.0   # still accounted for
+        # The 0 V write threw, so the voltage is unknown: setpoint writes refuse until 0 V is confirmed (PR #83 re-review)
+        @test l.modulation.faulted
+        @test_throws "voltage on MOD IN is unknown" quiet(() -> setoutputpower!(l, 10.0))
         fail[] = false
         disable_modulation!(l)                            # a retry finishes the job
         @test !l.modulation.enabled && closes[] == 1 && isempty(TCube.MODULATION_OUTPUTS)
@@ -358,8 +360,8 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
             @test_throws "still settling" setmodulation!(l, 6.0)
             @test modulation_level(l) == 0.0                       # nothing written
             sleep(0.35); setmodulation!(l, 6.0); @test modulation_level(l) == 6.0
-            quiet(() -> light_off(l))                              # light_off zeroes: a write, but the output is off
-            setmodulation!(l, 2.0); @test modulation_level(l) == 2.0   # allowed while off (light_on re-sends the total)
+            quiet(() -> light_off(l))                              # light_off's zero does not start the window
+            setmodulation!(l, 2.0); @test modulation_level(l) == 2.0   # the next light_on re-sends and waits itself
             disable_modulation!(l)
             t = @elapsed quiet(() -> (light_on(l); setoutputpower!(l, 11.0)))   # no modulation: no waiting
             @test t < 0.3 + 0.1 * 2 + 0.2                          # two lock checks (0.1 s each) and no settle waits
@@ -367,5 +369,138 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
         finally
             TCube.MOD_SETTLE_S[] = old
         end
+    end
+
+    # ---- PR #83 re-review (2026-10-15) ----
+
+    @testset "re-review 1: the settle wait runs outside the lock, so light_off is not held up" begin
+        old = TCube.MOD_SETTLE_S[]
+        TCube.MOD_SETTLE_S[] = 0.8
+        try
+            l = ready(); enable!(l)
+            quiet() do; setoutputpower!(l, 10.0); light_on(l); end
+            t = @async quiet(() -> setoutputpower!(l, 12.0))
+            # wait until the write is done and the call sits in its settle wait (lock free, call not returned)
+            t0 = time()
+            while (islocked(l.modulation.lock) || l.pd.output_power_requested != 12.0) && time() - t0 < 5; sleep(0.005); end
+            @test !istaskdone(t)
+            dt = @elapsed quiet(() -> light_off(l))
+            @test dt < 0.3 && !l.properties.is_on                # not the 0.8 s settle wait
+            wait(t)
+            @test istaskdone(t) && !istaskfailed(t)
+            # the wait loops: another write during it extends it
+            quiet(() -> light_on(l))
+            t1 = time(); l.modulation.written_at = t1 + 0.3     # as if another task wrote 0.3 s later
+            TCube.wait_modulation_settled(l)
+            @test time() - t1 >= 0.3 + 0.8 - 0.02
+            quiet(() -> light_off(l))
+        finally
+            TCube.MOD_SETTLE_S[] = old
+        end
+    end
+
+    @testset "re-review 2: an unknown MOD IN voltage marks modulation faulted until 0 V is confirmed" begin
+        # The reviewer's case: at 20 + 10 (ceiling 30) a change applies 5 mW, then throws, and the 0 V rescue fails too.
+        fail_after = Ref(false); zero_fails = Ref(false)
+        l = ready(; properties=LightSourceProperties("mW", 0.0, false, 1.0, 30.0))
+        w = writer(l)
+        enable_modulation!(l; writer=v -> (v == 0.0 && zero_fails[] && error("zero failed");
+                                            w(v); fail_after[] && v > 0 && error("applied, then threw")),
+                           v_range=(0.0, 5.0), output_id="test output")
+        quiet() do; setoutputpower!(l, 20.0); light_on(l); end
+        setmodulation!(l, 10.0)
+        fail_after[] = true; zero_fails[] = true
+        @test_throws "applied, then threw" setmodulation!(l, 5.0)
+        @test l.modulation.faulted
+        fail_after[] = false
+        per_mW = TCube.photocurrent_code(l, 1.0 / 1000 / 224.2)
+        # nothing may now add to the unknown voltage: a level, a setpoint, a switch-on
+        @test_throws "voltage on MOD IN is unknown" setmodulation!(l, 10.0)
+        @test_throws "voltage on MOD IN is unknown" quiet(() -> setoutputpower!(l, 20.0))
+        @test FK.held_total() / per_mW <= 30.0 + 0.05        # the reviewer's 35 mW is not reachable
+        quiet(() -> light_off(l))                             # switch-off still works; its 0 V fails again
+        @test !l.properties.is_on && l.modulation.faulted
+        @test_throws "voltage on MOD IN is unknown" quiet(() -> light_on(l))
+        zero_fails[] = false
+        setmodulation!(l, 0.0)                                # 0 V confirmed: the fault clears
+        @test !l.modulation.faulted && modulation_level(l) == 0.0
+        quiet(() -> light_on(l)); setmodulation!(l, 10.0)
+        @test FK.held_total() / per_mW <= 30.0 + 0.05 && l.properties.is_on
+        @test export_state(l)[1]["modulation_faulted"] === false
+        quiet(() -> light_off(l))
+    end
+
+    @testset "follow-ups: a calibration edit with a level on, a failed release retried, the guard ignores is_on" begin
+        # The level written at the old scale is re-recorded at the new one before it is used.
+        l = ready(); enable!(l)
+        quiet() do; setoutputpower!(l, 10.0); light_on(l); end
+        setmodulation!(l, 10.0)                                # 10 mW = 0.446 V at 22.42 mW/V
+        l.pd.wa_calibration = 112.1                            # the same 0.446 V now adds 5 mW
+        quiet(() -> setoutputpower!(l, 12.0))
+        @test modulation_level(l) ≈ 5.0 && l.modulation.per_volt ≈ 11.21
+        quiet(() -> light_off(l)); l.pd.wa_calibration = 224.2
+
+        # A release that failed is retried by the next disable, and by enable (which refuses while it fails).
+        tries = Ref(0)
+        l = ready()
+        enable_modulation!(l; writer=writer(l), v_range=(0.0, 5.0), output_id="test output",
+                           close=() -> ((tries[] += 1) <= 2 && error("task stuck")))
+        @test_throws "task stuck" disable_modulation!(l)
+        @test !l.modulation.enabled && TCube.MODULATION_OUTPUTS["test output"] === l && l.modulation.close !== nothing
+        @test_throws "could not be released earlier" enable_modulation!(l; writer=writer(l), v_range=(0.0, 5.0), output_id="test output")
+        @test TCube.MODULATION_OUTPUTS["test output"] === l    # the claim is never dropped under the stuck task
+        disable_modulation!(l)                                 # third try succeeds
+        @test isempty(TCube.MODULATION_OUTPUTS) && l.modulation.close === nothing && tries[] == 3
+
+        # The settle refusal holds even when the driver records the output off (front-panel enable).
+        l = ready(); enable!(l)
+        old = TCube.MOD_SETTLE_S[]; TCube.MOD_SETTLE_S[] = 0.3
+        try
+            l.modulation.written_at = time(); l.properties.is_on = false
+            @test_throws "still settling" setmodulation!(l, 1.0)
+        finally
+            TCube.MOD_SETTLE_S[] = old
+        end
+    end
+
+    @testset "the fake models the settle window, and the driver's waits beat it" begin
+        old = TCube.MOD_SETTLE_S[]
+        word(l, mW) = Int(TCube.photocurrent_code(l, mW / 1000 / 224.2))
+        try
+            # without the driver's wait the fake loses the change, as the rig did
+            l = ready(); FK.settle_s[] = 0.25; TCube.MOD_SETTLE_S[] = 0.0
+            enable!(l); quiet() do; setoutputpower!(l, 10.0); light_on(l); end
+            setmodulation!(l, 5.0)
+            @test abs(FK.held_total() - word(l, 10.0)) <= 2       # lost: still 10 mW, the record says 15
+            quiet(() -> light_off(l))
+            # with it, a change the instant each slow call returns lands
+            l = ready(); FK.settle_s[] = 0.25; TCube.MOD_SETTLE_S[] = 0.3
+            enable!(l); quiet() do; setoutputpower!(l, 10.0); light_on(l); end
+            setmodulation!(l, 5.0);                @test abs(FK.held_total() - word(l, 15.0)) <= 2
+            quiet(() -> setoutputpower!(l, 12.0)); setmodulation!(l, 0.0)
+            @test abs(FK.held_total() - word(l, 12.0)) <= 2
+            quiet(() -> light_off(l))
+        finally
+            TCube.MOD_SETTLE_S[] = old; FK.settle_s[] = 0.0
+        end
+    end
+
+    @testset "a Triggerscope DAC as the output (dac_output), no port needed" begin
+        TS = MicroscopeControl.HardwareImplementations.Triggerscope
+        scope = TS.Triggerscope4(portname = "COM_TEST")       # not opened
+        @test TS.dac_range_volts(TS.ZEROTOFIVE) == (0.0, 5.0) && TS.dac_range_volts(TS.PLUSMINUS10) == (-10.0, 10.0)
+        o = TS.dac_output(scope, 3)                            # the driver's record: the constructor's ±10 V
+        @test o.v_range == (-10.0, 10.0) && o.output_id == "Triggerscope COM_TEST DAC 3" && o.writer isa Function
+        scope.dacranges[16] = TS.ZEROTOFIVE
+        @test TS.dac_output(scope, 16).v_range == (0.0, 5.0)  # any DAC 1..16
+        @test_throws ArgumentError TS.dac_output(scope, 17)
+        @test_throws "outside its range" TS.volttooutput(scope, 16, 5.5)   # never a wrapped 16-bit code
+        @test TS.volttooutput(scope, 16, 5.0) == 65535 && TS.volttooutput(scope, 16, 0.0) == 0
+        @test scope.lock isa ReentrantLock
+        # it plugs straight into enable_modulation! (here with the test writer standing in for the serial write)
+        l = ready(); scope.dacranges[3] = TS.ZEROTOFIVE
+        enable_modulation!(l; TS.dac_output(scope, 3)..., writer=writer(l))
+        @test l.modulation.output == "Triggerscope COM_TEST DAC 3" && l.modulation.v_max == 5.0
+        disable_modulation!(l)
     end
 end

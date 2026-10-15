@@ -23,14 +23,21 @@ drives it: see [`enable_modulation!`](@ref). Every `TCubeLaser` carries one
   one, even two for the same serial number.
 - `close`: `() -> nothing`, run when the output is released (`disable_modulation!`,
   `shutdown`, a failed `enable_modulation!`): deletes the DAQ task, or a writer's own
-  `close=`. `nothing` when there is nothing to release.
+  `close=`. `nothing` when there is nothing to release. A release that failed stays here,
+  and the next `disable_modulation!`, `enable_modulation!` or `shutdown` retries it.
+- `faulted`: the voltage on MOD IN is unknown. A write failed and the 0 V rescue write failed
+  too, or a 0 V write itself threw (it may or may not have applied). While set,
+  `setmodulation!` accepts only 0 and every setpoint write refuses (`light_on`,
+  `setoutputpower!`, `setcurrent!`); a 0 V write that succeeds clears it
+  (`setmodulation!(laser, 0)`, `disable_modulation!`, `light_off`).
 - `lock`: the laser's setpoint lock. Everything that writes the controller's setpoint
   register holds it: `initialize`, `light_on`, `light_off`, `shutdown`, `setcurrent!`,
   `setoutputpower!`, `enable_modulation!`, `disable_modulation!` and `setmodulation!`.
   The slow calls wait for it. `setmodulation!` only tries it and refuses when it is held,
   so a fast write never waits behind a verified USB setpoint and never lands inside one.
 - `written_at`: `time()` of the last setpoint write to the controller (`LD_SetLaserSetPoint`),
-  0 before the first. A MOD IN change too soon after one is lost by the controller
+  0 before the first. The switch-off zero (`light_off`, `shutdown`, failure cleanup) does not
+  count: the output is disabled right after it, and the next `light_on` re-sends and waits. A MOD IN change too soon after one is lost by the controller
   ([`MOD_SETTLE_S`](@ref)).
 """
 mutable struct ExternalModulation
@@ -45,8 +52,9 @@ mutable struct ExternalModulation
     close::Any
     lock::ReentrantLock
     written_at::Float64
+    faulted::Bool
 end
-ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing, nothing, ReentrantLock(), 0.0)
+ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing, nothing, ReentrantLock(), 0.0, false)
 
 """
     TCubeLaser{M<:RegulationMode} <: DiodeLaser

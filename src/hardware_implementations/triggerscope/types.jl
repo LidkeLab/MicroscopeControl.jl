@@ -50,6 +50,9 @@ mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     #GUI Interface Fields
     outputs::Vector{Output}
     inputs::Vector{Input}
+
+    # One command and its reply at a time: the LCAs and a MOD IN output can share one scope from several tasks.
+    lock::ReentrantLock
 end
 
 #constructor for the Triggerscope4 object
@@ -88,7 +91,7 @@ function Triggerscope4(;
     inputs = Vector{Input}(undef, 1) #TTL inputs
     inputs[1] = Input("TTL", Bool, ttlinputs, [false, true], ttlreadings, false)
 
-    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs)
+    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs, ReentrantLock())
 end
 
 mutable struct CommandSignal

@@ -10,7 +10,8 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
-Release candidates (tags on the PR #83 branch, 2026-10-14): `v0.3.0-rc3` carries everything below,
+Release candidates (tags on the PR #83 branch, 2026-10-14/15): `v0.3.0-rc4` carries everything below, including the
+fixes from the re-review and the Triggerscope output; `v0.3.0-rc3` carried everything up to it,
 including the fixes from the PR review, and main merged in; `v0.3.0-rc2` was the first verified on
 hardware, without those fixes; `v0.3.0-rc1` had a bug (a channel's device part passed to NIDAQcard as
 a `SubString`, so `enable_modulation!(laser; ao_channel)` threw a MethodError on a real DAQ). The
@@ -30,6 +31,11 @@ in open loop and `setupIO` has no default output (breaking).
   - CALIBRATION.md keeps the generic procedure and the TLD001's controller facts; one rig's
     calibration table and wiring moved to that rig's repository. The constructor examples
     use placeholder numbers.
+- **TCube laser: `set_modvoltage(laser, volts)` is removed** (PR #83 re-review). It wrote
+  MOD IN outside the setpoint lock and the driver's bookkeeping, so the next USB setpoint
+  absorbed its voltage. Use `enable_modulation!` + `setmodulation!` (one write, just as fast).
+- **Triggerscope: a DAC voltage outside its range now throws** (`ArgumentError`) instead of
+  being sent as a wrapped 16-bit code.
 
 ### Added
 
@@ -116,6 +122,33 @@ in open loop and `setupIO` has no default output (breaking).
     - full range, 0 ↔ 70 mW (that rig's ceiling): 71.1 mW read at 138.6 mA, under the
       150 mA clamp with no current-limit bit, 70.5 mW refused; on a camera, 2 frames per edge
       at 199 and 399 Hz, with no overshoot and a dark "off".
+- **TCube laser: fixes from the PR #83 re-review (`v0.3.0-rc4`).**
+  - `light_on`, `setoutputpower!` and `setcurrent!` now wait out `MOD_SETTLE_S` AFTER releasing
+    the setpoint lock, in a loop, so a `light_off` issued meanwhile is no longer held up by
+    that wait (up to 1.3 s on rc3). `setmodulation!` still refuses inside the window.
+  - **Faulted state:** when the voltage on MOD IN becomes unknown (a write throws and the 0 V
+    rescue fails, or a 0 V write throws), `modulation.faulted` is set. `setmodulation!` then
+    accepts only 0, and `light_on`, `setoutputpower!` and `setcurrent!` refuse, until a 0 V
+    write succeeds (`setmodulation!(laser, 0)`, `disable_modulation!` or `light_off`). It closes
+    the reviewer's cases (≈ 35 and 40 mW against a 30 mW ceiling on the fake).
+    `export_state` gains `modulation_faulted`.
+  - The settle guards no longer trust `properties.is_on`: the wait and the refusal apply
+    whenever modulation is enabled (the front panel can enable the output).
+  - A level written before an edit of `pd.wa_calibration` is re-recorded at the new scale
+    before it is used (`reconcile_scale!`).
+  - A release (DAQ task deletion) that failed is kept and retried by the next
+    `disable_modulation!`, `enable_modulation!` (which refuses while it fails, so the claim
+    is never dropped under a stuck task) or `shutdown`; `shutdown` also deletes a task a
+    standalone `setupIO` made.
+  - The test fake now models the settle window (`settle_s`: a MOD IN change that soon after a
+    setpoint write is absorbed), and the tests show the driver's waits beat it.
+- **Triggerscope: a DAC as a generic analogue output, and safe sharing.**
+  - `dac_output(scope, dac; range)` returns `(; writer, v_range, output_id)` for any DAC 1–16,
+    e.g. `enable_modulation!(laser; dac_output(scope, 3; range = ZEROTOFIVE)...)`.
+    `dac_range_volts(range)` gives a range's span. It warns when `compause` > 10 ms (each
+    write costs twice `compause`).
+  - Every command and its reply now run under a per-scope lock (`scope.lock`), so attenuators
+    and a MOD IN output on one Triggerscope never interleave on its serial port.
 
 ### Changed
 
