@@ -25,6 +25,43 @@ function create_button(figure, row, column, label, action, camera)
 end
 
 
+"""
+    run_live_loop(show_frame, camera; fps = 60, stop = Threads.Atomic{Bool}(false)) -> (reader, display_task, stop)
+
+Read frames from `camera` while `camera.is_running == 1` and pass each to `show_frame`. The blocking
+`getlastframe` runs on its own thread (`Threads.@spawn`), so a frame wait of up to the camera's timeout does not stall
+the thread that renders; a task on the calling thread (`@async`) alone calls `show_frame`, which updates the
+Observables (GLMakie Observables are not thread-safe). The two hand frames over through a one-slot channel, so the
+reader runs at most one frame ahead of the display. A `nothing` frame (a timeout, a failed read, or a stopped
+capture) is skipped and does not end the loop. A frame that `show_frame` throws on is logged and skipped. With one
+Julia thread the reader shares it with the display task and the wait blocks both, as before. Setting `stop[]` ends
+the reader (at its next frame or timeout); the display task ends when the reader has.
+"""
+function run_live_loop(show_frame, camera; fps = 60, stop = Threads.Atomic{Bool}(false))
+    frames = Channel{Any}(1)
+    reader = Threads.@spawn begin
+        try
+            while camera.is_running == 1 && !stop[]
+                framedata = getlastframe(camera)  # Returns (H, W), or nothing
+                framedata === nothing || put!(frames, framedata)
+                sleep(1 / fps)
+            end
+        catch e
+            e isa InvalidStateException || @error "Camera display: the frame reader stopped on an error" exception = (e, catch_backtrace())
+        finally
+            close(frames)
+        end
+    end
+    display_task = @async for framedata in frames
+        try
+            show_frame(framedata)
+        catch e
+            @error "Camera display: could not show a frame" exception = (e, catch_backtrace())
+        end
+    end
+    return reader, display_task, stop
+end
+
 function create_display(camera, display_function; on_close=nothing)
     # Setup display
     # Camera data is (H, W) where data[row, col] = data[y, x]
@@ -52,9 +89,11 @@ function create_display(camera, display_function; on_close=nothing)
     # Display the plot and store the Scene
     scene = display(GLMakie.Screen(), imgplot)
 
-    # Abort camera when display window is closed, and call on_close callback
+    # Stop the frame reader, abort the camera when the display window is closed, and call on_close callback
+    stop = Threads.Atomic{Bool}(false)
     on(events(imgplot).window_open) do open
         if !open
+            stop[] = true  # the reader ends at its next frame; abort does not wait for it, and is safe during its wait
             abort(camera)
             if on_close !== nothing
                 on_close()
@@ -66,17 +105,14 @@ function create_display(camera, display_function; on_close=nothing)
     fps = 60
     display_function(camera)
 
-    @async begin
-        while camera.is_running == 1
-            framedata = getlastframe(camera)  # Returns (H, W)
-            max_val = maximum(framedata)
-            min_val = minimum(framedata)
-            # Permute from (H, W) to (W, H) for Makie display
-            img[] = Gray{N0f8}.(permutedims(framedata) .* (1 / max_val))
-            text_data[] = "[$min_val $max_val]"
-            sleep(1 / fps)
-        end
+    _, display_task, _ = run_live_loop(camera, fps = fps, stop = stop) do framedata
+        max_val = maximum(framedata)
+        min_val = minimum(framedata)
+        # Permute from (H, W) to (W, H) for Makie display; an all-zero frame scales by 1, not by Inf
+        img[] = Gray{N0f8}.(permutedims(framedata) .* (1 / max(max_val, one(max_val))))
+        text_data[] = "[$min_val $max_val]"
     end
+    return display_task
 end
 
 """
