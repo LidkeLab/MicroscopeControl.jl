@@ -16,6 +16,16 @@
 # `FakeDCAM.on_status` is called on every status read, so a test can change the
 # camera in the middle of a poll.
 #
+# The API and device calls (`dcamapi_init`/`_uninit`, `dcamdev_open`/`_close`) and the wait calls
+# (`dcamwait_open`/`_close`/`_abort`/`_event`) are replaced too. `FakeDCAM.api_up` says whether the API is
+# initialized; while it is not, and `FakeDCAM.api_down_code` is set, every other recorded call answers that code, as
+# a library whose API was uninitialized under a camera would. `dcamwait_event` answers at once (`wait_mode == :ready`) or
+# blocks, in Julia, until `dcamwait_abort` reaches it or its timeout passes (`:block`): it sleeps in
+# a loop, so a task on the same thread can run, which is what lets a test call `abort` during a wait.
+# An abort is not remembered: it reaches a wait only while the wait is inside the event
+# (after `entry_delay` seconds), the conservative reading of an SDK that does not say. `in_wait` counts the
+# waits inside the event; `dcamcap_stop` and `dcambuf_release` record a violation when one runs while it is above zero.
+#
 # What this seam does NOT cover:
 #
 #   * The replacements are global and permanent for the process. That is why
@@ -59,7 +69,48 @@ const frames_transferred = Ref(0)
 "Property values written by `dcamprop_setvalue`, read back by `dcamprop_getvalue` (default 0)."
 const values = Dict{Int32,Float64}()
 
-record!(op::AbstractString, default) = (push!(calls, op); get(codes, op, default))
+"Whether the API is initialized (`dcamapi_init` and not yet `dcamapi_uninit`)."
+const api_up = Ref(false)
+
+"The code every recorded call answers while `api_up` is false; `nothing` leaves the calls alone."
+const api_down_code = Ref{Any}(nothing)
+
+"`dcamapi_init` and `dcamapi_uninit` calls, since the last `reset!`."
+const inits = Ref(0)
+const uninits = Ref(0)
+
+"The device count `dcamapi_init` reports."
+const device_count = Ref(1)
+
+"The handles `dcamdev_close` was called with, in order."
+const closed = Ptr{Cvoid}[]
+
+"`:ready` (`dcamwait_event` answers at once) or `:block` (it waits for an abort or its timeout)."
+const wait_mode = Ref(:ready)
+
+"Seconds `dcamwait_event` spends before it can be aborted (an abort sent meanwhile is lost)."
+const entry_delay = Ref(0.0)
+
+"Called with no arguments as `dcamwait_event` leaves, before it answers."
+const after_wait = Ref{Function}(() -> nothing)
+
+"The waits inside `dcamwait_event` now; the handles that are open; those that were aborted while inside it."
+const in_wait = Ref(0)
+const open_waits = Set{Ptr{Cvoid}}()
+const active = Set{Ptr{Cvoid}}()
+const aborted = Set{Ptr{Cvoid}}()
+
+"Waits that ended by timeout, and `dcamcap_stop`/`dcambuf_release` calls that ran while a wait was in the event."
+const timeouts = Ref(0)
+const violations = String[]
+
+const next_handle = Ref(0)
+
+function record!(op::AbstractString, default)
+    push!(calls, op)
+    api_down_code[] !== nothing && !api_up[] && return api_down_code[]
+    return get(codes, op, default)
+end
 
 "Forget the history and restore the defaults."
 function reset!()
@@ -69,6 +120,19 @@ function reset!()
     status[] = nothing
     on_status[] = () -> nothing
     frames_transferred[] = 0
+    api_up[] = false
+    api_down_code[] = nothing
+    inits[] = 0
+    uninits[] = 0
+    device_count[] = 1
+    empty!(closed)
+    wait_mode[] = :ready
+    entry_delay[] = 0.0
+    after_wait[] = () -> nothing
+    in_wait[] = 0
+    empty!(open_waits); empty!(active); empty!(aborted)
+    timeouts[] = 0
+    empty!(violations)
     return nothing
 end
 
@@ -81,7 +145,10 @@ end
 
 @eval MicroscopeControl.HardwareImplementations.DCAM4 begin
     dcamcap_start(hdcam::Ptr{Cvoid}, mode::Int32) = Main.FakeDCAM.record!("dcamcap_start", DCAMERR_SUCCESS)
-    dcamcap_stop(hdcam::Ptr{Cvoid}) = Main.FakeDCAM.record!("dcamcap_stop", DCAMERR_SUCCESS)
+    function dcamcap_stop(hdcam::Ptr{Cvoid})
+        Main.FakeDCAM.in_wait[] > 0 && push!(Main.FakeDCAM.violations, "dcamcap_stop")
+        return Main.FakeDCAM.record!("dcamcap_stop", DCAMERR_SUCCESS)
+    end
     function dcamcap_status(hdcam::Ptr{Cvoid})
         err = Main.FakeDCAM.record!("dcamcap_status", DCAMERR_SUCCESS)
         Main.FakeDCAM.on_status[]()
@@ -95,7 +162,10 @@ end
         return err, info
     end
     dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32) = Main.FakeDCAM.record!("dcambuf_alloc", DCAMERR_SUCCESS)
-    dcambuf_release(hdcam::Ptr{Cvoid}) = Main.FakeDCAM.record!("dcambuf_release", DCAMERR_SUCCESS)
+    function dcambuf_release(hdcam::Ptr{Cvoid})
+        Main.FakeDCAM.in_wait[] > 0 && push!(Main.FakeDCAM.violations, "dcambuf_release")
+        return Main.FakeDCAM.record!("dcambuf_release", DCAMERR_SUCCESS)
+    end
     function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
         err = Main.FakeDCAM.record!("dcambuf_getframe_err", DCAMERR_SUCCESS)
         return err, is_failed(err) ? nothing : zeros(UInt16, 2, 2)
@@ -112,4 +182,84 @@ end
     end
     dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32) =
         (Main.FakeDCAM.record!("dcamprop_getvalue", DCAMERR_SUCCESS), get(Main.FakeDCAM.values, iProp, 0.0))
+
+    function dcamapi_init()
+        FK = Main.FakeDCAM
+        push!(FK.calls, "dcamapi_init")
+        FK.inits[] += 1
+        dci = DCAMAPI_INIT()
+        dci.iDeviceCount = FK.device_count[]
+        err = get(FK.codes, "dcamapi_init", DCAMERR_SUCCESS)
+        FK.api_up[] = !is_failed(err)
+        return err, dci
+    end
+    function dcamapi_uninit()
+        FK = Main.FakeDCAM
+        push!(FK.calls, "dcamapi_uninit")
+        FK.uninits[] += 1
+        FK.api_up[] = false
+        return get(FK.codes, "dcamapi_uninit", DCAMERR_SUCCESS)
+    end
+    function dcamdev_open(i::Int)
+        err = Main.FakeDCAM.record!("dcamdev_open", DCAMERR_SUCCESS)
+        dco = DCAMDEV_OPEN()
+        dco.index = Int32(i)
+        dco.hdcam = is_failed(err) ? C_NULL : Ptr{Cvoid}(UInt(0x100 * (i + 1)))
+        return err, dco
+    end
+    function dcamdev_close(hdcam::Ptr{Cvoid})
+        push!(Main.FakeDCAM.closed, hdcam)
+        return Main.FakeDCAM.record!("dcamdev_close", DCAMERR_SUCCESS)
+    end
+    dcamdev_getstring(hdcam::Ptr{Cvoid}, strid::DCAM_IDSTR) =
+        (Main.FakeDCAM.record!("dcamdev_getstring", DCAMERR_SUCCESS), "FAKE")
+
+    function dcamwait_open(hdcam::Ptr{Cvoid})
+        FK = Main.FakeDCAM
+        err = FK.record!("dcamwait_open", DCAMERR_SUCCESS)
+        is_failed(err) && return err, C_NULL
+        FK.next_handle[] += 1
+        hwait = Ptr{Cvoid}(UInt(0x10000 + 16 * FK.next_handle[]))
+        push!(FK.open_waits, hwait)
+        return err, hwait
+    end
+    function dcamwait_close(hwait::Ptr{Cvoid})
+        delete!(Main.FakeDCAM.open_waits, hwait)
+        return Main.FakeDCAM.record!("dcamwait_close", DCAMERR_SUCCESS)
+    end
+    function dcamwait_abort(hwait::Ptr{Cvoid})
+        FK = Main.FakeDCAM
+        hwait in FK.active && push!(FK.aborted, hwait)  # not remembered by a wait that is not inside the event
+        return FK.record!("dcamwait_abort", DCAMERR_SUCCESS)
+    end
+    function dcamwait_event(hwait::Ptr{Cvoid}, eventmask::Int32, timeout_millisec::Int32)
+        FK = Main.FakeDCAM
+        err = FK.record!("dcamwait_event", DCAMERR_SUCCESS)
+        FK.in_wait[] += 1
+        try
+            if is_failed(err)
+                # answered by the call itself
+            elseif FK.wait_mode[] == :block
+                FK.entry_delay[] > 0 && sleep(FK.entry_delay[])
+                push!(FK.active, hwait)
+                deadline = time() + timeout_millisec / 1000
+                err = DCAMERR_TIMEOUT
+                while time() < deadline
+                    if hwait in FK.aborted
+                        err = DCAMERR_ABORT
+                        break
+                    end
+                    sleep(0.002)
+                end
+                err == DCAMERR_TIMEOUT && (FK.timeouts[] += 1)
+                delete!(FK.active, hwait)
+                delete!(FK.aborted, hwait)
+            end
+            FK.after_wait[]()
+        finally
+            FK.in_wait[] -= 1
+        end
+        push!(FK.calls, "dcamwait_event_end")
+        return err, eventmask
+    end
 end

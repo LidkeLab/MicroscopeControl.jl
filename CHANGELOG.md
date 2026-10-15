@@ -20,8 +20,35 @@ the next version with `-DEV`).
 
 ### Fixed
 
-Answers to the camera and laser items in 0.2.6's "Known issues", except where noted.
+Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answers". The camera entries are for
+`DCAM4Camera`.
 
+- `getlastframe` is safe to run in a thread while another task calls `abort`, `live`, `sequence` or `capture`. Each
+  frame wait is registered with the camera; a stop now aborts the waits in progress, waits for them to end, and only
+  then stops the capture and releases the buffer, so no wait is inside the library when its buffer goes. A
+  `getlastframe` whose capture was stopped or replaced returns `nothing`, reads no frame and leaves `last_error` as it
+  was (one warning per session). (Answers: "Stop any threaded `getlastframe` loop before calling `abort`, `live`,
+  `sequence` or `capture` from another task".)
+- `capture` no longer stops a live view or sequence that another task started while it waited for its frame: it reads
+  its frame and cleans up only while its capture is still the current one, and otherwise returns `nothing` after one
+  warning, as `getdata` does. It also ends its wait when another task's stop aborts it.
+- A stop that failed (`stop_and_release!`, and so `abort`) no longer moves the capture on to a new owner: the capture
+  may still be running, and the `sequence` task or `getdata` that owned it keeps owning it, so a sequence that ends later
+  still clears `is_running`. A stop that worked, or that found nothing running, does as before. The waits in progress
+  are aborted either way.
+- Two `DCAM4Camera`s in one process: shutting one down no longer uninitializes the DCAM API under the other. The API
+  is initialized by the first camera and uninitialized by the last `shutdown`; a constructor that fails gives back only
+  its own hold; `shutdown` twice is safe; `showdevicelist` borrows a hold rather than initializing and uninitializing
+  around a camera that is open.
+- The camera's live display (`gui(camera)`, `start_live`) no longer waits for a frame on the thread that draws. The
+  blocking `getlastframe` runs on its own thread (`Threads.@spawn`) and hands frames to a task that alone updates the
+  display; a `nothing` frame (a timeout) no longer ends the display with an error, and an all-zero frame no longer
+  fails to scale. With one Julia thread it behaves as before. Closing the window stops the reader, then the camera.
+- The DCAM frame wait lets Julia's garbage collector run on Julia 1.12 and later (`gc_safe`). Before, a collection on
+  any other thread stalled for the rest of the wait, seconds at long exposures, which froze whatever else the
+  process was doing. Julia 1.11 is unchanged.
+- `MCLStage.initialize` reads the stage's position into `targ_x`, `targ_y` and `targ_z`. They stayed at 0.0, so the
+  3D stage panel's first X step drove Y and Z to 0, a focus jump on the Z piezo.
 - `DCAM4Camera`: one internal lock per camera serializes the starts (`live`, `sequence`, `capture`) with
   `stop_and_release!` and `abort`, and covers `getdata`'s check that its capture is still current, its frame reads
   and its final stop and release, and the `sequence` task's stop. No status poll or frame wait runs under it. So a
@@ -49,6 +76,25 @@ Answers to the camera and laser items in 0.2.6's "Known issues", except where no
   bound of `"0.7"` alone was ignored with a warning on 1.13).
 - CI: `actions/checkout` v7 (#79) and `codecov/codecov-action` v7 (#78). Not shipped; no effect on
   the package.
+- `DCAM4Camera` `getlastframe` returns `nothing` at once, with one warning per session, when no live view or sequence
+  is running (`is_running`) or a stop is under way; it used to wait out its timeout. A caller that polls it after
+  `abort` sees `nothing` instead of a timeout error.
+- `DCAM4Camera` `shutdown` returns `nothing` (it returned the uninitialize result), closes the device once, and
+  leaves the camera with a null handle.
+
+### Known issues
+
+- Camera (`DCAM4Camera`):
+  - A stop waits for the frame waits in progress to end, with the camera's internal lock released. A second start
+    (`live`, `sequence`, `capture`) on another task can run in that gap; its buffer allocation then fails with
+    `last_error` set and the first start's capture runs on. Start a capture from one task at a time.
+  - `shutdown` does not stop a `getlastframe` loop that is running: `abort` it first.
+  - One hang inside a camera library call, on several cores after GPU code had loaded (0.2.6's summary), and the
+    NOTREADY, TIMEOUT and NOTSTABLE errors the rig logs during GUI use, are not fixed here. `DCAM4.dcam_trace!` records
+    the library calls to find them.
+- `PIStage`: `targ_x` and `targ_y` start at 12.5 and `initialize` does not read the position after the reference
+  move, so the stage panel's first X step can move Y to 12.5 instead of leaving it. (`MCLStage` had the same gap, fixed
+  above; `MCS2Stage` reads its position at `initialize`.)
 
 ## [0.2.6] - 2026-10-01
 

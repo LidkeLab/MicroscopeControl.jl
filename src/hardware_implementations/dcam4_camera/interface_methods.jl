@@ -4,33 +4,56 @@
     CameraInterface.getlastframe(camera::DCAM4Camera)
 
 Wait for the next frame for at most `capture_timeout_ms(exposure, readout)`, with the readout cached by
-`readout_time` (refreshed by `live`, `sequence` and `capture`). On a timeout or a failed wait it logs,
+`readout_time` (refreshed by `live`, `sequence` and `capture`), and return it. On a timeout or a failed wait it logs,
 sets `last_error` and returns `nothing`. A frame that cannot be copied returns `nothing` with `last_error` set.
+
+It is safe to call from a thread while another task calls `abort`, `live`, `sequence` or `capture`. The wait is
+registered with the camera (see `DCAM4Camera`), and a stop aborts it and waits for it to end before the buffer is
+released. When the capture it waited on has been stopped or replaced meanwhile it returns `nothing`, reads no frame
+and leaves `last_error` as it was, with one warning per session. With no live view or sequence running (`is_running`),
+or while a stop is under way, it returns `nothing` at once, with the same warning and no wait.
 """
 function CameraInterface.getlastframe(camera::DCAM4Camera)
     hdcam = camera.camera_handle
-    timeout_ms = capture_timeout_ms(camera.exposure_time, cached_readout_time(camera))
-    err, hwait = dcamwait_open(hdcam)
-    if is_failed(err)
-        @error "Failed to open a frame wait: $err"
-        camera.last_error = err
-        return nothing
-    end
-    try
-        err, event = dcamwait_event(hwait, Int32(DCAMWAIT_CAPEVENT_FRAMEREADY), timeout_ms)
+    # Register the wait under the lock, with the generation it waits on; the wait itself runs with the lock released.
+    gen, hwait, timeout_ms = @lock camera.acquisition_lock begin
+        if !camera.is_running || camera.draining > 0
+            @warn "DCAM4Camera $(camera.unique_id): getlastframe found no live view or sequence running (or one being stopped); returning nothing" maxlog = 1
+            return nothing
+        end
+        timeout_ms = capture_timeout_ms(camera.exposure_time, cached_readout_time(camera))
+        err, hwait = open_wait!(camera)
         if is_failed(err)
-            if is_timeout(err)
-                @error "Timeout to get last frame on event $event after $timeout_ms ms: $err"
-            else
-                @error "Failed to get last frame on event $event: $err"
-            end
+            @error "Failed to open a frame wait: $err"
             camera.last_error = err
             return nothing
         end
-        err, frame = dcambuf_getframe_err(hdcam, Int32(-1))
-        frame === nothing && (camera.last_error = err)
-        return frame
+        camera.capture_generation, hwait, timeout_ms
+    end
+    try
+        err, event = dcamwait_event(hwait, Int32(DCAMWAIT_CAPEVENT_FRAMEREADY), timeout_ms)
+        # Read only while this is still the capture that was waited on, and under the lock, so no stop or
+        # start can release or replace the buffer meanwhile. A stop aborts the wait and bumps the generation.
+        @lock camera.acquisition_lock begin
+            if camera.capture_generation != gen || err == DCAMERR_ABORT  # aborted by a stop that has not yet moved the generation on
+                @warn "DCAM4Camera $(camera.unique_id): getlastframe found its capture stopped or replaced (abort, live, sequence or capture); returning nothing" maxlog = 1
+                return nothing
+            end
+            if is_failed(err)
+                if is_timeout(err)
+                    @error "Timeout to get last frame on event $event after $timeout_ms ms: $err"
+                else
+                    @error "Failed to get last frame on event $event: $err"
+                end
+                camera.last_error = err
+                return nothing
+            end
+            err, frame = dcambuf_getframe_err(hdcam, Int32(-1))
+            frame === nothing && (camera.last_error = err)
+            return frame
+        end
     finally
+        finish_wait!(camera, hwait)
         dcamwait_close(hwait)
     end
 end
@@ -43,10 +66,15 @@ releases any leftover from an earlier call. It waits at most
 `capture_timeout_ms(exposure, readout)` (2 x (exposure + readout) + 1 s, with the readout read from the camera).
 A timeout or a failed wait logs, sets `last_error` and throws, after the capture is stopped and the buffer
 released. A failed buffer allocation or start returns `nothing` with `last_error` set, as before. A frame that cannot be copied returns `nothing` with `last_error` set.
+Another task's `abort`, `live`, `sequence` or `capture` during the frame wait aborts the wait (see `DCAM4Camera`).
+`capture` then returns `nothing` after one warning, reads no frame, leaves `last_error` as it was, and stops
+and releases nothing, since the camera is the other task's now.
 """
 function CameraInterface.capture(camera::DCAM4Camera)
     hdcam = camera.camera_handle
     hwait = C_NULL
+    gen = 0  # the generation of the capture this call owns, recorded under the lock once the leftovers are gone
+    current() = camera.capture_generation == gen
     # Held from the refusal through the start, so no other start or stop interleaves; released
     # before the frame wait (see `DCAM4Camera`).
     lock(camera.acquisition_lock)
@@ -62,6 +90,7 @@ function CameraInterface.capture(camera::DCAM4Camera)
         # Only leftovers get here (a failed capture, or a sequence that ended and was never read):
         # properties cannot change while a buffer is attached.
         stop_and_release!(camera)
+        gen = camera.capture_generation
         setexposuretime!(camera)
         settriggermode!(camera)
         setroi!(camera)
@@ -74,8 +103,9 @@ function CameraInterface.capture(camera::DCAM4Camera)
             camera.last_error = err
             return nothing
         end
-        # Arm the wait BEFORE the start, so a frame that is ready early cannot be missed.
-        err, hwait = dcamwait_open(hdcam)
+        # Arm the wait BEFORE the start, so a frame that is ready early cannot be missed. It is registered
+        # with the camera, so another task's stop aborts it and joins it before it releases the buffer.
+        err, hwait = open_wait!(camera)
         if is_failed(err)
             camera.last_error = err
             error("DCAM4Camera $(camera.unique_id): capture could not open a frame wait ($(err)).")
@@ -88,6 +118,15 @@ function CameraInterface.capture(camera::DCAM4Camera)
         held = false
         unlock(camera.acquisition_lock)  # never held across the frame wait
         err, _ = dcamwait_event(hwait, Int32(DCAMWAIT_CAPEVENT_FRAMEREADY), timeout_ms)
+        # Back under the lock: read and clean up only while this is still the capture started above.
+        lock(camera.acquisition_lock)
+        held = true
+        finish_wait!(camera, hwait)
+        if !current() || err == DCAMERR_ABORT  # a stop that has not yet moved the generation on aborts the wait too
+            cleanup = false  # another task's stop or start has the camera
+            @warn "DCAM4Camera $(camera.unique_id): capture found its capture stopped or replaced (abort, live, sequence or capture); returning nothing and leaving the camera alone"
+            return nothing
+        end
         if is_failed(err)
             camera.last_error = err
             what = is_timeout(err) ?
@@ -101,10 +140,12 @@ function CameraInterface.capture(camera::DCAM4Camera)
         frame === nothing && (camera.last_error = err)
         return frame
     finally
-        # On every exit from the allocation on, so the camera is usable afterwards. A failure here is
-        # logged, never thrown, so it cannot replace the error that got us here.
+        # On every exit from the allocation on, so the camera is usable afterwards, while it is still this
+        # capture's. A failure here is logged, never thrown, so it cannot replace the error that got us here.
         try
-            cleanup && stop_and_release!(camera)
+            # Leave the frame wait first: `stop_and_release!` waits for every registered wait to end.
+            hwait == C_NULL || finish_wait!(camera, hwait)
+            cleanup && stop_and_release!(camera; current = current)
         catch e
             @error "DCAM4Camera $(camera.unique_id): cleanup after capture failed" exception = e
         end
@@ -184,7 +225,7 @@ function CameraInterface.sequence(camera::DCAM4Camera, nframes::Real)
             return
         end
         camera.is_running = 1
-        camera.capture_generation, timeout_ms  # this sequence's generation (abort, above, already moved it on)
+        camera.capture_generation, timeout_ms  # this sequence's generation (abort, above, already moved it on if it stopped anything)
     end
     # Started after the lock is released; it takes the lock only around its check-and-act.
     @async begin
@@ -233,7 +274,8 @@ no release, `is_running` unchanged). A timeout, a failed status read or a frame 
 buffer, except when a newer capture (`abort`, `live`, `sequence` or `capture`, from another task) has replaced the
 one it reads: it then logs one warning and returns `nothing`, reading no frame, leaving `last_error` as it was and
 the newer capture's buffer alone. The replacement check, the reads and the cleanup hold the camera's acquisition
-lock; the status poll does not.
+lock; the status poll does not. The cleanup first aborts and joins any frame wait in progress (a `getlastframe` on
+another thread; see `stop_and_release!`), and is skipped if the capture was replaced meanwhile.
 """
 function CameraInterface.getdata(camera::DCAM4Camera)
     hdcam = camera.camera_handle
@@ -300,7 +342,7 @@ function CameraInterface.getdata(camera::DCAM4Camera)
         # capture (checked and acted on in one hold of the lock). A failure here is logged, never
         # thrown, so it cannot replace the error or the data that got us here.
         try
-            @lock camera.acquisition_lock (current() && stop_and_release!(camera))
+            stop_and_release!(camera; current = current)
         catch e
             @error "DCAM4Camera $(camera.unique_id): cleanup after getdata failed" exception = e
         end
@@ -397,9 +439,27 @@ function export_state(camera::DCAM4Camera)
     return attributes, data, children
 end
 
+"""
+    shutdown(camera::DCAM4Camera)
+
+Close the camera and give back its count of the DCAM API (`api_acquire!`). The API is uninitialized only when the
+last holder gives its count back, so shutting one camera down leaves another one in the process working. Calling
+it again is safe and does nothing.
+"""
 function shutdown(camera::DCAM4Camera)
-    dcamdev_close(camera.camera_handle)
-    dcamapi_uninit()
+    hdcam = @lock camera.acquisition_lock begin
+        h = camera.camera_handle
+        camera.camera_handle = C_NULL  # a second shutdown must not close the device again
+        h
+    end
+    hdcam isa Ptr && hdcam != C_NULL && dcamdev_close(hdcam)
+    held = @lock DCAM_API_LOCK begin
+        h = camera.api_held
+        camera.api_held = false
+        h
+    end
+    held && api_release!()
+    return nothing
 end
 
 function initialize(camera::DCAM4Camera)
