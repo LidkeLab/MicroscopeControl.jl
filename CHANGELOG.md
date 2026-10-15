@@ -112,7 +112,10 @@ in open loop and `setupIO` has no default output (breaking).
       matching the record at all 57 checks; write median 0.47 ms, with rare outliers up to
       12.5 ms;
     - small steps on a camera: from a 0 mW base, steps of 0.5 mW or less give no light; from
-      a base near threshold every step is linear (CALIBRATION.md, "What off means").
+      a base near threshold every step is linear (CALIBRATION.md, "What off means");
+    - full range, 0 ↔ 70 mW (that rig's ceiling): 71.1 mW read at 138.6 mA, under the
+      150 mA clamp with no current-limit bit, 70.5 mW refused; on a camera, 2 frames per edge
+      at 199 and 399 Hz, with no overshoot and a dark "off".
 
 ### Changed
 

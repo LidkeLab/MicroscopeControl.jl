@@ -387,7 +387,12 @@ lasers except the analogue-output guard below):
   (10-90 %, measured on a camera at 200, 500 and 800 Hz on 2026-10-14, base 0 mW: one transition frame then full
   level at 200 Hz, 1-2 frames at 500-800 Hz; OFF dark at every rate). Earlier, on a camera at
   200 Hz a step landed within one 5 ms frame: one transition frame per edge, the next frame at
-  full level, no overshoot (the manual gives 20 kHz full-depth bandwidth).
+  full level, no overshoot (the manual gives 20 kHz full-depth bandwidth). Full range on the
+  same rig (2026-10-14): 0 to a 70 mW ceiling through MOD IN switched in 2 frames per edge
+  (sometimes 1) at 199 and 399 Hz, with no overshoot and a dark "off". The loop held
+  70 mW at 138.6 mA, under its 150 mA clamp, with no current-limit bit. A 30-minute run at
+  400 Hz made 684,194 writes with no error, the light matching the record throughout; the
+  write median was 0.47 ms, with rare outliers of up to 12.5 ms.
 - **One setpoint register (TLD001, 2026-10-13).** The controller does not keep "software
   setpoint" and "external input" apart: it has ONE setpoint register. A USB setpoint write
   sets that register outright, and a later MOD IN change adds only its DIFFERENCE;
