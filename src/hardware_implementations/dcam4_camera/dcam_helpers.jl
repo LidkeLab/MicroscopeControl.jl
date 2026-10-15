@@ -280,36 +280,49 @@ const DRAIN_POLL_S = 0.05
 """
     open_wait!(camera::DCAM4Camera) -> (err, hwait)
 
-Open a frame wait and register it with the camera, so `stop_and_release!` can abort it and join it. Call it with
-`camera.acquisition_lock` held, before the wait starts. A wait that was registered is ended with `finish_wait!`.
-No wait is registered when the open fails.
+Open a frame wait and register it with the camera, so a drain (`drain_waits!`) can abort it and join it. Call it with
+`camera.acquisition_lock` held, before the wait starts, and put what follows in a `try` whose `finally` calls
+`finish_wait!`. No wait is registered when the open fails (the returned handle is then `C_NULL`); one that was opened
+and cannot be registered is closed before the error propagates.
 """
 function open_wait!(camera::DCAM4Camera)
     err, hwait = dcamwait_open(camera.camera_handle)
-    is_failed(err) || push!(camera.waits, hwait)
+    is_failed(err) && return err, C_NULL
+    try
+        push!(camera.waits, hwait)
+    catch
+        dcamwait_close(hwait)
+        rethrow()
+    end
     return err, hwait
 end
 
 """
     finish_wait!(camera::DCAM4Camera, hwait)
 
-Unregister a frame wait registered by `open_wait!` and tell `stop_and_release!`, which may be waiting for it. Takes
-the acquisition lock, and does nothing but notify if `hwait` is not registered, so a wait can be finished on every
-exit. Call it before anything that calls `stop_and_release!`, which would otherwise wait for this wait.
+End a frame wait registered by `open_wait!`: close its handle and unregister it in one hold of the acquisition lock,
+then tell the drain that may be waiting for it. A drain that ends therefore leaves no wait handle open. It does
+nothing for a handle that is not registered, so it is safe on every exit and when called twice. It is the only place a
+wait handle is closed. Call it before anything that calls `stop_and_release!`, which would otherwise wait for this wait.
 """
 function finish_wait!(camera::DCAM4Camera, hwait)
     @lock camera.acquisition_lock begin
         i = findfirst(==(hwait), camera.waits)
-        i === nothing || deleteat!(camera.waits, i)
-        notify(camera.acquisition_changed; all = true)
+        i === nothing && return nothing
+        try
+            dcamwait_close(hwait)
+        finally
+            deleteat!(camera.waits, i)
+            notify(camera.acquisition_changed; all = true)
+        end
     end
     return nothing
 end
 
 # Abort every registered frame wait and wait, with the lock released, until all have left. Call it with the lock
-# held. It re-aborts every DRAIN_POLL_S: whether DCAM remembers an abort sent to a wait that has not entered
-# `dcamwait_start` is not settled by the SDK headers, so no abort is relied on to land the first time. A task blocked
-# in a DCAM wait ends in bounded time, at the abort or at its own timeout.
+# held, as the FIRST thing a start, a stop or `shutdown` does. It re-aborts every DRAIN_POLL_S: whether DCAM remembers
+# an abort sent to a wait that has not entered `dcamwait_start` is not settled by the SDK headers, so no abort is relied
+# on to land the first time. A task blocked in a DCAM wait ends in bounded time, at the abort or at its own timeout.
 function drain_waits!(camera::DCAM4Camera)
     isempty(camera.waits) && return nothing
     camera.draining += 1  # no new frame wait registers meanwhile, so a polling loop cannot starve the drain
@@ -337,24 +350,28 @@ end
     stop_and_release!(camera::DCAM4Camera; current = () -> true)
 
 Leave the camera with no capture running and no buffer attached, whatever an earlier call left behind (a live view,
-a sequence, or a capture that failed). It first aborts every frame wait in progress (`getlastframe`, `capture`) and
-waits for it to end, with the acquisition lock released, as the vendor's samples do; only then does it stop the capture
-and release the buffer, so no frame wait is inside the library when its buffer goes. It reads the status next and does
-nothing more only when the status is known to be STABLE (no buffer) or UNSTABLE. A failed status read, BUSY or ERROR is
-stopped (unless READY, which is already stopped); then anything with a buffer is released. The helpers log their own
-failures and never throw. When the stop and the release both worked, or nothing was running, it sets
-`camera.is_running = false` and increments `capture_generation`, so a `sequence` poller or `getdata` started before it
-no longer acts. When the stop or the release failed it records that error in `last_error`, leaves `is_running` as it was
-and leaves the generation alone, since the capture may still be running and whoever owned it still does. Every start
-goes through it first: `live` and `sequence` through `abort`, and `capture` directly.
+a sequence, or a capture that failed). It first checks `current()`: when it is false the capture the caller meant to
+stop has been replaced, and nothing is touched, no wait aborted. Otherwise it aborts every frame wait in progress
+(`getlastframe`, `capture`) and waits for it to end, with the acquisition lock released, as the vendor's samples do,
+and checks `current()` again; only then does it stop the capture and release the buffer, so no frame wait is inside the
+library when its buffer goes. It reads the status next and does nothing more only when the status is known to be STABLE
+(no buffer) or UNSTABLE. A failed status read, BUSY or ERROR is stopped (unless READY, which is already stopped); then
+anything with a buffer is released. The helpers log their own failures and never throw. When the stop and the release
+both worked, or nothing was running, it sets `camera.is_running = false` and increments `capture_generation`, so a
+`sequence` poller or `getdata` started before it no longer acts. When the stop or the release failed it records that
+error in `last_error`, leaves `is_running` as it was and leaves the generation alone, since the capture may still be
+running and whoever owned it still does. A `capture` whose wait that stop aborted does not own it: the failed stop
+leaves it as a leftover that the next start, `capture` or `abort` stops and releases. It does nothing on a camera that
+has been shut down. Every start goes through it first: `live` and `sequence` through `abort`, and `capture` directly.
 It holds the camera's acquisition lock throughout except while it waits for the frame waits to end (see
-`DCAM4Camera`), so no start interleaves with the stop itself. `current` is checked after that wait, and when it
-is false the capture that the caller meant to stop has been replaced meanwhile, so nothing more is touched.
+`DCAM4Camera`), and its drain is empty inside a start, which drained first.
 """
 function stop_and_release!(camera::DCAM4Camera; current::Function = () -> true)
     @lock camera.acquisition_lock begin  # no other start or stop interleaves (see `DCAM4Camera`)
+        stale() = !current() || camera.closing == 2
+        stale() && return nothing
         drain_waits!(camera)
-        current() || return nothing
+        stale() && return nothing
         hdcam = camera.camera_handle
         err, status = dcamcap_status(hdcam)
         # Nothing to do only when the status is known to be STABLE (no buffer) or UNSTABLE. A failed
@@ -393,8 +410,12 @@ function wait_not_busy(camera::DCAM4Camera, timeout_ms::Integer, what::AbstractS
                        current::Function = () -> true)
     deadline = time() + timeout_ms / 1000
     logged = false
-    while current()
-        err, status = dcamcap_status(camera.camera_handle)
+    while true
+        # One status read, under the lock with the currency check, so a stop, a start or `shutdown` never
+        # closes or replaces what it reads (it is a non-blocking call). The sleep below holds nothing.
+        polled = @lock camera.acquisition_lock (current() && camera.closing != 2 ? dcamcap_status(camera.camera_handle) : nothing)
+        polled === nothing && return false
+        err, status = polled
         if is_failed(err)
             logged || @error "DCAM4Camera $(camera.unique_id): $(what) could not read the capture status ($(err)); retrying until the deadline"
             logged = true
@@ -409,5 +430,4 @@ function wait_not_busy(camera::DCAM4Camera, timeout_ms::Integer, what::AbstractS
         end
         sleep(STATUS_POLL_S)
     end
-    return false
 end

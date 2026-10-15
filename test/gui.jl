@@ -106,6 +106,14 @@ end
         @test cam.is_running == 1
         abort(cam)
 
+        # The reader runs on its own thread: a read that blocks in a foreign call must not stop the render side. That
+        # needs a second thread, so it runs in a `julia -t 2` subprocess, where `Pkg.test()` and CI exercise it.
+        check = joinpath(@__DIR__, "gui_threads_check.jl")
+        out = IOBuffer()
+        ok = success(pipeline(ignorestatus(`$(Base.julia_cmd()) -t 2 --project=$(Base.active_project()) $check`); stdout = out, stderr = out))
+        ok || print(String(take!(out)))
+        @test ok
+
         # The whole display, on the simulated camera: it runs, and closing the window stops the camera and the loop.
         cam = SimCamera(exposure_time = 0.001, roi = CameraROI(0, 0, 64, 48))
         task = quiet(() -> CI.start_live(cam))

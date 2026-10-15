@@ -111,14 +111,13 @@
     live_camera() = (cam = fake_camera(DC.LIVE); cam.is_running = true; cam)
     in_wait(n = 1) = timedwait(() -> FK.in_wait[] == n, 10.0; pollint = 0.002) === :ok
 
-    @testset "A: getlastframe refuses with nothing running" begin
+    @testset "A: getlastframe with no live view still waits and reads, as on 0.2.6" begin
         FK.reset!()
-        cam = fake_camera(DC.LIVE)
-        quiet() do
-            @test CameraInterface.getlastframe(cam) === nothing
-        end
-        @test FK.first_index("dcamwait_open") === nothing
-        @test isempty(cam.waits)
+        cam = fake_camera(DC.SEQUENCE)    # a sequence that ended: is_running is false, its buffer still holds the frames
+        @test !cam.is_running
+        @test CameraInterface.getlastframe(cam) == zeros(UInt16, 2, 2)
+        @test FK.first_index("dcamwait_open") !== nothing
+        @test isempty(cam.waits) && isempty(FK.open_waits)
     end
 
     @testset "A: getlastframe reads under the lock and unregisters" begin
@@ -340,15 +339,15 @@
     @testset "D: two cameras share the API; one shutdown leaves the other working" begin
         FK.reset!()
         FK.api_down_code[] = DC.DCAMERR_NOTREADY             # every call fails once the API is uninitialized
-        @test DC.DCAM_API_USERS[] == 0
+        DC.DCAM_API_USERS[] = 0                              # the cameras made positionally above each adopted a count
         c1 = DC.DCAM4Camera(0)
         c2 = DC.DCAM4Camera(1)
-        @test FK.inits[] == 1 && DC.DCAM_API_USERS[] == 2
+        @test FK.inits[] == 1 && DC.DCAM_API_USERS[] == 2    # the keyword constructor counts once, not twice
         @test c1.camera_handle != c2.camera_handle
-        DC.shutdown(c1)
+        @test DC.shutdown(c1) === DC.DCAMERR_SUCCESS         # another holder keeps the API up: the 0.2.6 success code
         @test FK.uninits[] == 0 && FK.api_up[] && DC.DCAM_API_USERS[] == 1
         @test CameraInterface.capture(c2) == zeros(UInt16, 2, 2)     # the other camera still captures
-        DC.shutdown(c1)                                      # twice is safe: no second close, no second count given back
+        @test DC.shutdown(c1) === DC.DCAMERR_SUCCESS         # twice is safe: no second close, no second count given back
         @test FK.uninits[] == 0 && length(FK.closed) == 1 && DC.DCAM_API_USERS[] == 1
         # A constructor that fails after its own init gives back only its own count.
         FK.codes["dcamdev_open"] = DC.DCAMERR_NOTREADY
@@ -362,10 +361,14 @@
             DC.showdevicelist()
         end
         @test FK.inits[] == inits && FK.uninits[] == 0 && DC.DCAM_API_USERS[] == 1
-        DC.shutdown(c2)
+        # The last shutdown uninitializes, and returns the library's code for it, as on 0.2.6.
+        FK.codes["dcamapi_uninit"] = DC.DCAMERR_NOTREADY
+        quiet() do
+            @test DC.shutdown(c2) == DC.DCAMERR_NOTREADY
+        end
+        delete!(FK.codes, "dcamapi_uninit")
         @test FK.uninits[] == 1 && !FK.api_up[] && DC.DCAM_API_USERS[] == 0
-        DC.shutdown(c2)
-        @test FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0
+        @test DC.shutdown(c2) === DC.DCAMERR_SUCCESS && FK.uninits[] == 1
         # With no camera, showdevicelist initializes and uninitializes around itself, and a failed init takes no count.
         redirect_stdout(devnull) do
             DC.showdevicelist()
@@ -376,5 +379,185 @@
             @test_throws r"dcamapi_init failed" DC.DCAM4Camera(0)
         end
         @test DC.DCAM_API_USERS[] == 0 && FK.uninits[] == 3  # the failed init is followed by an uninit, as it always was
+    end
+
+    handle_camera(mode, h = 0x200) = DC.DCAM4Camera("fake", DC.CameraFormat(1, 1, 1, 1, "SCMOS"), Ptr{Cvoid}(UInt(h)), 0.01, 10.0,
+        DC.CameraROI(0, 0, 1, 1), mode, DC.DCAMPROP_TRIGGER_MODE__NORMAL, 2, DC.DCAMERR_SUCCESS,
+        false, 0, zeros(UInt16, 1, 1), NaN, 0)
+
+    @testset "Round 2 item 9: a positionally built camera uninitializes the API it was built around" begin
+        FK.reset!()
+        DC.DCAM_API_USERS[] = 0
+        DC.dcamapi_init()                                    # the caller's own initialization
+        cam = handle_camera(DC.LIVE)
+        @test DC.DCAM_API_USERS[] == 1 && FK.uninits[] == 0
+        @test DC.shutdown(cam) === DC.DCAMERR_SUCCESS
+        @test FK.uninits[] == 1 && !FK.api_up[] && FK.closed == [Ptr{Cvoid}(UInt(0x200))]
+    end
+
+    @testset "Round 2 item 1: overlapping starts leave the SDK mode and capture_mode in agreement" begin
+        FK.reset!()
+        FK.wait_mode[] = :block
+        FK.entry_delay[] = 0.3                               # the drain lasts, so both starts are inside it together
+        FK.status[] = DC.DCAMCAP_STATUS_BUSY
+        cam = live_camera()
+        seen = Tuple{Bool,Bool}[]                            # at each SDK start: (it is the live start, the camera says LIVE)
+        FK.on_start[] = m -> push!(seen, (m == Int32(DC.DCAMCAP_START_SEQUENCE), cam.capture_mode == DC.LIVE))
+        quiet() do
+            waiter = @async CameraInterface.getlastframe(cam)
+            @test in_wait()
+            l = @async CameraInterface.live(cam)
+            q = @async CameraInterface.sequence(cam, 2)
+            @test finished(l) && finished(q) && finished(waiter)
+        end
+        @test length(seen) == 2
+        @test all(p -> p[1] == p[2], seen)                   # no start ran with the other's mode published
+        @test cam.is_running && cam.draining == 0 && isempty(cam.waits)
+    end
+
+    @testset "Round 2 item 2: a stale cleanup aborts nobody's wait" begin
+        FK.reset!()
+        FK.wait_mode[] = :block
+        cam = fake_camera(DC.LIVE)
+        cap = @async CameraInterface.capture(cam)
+        @test in_wait()
+        DC.stop_and_release!(cam; current = () -> false)
+        @test FK.first_index("dcamwait_abort") === nothing
+        FK.ready_now[] = true                                # the frame arrives
+        @test finished(cap)
+        @test fetch(cap) == zeros(UInt16, 2, 2)
+    end
+
+    @testset "Round 2 item 3: a drain that ends leaves no wait handle open" begin
+        FK.reset!()
+        DC.DCAM_API_USERS[] = 0
+        DC.dcamapi_init()
+        FK.wait_mode[] = :block
+        FK.status[] = DC.DCAMCAP_STATUS_BUSY
+        cam = handle_camera(DC.LIVE)
+        cam.is_running = true
+        FK.on_wait_close[] = () -> sleep(0.2)                # the waiter is slow to close its handle
+        waiter = @async CameraInterface.getlastframe(cam)
+        @test in_wait()
+        FK.ready_now[] = true
+        @test timedwait(() -> "dcamwait_event_end" in FK.calls, 10.0; pollint = 0.002) === :ok
+        CameraInterface.abort(cam)
+        DC.shutdown(cam)
+        @test finished(waiter)
+        @test isempty(FK.violations)                         # the device was never closed with a wait handle open
+        @test FK.last_index("dcamwait_close") < FK.first_index("dcamdev_close") < FK.first_index("dcamapi_uninit")
+    end
+
+    @testset "Round 2 item 4: an exception after the wait registers leaves nothing registered or open" begin
+        FK.reset!()
+        cam = live_camera()
+        FK.on_wait_enter[] = () -> throw(InterruptException())
+        @test_throws InterruptException CameraInterface.getlastframe(cam)
+        @test isempty(cam.waits) && isempty(FK.open_waits)
+        quiet() do
+            @test_throws InterruptException CameraInterface.capture(fake_camera(DC.LIVE))
+        end
+        @test isempty(FK.open_waits)
+        FK.on_wait_enter[] = () -> nothing
+        # An abort afterwards does not hang on a handle nobody will end.
+        @test finished(@async CameraInterface.abort(cam))
+    end
+
+    @testset "Round 2 item 5: shutdown is one coordinated operation" begin
+        # Two shutdowns at once: the second neither closes the device nor gives the API count back, and does not
+        # return before the first has finished.
+        FK.reset!()
+        DC.DCAM_API_USERS[] = 0
+        DC.dcamapi_init()
+        cam = handle_camera(DC.LIVE)
+        FK.on_dev_close[] = () -> sleep(0.2)
+        done = Symbol[]
+        s1 = @async (DC.shutdown(cam); push!(done, :first))
+        @test timedwait(() -> "dcamdev_close" in FK.calls, 10.0; pollint = 0.002) === :ok
+        s2 = @async (r = DC.shutdown(cam); push!(done, :second); r)
+        @test finished(s1) && finished(s2)
+        @test done == [:first, :second] && fetch(s2) === DC.DCAMERR_SUCCESS
+        @test length(FK.closed) == 1 && FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0
+        @test FK.first_index("dcamdev_close_end") < FK.first_index("dcamapi_uninit")
+
+        # A second shutdown that arrives while the first is still joining a frame wait (the lock is free then) waits too.
+        FK.reset!()
+        FK.wait_mode[] = :block
+        FK.entry_delay[] = 0.3
+        FK.status[] = DC.DCAMCAP_STATUS_BUSY
+        DC.DCAM_API_USERS[] = 0
+        DC.dcamapi_init()
+        cam = handle_camera(DC.LIVE)
+        cam.is_running = true
+        done = Symbol[]
+        quiet() do
+            waiter = @async CameraInterface.getlastframe(cam)
+            @test in_wait()
+            s1 = @async (DC.shutdown(cam); push!(done, :first))
+            @test timedwait(() -> cam.closing == 1 && cam.draining == 1, 10.0; pollint = 0.002) === :ok
+            s2 = @async (DC.shutdown(cam); push!(done, :second))
+            @test finished(s1) && finished(s2) && finished(waiter)
+        end
+        @test done == [:first, :second]
+        @test length(FK.closed) == 1 && FK.uninits[] == 1 && isempty(FK.violations)
+
+        # Shutdown during a capture: the wait is aborted and joined, nothing is read from the closed device, and every
+        # later call fails cleanly with no DCAM call.
+        FK.reset!()
+        FK.wait_mode[] = :block
+        DC.DCAM_API_USERS[] = 0
+        c = DC.DCAM4Camera(0)
+        quiet() do
+            cap = @async CameraInterface.capture(c)
+            @test in_wait()
+            DC.shutdown(c)
+            @test finished(cap) && fetch(cap) === nothing
+            @test FK.first_index("dcamwait_abort") < FK.first_index("dcamdev_close") < FK.first_index("dcamapi_uninit")
+            @test FK.last_index("dcambuf_getframe_err") === nothing && isempty(FK.violations)
+            @test c.camera_handle == C_NULL && !c.is_running
+            n = length(FK.calls)
+            @test CameraInterface.getlastframe(c) === nothing
+            @test CameraInterface.getdata(c) === nothing
+            @test_throws r"shut down" CameraInterface.capture(c)
+            CameraInterface.live(c); @test c.last_error == DC.DCAMERR_INVALIDHANDLE
+            c.last_error = DC.DCAMERR_SUCCESS
+            CameraInterface.sequence(c, 2); @test c.last_error == DC.DCAMERR_INVALIDHANDLE
+            CameraInterface.abort(c)
+            @test length(FK.calls) == n                      # no DCAM call on the closed handle
+        end
+    end
+
+    @testset "Round 2 item 7: LIVE getdata reads only while its capture is current" begin
+        FK.reset!()
+        cam = fake_camera(DC.LIVE)
+        quiet() do
+            @test DC.read_live_frame(cam, () -> false) === nothing
+        end
+        @test FK.first_index("dcambuf_getframe_err") === nothing
+        @test DC.read_live_frame(cam, () -> true) == zeros(UInt16, 2, 2)
+    end
+
+    @testset "Round 2 item 8: a stop that fails during a capture leaves a leftover the next call cleans up" begin
+        for next in (cam -> CameraInterface.abort(cam), cam -> (FK.wait_mode[] = :ready; CameraInterface.capture(cam)))
+            FK.reset!()
+            FK.wait_mode[] = :block
+            cam = fake_camera(DC.LIVE)
+            quiet() do
+                cap = @async CameraInterface.capture(cam)
+                @test in_wait()
+                FK.status[] = DC.DCAMCAP_STATUS_BUSY
+                FK.codes["dcamcap_stop"] = DC.DCAMERR_NOTREADY
+                gen = cam.capture_generation
+                CameraInterface.abort(cam)
+                @test finished(cap) && fetch(cap) === nothing
+                @test cam.last_error == DC.DCAMERR_NOTREADY && cam.capture_generation == gen
+                delete!(FK.codes, "dcamcap_stop")
+                stops = count(==("dcamcap_stop"), FK.calls)
+                releases = count(==("dcambuf_release"), FK.calls)
+                next(cam)
+                @test count(==("dcamcap_stop"), FK.calls) >= stops + 1     # the leftover is stopped and released (a capture also cleans up after itself)
+                @test count(==("dcambuf_release"), FK.calls) >= releases + 1
+            end
+        end
     end
 end

@@ -38,10 +38,11 @@ the source. Treat a hard crash of the Julia process as a possible outcome, not a
 certainty, and do not rely on either.
 
 **[existing guarantee]** From 0.2.7 the DCAM4 driver registers every frame wait (`getlastframe`, `capture`) with the
-camera, and `abort` (and every start) aborts the waits in progress and waits for them to end before it stops the
-capture and releases the buffer; a `getlastframe` whose capture was stopped meanwhile returns `nothing` and reads no
-frame. This is tested against a fake SDK (`test/dcam4_fake_paths.jl`), not on a rig. It holds for DCAM4 only, so the
-policy below stays the requirement for every driver.
+camera, and `abort`, every start (`live`, `sequence`, `capture`) and `shutdown` first abort the waits in progress and
+wait for them to end before they stop the capture, release the buffer or close the device; a `getlastframe` whose
+capture was stopped meanwhile returns `nothing` and reads no frame, and after `shutdown` it returns `nothing` without
+a DCAM call. This is tested against a fake SDK (`test/dcam4_fake_paths.jl`), not on a rig. It holds for DCAM4 only, so
+the policy below stays the requirement for every driver.
 
 **[policy]** The requirement, on every driver:
 

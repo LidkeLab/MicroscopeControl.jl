@@ -274,13 +274,15 @@ everything else. **Fixed in 0.2.1:** `DCAM4Camera()` used to return a
 the DCAM SDK initialized, so you had to call
 `MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself before the next
 open); it now throws on both failure paths, and each of those two paths
-calls `dcamapi_uninit()` before it throws. That is not a general guarantee:
-an exception raised after `dcamdev_open` succeeds (e.g. reading sensor size
-or exposure) has no cleanup guard, and on the two paths that do clean up the
-cleanup is only *attempted* -- `dcamapi_uninit()` checks its own SDK result
-and logs an `@error` when it fails, but the constructor ignores that return
-and throws either way, so a failed uninitialize shows up in the log and
-nowhere else. If you're on an installed copy older
+calls `dcamapi_uninit()` before it throws. **[existing guarantee, 0.2.7]**
+The API is reference-counted per process: the first camera initializes it,
+the last `shutdown` uninitializes it, a constructor that fails gives back only
+its own count, and an exception after `dcamdev_open` succeeds closes the
+device and gives the count back before it propagates (tested against a fake
+SDK, not on a rig). **[current limitation]** A failed uninitialize is
+*attempted* and logged -- `dcamapi_uninit()` checks its own SDK result and
+logs an `@error` when it fails -- and `shutdown` returns its code, but the
+constructor throws its own error either way. If you're on an installed copy older
 than 0.2.1, guard the return value yourself --
 `cam isa DCAM4Camera || error("DCAM4 open failed: $(repr(cam))")` -- and on
 a `nothing` return call

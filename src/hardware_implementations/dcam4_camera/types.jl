@@ -30,48 +30,63 @@ mutable struct DCAM4Camera <: Camera
     readout_s::Float64
     capture_generation::Int
     # The per-camera acquisition lock. It serializes every start (`live`, `sequence`, `capture`) with
-    # `stop_and_release!` (and so `abort`), and covers `getdata`'s generation check, its frame reads
-    # and its final cleanup, a frame wait's registration and its read afterwards (`getlastframe`,
-    # `capture`), and the `sequence` poller's check-and-act (its stop, and clearing `is_running`).
-    # Reentrant: `stop_and_release!` runs inside the starts and inside `getdata`'s cleanup.
+    # `stop_and_release!` (and so `abort`) and `shutdown`, and covers `getdata`'s generation check, its frame
+    # reads and its final cleanup, a frame wait's registration, its read and its end (`getlastframe`,
+    # `capture`), the capture status poll, and the `sequence` poller's check-and-act. Reentrant:
+    # `stop_and_release!` runs inside the starts, inside `shutdown` and inside `getdata`'s cleanup.
     #
-    # Invariant: a holder makes only non-blocking DCAM calls and waits for no other task, with one
-    # exception, `stop_and_release!`, which waits for the registered frame waits to end, and does so
-    # with the lock RELEASED (`wait` on `acquisition_changed`, a Condition on this lock, releases a
-    # reentrant lock at every depth, and takes it back before it returns). The blocking DCAM waits
-    # (`dcamwait_event`, in `getlastframe` and `capture`) and `wait_not_busy`'s poll and sleep run with the
-    # lock released. A frame wait is registered in `waits` under the lock, before it starts, and
-    # unregistered under the lock when it ends, so `stop_and_release!` can abort it and join it
-    # before it stops the capture and releases the buffer.
+    # Invariant: a holder makes only non-blocking DCAM calls and waits for no other task, except in two
+    # places, where the wait releases the lock (`wait` on `acquisition_changed`, a Condition on this
+    # lock, releases a reentrant lock at every depth and takes it back before it returns): `drain_waits!`,
+    # which waits for the registered frame waits to end, and a second `shutdown`, which waits for the first.
+    # Every start, every stop and `shutdown` calls `drain_waits!` FIRST, before it reads or writes any
+    # camera state, and holds the lock continuously from then on. A frame wait registers under the lock
+    # and nothing registers while it is held, so once the drain returns nothing in the start or stop
+    # releases the lock: the nested `stop_and_release!`'s drain is empty, and no other task sees or
+    # changes the camera until the start is whole. The blocking DCAM waits (`dcamwait_event`, in
+    # `getlastframe` and `capture`) and `wait_not_busy`'s sleep run with the lock released. A frame wait is
+    # registered in `waits` under the lock, before it starts, and its handle is closed and unregistered
+    # in one hold of the lock when it ends (`finish_wait!`), so a drain that ends leaves no handle open.
     #
-    # Every wait is bounded. A frame wait ends when `stop_and_release!` aborts it (it repeats the abort
-    # every `DRAIN_POLL_S`, so an abort that reached a wait before it entered `dcamwait_start` is not
-    # lost) or at its own `capture_timeout_ms`. While a drain runs (`draining > 0`) no new frame wait
-    # registers, so a polling loop cannot keep the drain from ending. A task that holds the lock
-    # while it waits for a frame (a caller that locked it and then called `getlastframe`) delays a
-    # stop by at most that wait's timeout. So the drain ends, and every other hold ends in bounded time.
+    # Every wait is bounded. A frame wait ends when a drain aborts it (it repeats the abort every
+    # `DRAIN_POLL_S`, so an abort that reached a wait before it entered `dcamwait_start` is not lost) or
+    # at its own `capture_timeout_ms`. While a drain runs (`draining > 0`) and once `shutdown` has begun
+    # (`closing > 0`) no new frame wait registers, so a polling loop cannot keep a drain from ending. A
+    # task that holds the lock while it waits for a frame (a caller that locked it and then called
+    # `getlastframe`) delays a stop by at most that wait's timeout. So every drain ends, and every other
+    # hold ends in bounded time.
     acquisition_lock::ReentrantLock
-    acquisition_changed::Threads.Condition  # on `acquisition_lock`; notified when a frame wait unregisters
+    acquisition_changed::Threads.Condition  # on `acquisition_lock`; notified when a frame wait ends or `shutdown` finishes
     waits::Vector{Ptr{Cvoid}}               # the DCAM wait handles of the frame waits in progress
-    draining::Int                           # the `stop_and_release!` calls that are joining waits
+    draining::Int                           # the drains in progress (`drain_waits!`)
+    closing::Int                            # 0 open, 1 `shutdown` under way, 2 shut down: the device is closed
     api_held::Bool                          # whether this camera holds a count of the DCAM API (see `api_acquire!`)
 end
 
-# The fields before the lock, positionally; the lock and what goes with it are always new. A camera built
-# this way holds no count of the DCAM API: only the keyword constructor, which initializes it, does.
+# Assemble a camera with its lock and what goes with it, all new.
+assemble_camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
+                sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation, api_held) =
+    (lock = ReentrantLock();
+     DCAM4Camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
+                 sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation,
+                 lock, Threads.Condition(lock), Ptr{Cvoid}[], 0, 0, api_held))
+
+# The fields before the lock, positionally; the lock and what goes with it are always new. The caller
+# initialized the DCAM API and opened the device, so the camera adopts a count of the API without
+# initializing it (`api_adopt!`), and its `shutdown` uninitializes when it is the last holder, as on 0.2.6.
 function DCAM4Camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
                      sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation)
-    lock = ReentrantLock()
-    return DCAM4Camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
-                       sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation,
-                       lock, Threads.Condition(lock), Ptr{Cvoid}[], 0, false)
+    api_adopt!()
+    return assemble_camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
+                           sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation, true)
 end
 
 """
     DCAM_API_USERS
 
-The number of holders of the DCAM API in this process: every `DCAM4Camera` made by its keyword constructor, until
-its `shutdown`, and every `showdevicelist` while it runs. The library is initialized (`dcamapi_init`) when the first
+The number of holders of the DCAM API in this process: every `DCAM4Camera` (the keyword constructor initializes the
+API; the positional one adopts the caller's initialization), until its `shutdown`, and every `showdevicelist` while it
+runs. The library is initialized (`dcamapi_init`) when the first
 one arrives and uninitialized (`dcamapi_uninit`) when the last leaves, so shutting one camera down leaves the API
 up under another. Guarded by `DCAM_API_LOCK`.
 """
@@ -102,17 +117,25 @@ function api_acquire!()
 end
 
 """
-    api_release!()
+    api_adopt!()
 
-Give back a count taken by `api_acquire!`; the last one uninitializes the API.
+Take a count of the DCAM API without initializing it, for a camera whose caller did.
+"""
+api_adopt!() = (@lock DCAM_API_LOCK (DCAM_API_USERS[] += 1); nothing)
+
+"""
+    api_release!() -> err
+
+Give back a count taken by `api_acquire!` or `api_adopt!`. The last one uninitializes the API and returns the
+`DCAMERR` of `dcamapi_uninit`; every other call returns `DCAMERR_SUCCESS`.
 """
 function api_release!()
     @lock DCAM_API_LOCK begin
-        DCAM_API_USERS[] > 0 || return nothing
+        DCAM_API_USERS[] > 0 || return DCAMERR_SUCCESS
         DCAM_API_USERS[] -= 1
-        DCAM_API_USERS[] == 0 && dcamapi_uninit()
+        DCAM_API_USERS[] == 0 && return dcamapi_uninit()
+        return DCAMERR_SUCCESS
     end
-    return nothing
 end
 
 function DCAM4Camera(dev_id::Int = 0;
@@ -152,9 +175,8 @@ function DCAM4Camera(dev_id::Int = 0;
         err, exposure_time = dcamprop_getvalue(hdcam, DCAM_IDPROP_EXPOSURETIME)
         data = zeros(UInt16, im_width, im_height)
 
-        camera = DCAM4Camera(unique_id, camera_format, hdcam, exposure_time, frame_rate, roi, capture_mode, trigger_mode, sequence_length, last_error, is_running, camerastate, data, NaN, 0)
-        camera.api_held = true
-        return camera
+        # The count taken above is this camera's own: `assemble_camera`, not the positional constructor, which adopts one.
+        return assemble_camera(unique_id, camera_format, hdcam, exposure_time, frame_rate, roi, capture_mode, trigger_mode, sequence_length, last_error, is_running, camerastate, data, NaN, 0, true)
     catch
         hdcam == C_NULL || dcamdev_close(hdcam)
         api_release!()

@@ -23,23 +23,36 @@ the next version with `-DEV`).
 Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answers". The camera entries are for
 `DCAM4Camera`.
 
-- `getlastframe` is safe to run in a thread while another task calls `abort`, `live`, `sequence` or `capture`. Each
-  frame wait is registered with the camera; a stop now aborts the waits in progress, waits for them to end, and only
-  then stops the capture and releases the buffer, so no wait is inside the library when its buffer goes. A
-  `getlastframe` whose capture was stopped or replaced returns `nothing`, reads no frame and leaves `last_error` as it
-  was (one warning per session). (Answers: "Stop any threaded `getlastframe` loop before calling `abort`, `live`,
+- `getlastframe` is safe to run in a thread while another task calls `abort`, `live`, `sequence`, `capture` or
+  `shutdown`. Each frame wait is registered with the camera; a stop, a start or `shutdown` first aborts the waits in
+  progress and waits for them to end, and only then stops the capture, releases the buffer or closes the device, so
+  no wait is inside the library, and no wait handle is open, when they go. A `getlastframe` whose capture was stopped
+  or replaced returns `nothing`, reads no frame and leaves `last_error` as it was (one warning per session). Starts
+  stay whole: a start drains first and then holds the camera's lock to its end, so two starts on different tasks
+  cannot leave the camera's mode and the SDK's disagreeing. (Answers: "Stop any threaded `getlastframe` loop before calling `abort`, `live`,
   `sequence` or `capture` from another task".)
 - `capture` no longer stops a live view or sequence that another task started while it waited for its frame: it reads
   its frame and cleans up only while its capture is still the current one, and otherwise returns `nothing` after one
-  warning, as `getdata` does. It also ends its wait when another task's stop aborts it.
+  warning, as `getdata` does. A stale cleanup (a `getdata` or `capture` whose capture was replaced) aborts nobody's
+  wait and stops nothing. `getdata` in LIVE mode likewise reads only while its capture is current.
 - A stop that failed (`stop_and_release!`, and so `abort`) no longer moves the capture on to a new owner: the capture
   may still be running, and the `sequence` task or `getdata` that owned it keeps owning it, so a sequence that ends later
   still clears `is_running`. A stop that worked, or that found nothing running, does as before. The waits in progress
-  are aborted either way.
+  are aborted either way. A `capture` whose wait that stop aborted does not own the capture: if the stop failed,
+  `last_error` says so and the capture stays as a leftover that the next `capture`, start or `abort` stops and
+  releases, as after any failed capture.
 - Two `DCAM4Camera`s in one process: shutting one down no longer uninitializes the DCAM API under the other. The API
-  is initialized by the first camera and uninitialized by the last `shutdown`; a constructor that fails gives back only
-  its own hold; `shutdown` twice is safe; `showdevicelist` borrows a hold rather than initializing and uninitializing
-  around a camera that is open.
+  is initialized by the first camera and uninitialized by the last `shutdown`, and never before the device close has
+  returned; a constructor that fails gives back only its own hold; `showdevicelist` borrows a hold rather than
+  initializing and uninitializing around a camera that is open. A camera built positionally (not public) adopts a hold
+  without initializing, so its `shutdown` uninitializes when it is the last, as before.
+- `DCAM4Camera` `shutdown` is one coordinated step: it aborts and joins any frame wait (no `abort` first is needed,
+  which answers 0.2.6's "stop any threaded `getlastframe` loop" advice for `shutdown`), stops and releases any capture,
+  makes any `sequence` task and `getdata` in progress stale, closes the device, and then gives back the camera's hold on
+  the API. A second `shutdown`, at once or later, waits for the first and touches nothing. After it, `getlastframe` and
+  `getdata` return `nothing`, `capture` throws, `live` and `sequence` log an error and return, and none makes a DCAM
+  call. It returns what it did before: the code of `dcamapi_uninit` when it uninitialized the API, and `DCAMERR_SUCCESS`
+  when another camera keeps the API up.
 - The camera's live display (`gui(camera)`, `start_live`) no longer waits for a frame on the thread that draws. The
   blocking `getlastframe` runs on its own thread (`Threads.@spawn`) and hands frames to a task that alone updates the
   display; a `nothing` frame (a timeout) no longer ends the display with an error, and an all-zero frame no longer
@@ -51,7 +64,7 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   3D stage panel's first X step drove Y and Z to 0, a focus jump on the Z piezo.
 - `DCAM4Camera`: one internal lock per camera serializes the starts (`live`, `sequence`, `capture`) with
   `stop_and_release!` and `abort`, and covers `getdata`'s check that its capture is still current, its frame reads
-  and its final stop and release, and the `sequence` task's stop. No status poll or frame wait runs under it. So a
+  and its final stop and release, and the `sequence` task's stop. No frame wait and no sleep runs under it. So a
   `getdata` whose capture a newer one replaced, from another task, never reads the newer capture's frames or
   releases its buffer, including a live view started during `getdata`'s cleanup; it logs one warning and returns
   `nothing`, with `last_error` unchanged. (Answers: "A frame read waiting in `getdata` can stop and release a newer
@@ -76,19 +89,12 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   bound of `"0.7"` alone was ignored with a warning on 1.13).
 - CI: `actions/checkout` v7 (#79) and `codecov/codecov-action` v7 (#78). Not shipped; no effect on
   the package.
-- `DCAM4Camera` `getlastframe` returns `nothing` at once, with one warning per session, when no live view or sequence
-  is running (`is_running`) or a stop is under way; it used to wait out its timeout. A caller that polls it after
-  `abort` sees `nothing` instead of a timeout error.
-- `DCAM4Camera` `shutdown` returns `nothing` (it returned the uninitialize result), closes the device once, and
-  leaves the camera with a null handle.
+- `DCAM4Camera` `getlastframe` returns `nothing` at once, with one warning per session, while a stop is under way or
+  after `shutdown`, where it used to wait out its timeout. With no live view running it still waits and reads, as before.
 
 ### Known issues
 
 - Camera (`DCAM4Camera`):
-  - A stop waits for the frame waits in progress to end, with the camera's internal lock released. A second start
-    (`live`, `sequence`, `capture`) on another task can run in that gap; its buffer allocation then fails with
-    `last_error` set and the first start's capture runs on. Start a capture from one task at a time.
-  - `shutdown` does not stop a `getlastframe` loop that is running: `abort` it first.
   - One hang inside a camera library call, on several cores after GPU code had loaded (0.2.6's summary), and the
     NOTREADY, TIMEOUT and NOTSTABLE errors the rig logs during GUI use, are not fixed here. `DCAM4.dcam_trace!` records
     the library calls to find them.

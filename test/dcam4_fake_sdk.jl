@@ -94,6 +94,18 @@ const entry_delay = Ref(0.0)
 "Called with no arguments as `dcamwait_event` leaves, before it answers."
 const after_wait = Ref{Function}(() -> nothing)
 
+"Called with no arguments as `dcamwait_event` is entered (a fault can be injected here), and as `dcamwait_close` and `dcamdev_close` start."
+const on_wait_enter = Ref{Function}(() -> nothing)
+const on_wait_close = Ref{Function}(() -> nothing)
+const on_dev_close = Ref{Function}(() -> nothing)
+
+"Makes a `:block` wait return success, as a frame arriving."
+const ready_now = Ref(false)
+
+"The mode each `dcamcap_start` was given, in order; `on_start` is called with it."
+const start_modes = Int32[]
+const on_start = Ref{Function}(m -> nothing)
+
 "The waits inside `dcamwait_event` now; the handles that are open; those that were aborted while inside it."
 const in_wait = Ref(0)
 const open_waits = Set{Ptr{Cvoid}}()
@@ -129,6 +141,12 @@ function reset!()
     wait_mode[] = :ready
     entry_delay[] = 0.0
     after_wait[] = () -> nothing
+    on_wait_enter[] = () -> nothing
+    on_wait_close[] = () -> nothing
+    on_dev_close[] = () -> nothing
+    ready_now[] = false
+    empty!(start_modes)
+    on_start[] = m -> nothing
     in_wait[] = 0
     empty!(open_waits); empty!(active); empty!(aborted)
     timeouts[] = 0
@@ -144,7 +162,11 @@ last_index(op) = findlast(==(op), calls)
 end
 
 @eval MicroscopeControl.HardwareImplementations.DCAM4 begin
-    dcamcap_start(hdcam::Ptr{Cvoid}, mode::Int32) = Main.FakeDCAM.record!("dcamcap_start", DCAMERR_SUCCESS)
+    function dcamcap_start(hdcam::Ptr{Cvoid}, mode::Int32)
+        push!(Main.FakeDCAM.start_modes, mode)
+        Main.FakeDCAM.on_start[](mode)
+        return Main.FakeDCAM.record!("dcamcap_start", DCAMERR_SUCCESS)
+    end
     function dcamcap_stop(hdcam::Ptr{Cvoid})
         Main.FakeDCAM.in_wait[] > 0 && push!(Main.FakeDCAM.violations, "dcamcap_stop")
         return Main.FakeDCAM.record!("dcamcap_stop", DCAMERR_SUCCESS)
@@ -208,8 +230,13 @@ end
         return err, dco
     end
     function dcamdev_close(hdcam::Ptr{Cvoid})
-        push!(Main.FakeDCAM.closed, hdcam)
-        return Main.FakeDCAM.record!("dcamdev_close", DCAMERR_SUCCESS)
+        FK = Main.FakeDCAM
+        isempty(FK.open_waits) || push!(FK.violations, "dcamdev_close with a wait handle open")
+        push!(FK.closed, hdcam)
+        err = FK.record!("dcamdev_close", DCAMERR_SUCCESS)
+        FK.on_dev_close[]()
+        push!(FK.calls, "dcamdev_close_end")
+        return err
     end
     dcamdev_getstring(hdcam::Ptr{Cvoid}, strid::DCAM_IDSTR) =
         (Main.FakeDCAM.record!("dcamdev_getstring", DCAMERR_SUCCESS), "FAKE")
@@ -224,8 +251,10 @@ end
         return err, hwait
     end
     function dcamwait_close(hwait::Ptr{Cvoid})
-        delete!(Main.FakeDCAM.open_waits, hwait)
-        return Main.FakeDCAM.record!("dcamwait_close", DCAMERR_SUCCESS)
+        FK = Main.FakeDCAM
+        FK.on_wait_close[]()
+        delete!(FK.open_waits, hwait)
+        return FK.record!("dcamwait_close", DCAMERR_SUCCESS)
     end
     function dcamwait_abort(hwait::Ptr{Cvoid})
         FK = Main.FakeDCAM
@@ -237,6 +266,7 @@ end
         err = FK.record!("dcamwait_event", DCAMERR_SUCCESS)
         FK.in_wait[] += 1
         try
+            FK.on_wait_enter[]()
             if is_failed(err)
                 # answered by the call itself
             elseif FK.wait_mode[] == :block
@@ -247,6 +277,10 @@ end
                 while time() < deadline
                     if hwait in FK.aborted
                         err = DCAMERR_ABORT
+                        break
+                    end
+                    if FK.ready_now[]
+                        err = DCAMERR_SUCCESS
                         break
                     end
                     sleep(0.002)
