@@ -7,6 +7,7 @@ errors. It interfaces directly with the DCAM4 API, providing a low-latency solut
 microscopy applications.
 """
 module DCAM4
+using ...Libraries: libdcam
 
 using ...MicroscopeControl.HardwareInterfaces.CameraInterface
 using GLMakie
@@ -25,6 +26,7 @@ export dcamprop_getvalue, DCAM_IDPROP_INTERNALFRAMERATE, CameraROI, dcamapi_unin
 include("dcamerr.jl")
 include("dcam_idprop.jl")
 include("types.jl")
+include("dcam_trace.jl")
 include("dcamapi.jl")
 include("dcamdev.jl")
 include("dcamprop.jl")

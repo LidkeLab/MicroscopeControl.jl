@@ -12,6 +12,8 @@ using HDF5
 using Reexport
 
 # Core instrument abstraction
+include("libraries.jl")
+using .Libraries
 include("instrument.jl")
 export AbstractInstrument
 export AbstractSystem, AbstractSystemState

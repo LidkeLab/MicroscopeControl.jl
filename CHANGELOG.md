@@ -8,6 +8,48 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
+## [Unreleased]
+
+### Added
+
+- Opt-in per-call trace of the DCAM library calls, turned on only by `DCAM4.dcam_trace!(path)` (a local-disk
+  path): a flushed BEGIN line before each call and an END or THROW line after it, with a per-call id, the arguments,
+  the elapsed time, the return value or the error, and the GC pause and time-to-safepoint counters. While tracing is
+  on a once-a-second heartbeat line is written, and the file is marked `trace on` and `trace off`. A failed write
+  turns tracing off with one warning. Off by default; one `Ref{Bool}` check per call.
+
+### Fixed
+
+Answers to the camera and laser items in 0.2.6's "Known issues", except where noted.
+
+- `DCAM4Camera`: one internal lock per camera serializes the starts (`live`, `sequence`, `capture`) with
+  `stop_and_release!` and `abort`, and covers `getdata`'s check that its capture is still current, its frame reads
+  and its final stop and release, and the `sequence` task's stop. No status poll or frame wait runs under it. So a
+  `getdata` whose capture a newer one replaced, from another task, never reads the newer capture's frames or
+  releases its buffer, including a live view started during `getdata`'s cleanup; it logs one warning and returns
+  `nothing`, with `last_error` unchanged. (Answers: "A frame read waiting in `getdata` can stop and release a newer
+  live view's buffer".)
+- `DCAM4Camera` `stop_and_release!` checks the stop and release return codes; on failure it records `last_error`
+  and leaves `is_running` as it was, since the capture may still be running. (Answers: "A failed stop or buffer
+  release is not recorded".)
+- `DCAM4Camera` `sequence` and `live` free their buffer (`stop_and_release!`) when the capture fails to start,
+  instead of leaving it until the next start. (Answers: "A sequence or live view that fails to start leaves its
+  buffer allocated".)
+- `DCAM4Camera` `getdata` in SEQUENCE mode: a failed `dcamcap_transferinfo` sets `last_error` and returns
+  `nothing`, instead of reading frames with a success code. (Answers: "If the frame-count query fails, a sequence
+  can return frames without checking that all arrived".)
+- The two `TCubeLaser` known issues in 0.2.6 (a zero sent after a failed enable counting as landed, and the
+  `CALIBRATION.md` example's `light_off` not running) were already fixed in the 0.2.6 code, as its Fixed list
+  says; the "Known issues" list was not updated.
+
+### Changed
+
+- Compat entries for the two dependencies that had none: `LibSerialPort = "0.5"` (#82) and
+  `SHA = "0.7, 1"` (#77; SHA is a standard library, 0.7.0 on Julia 1.11 and 1.0.0 on 1.13, so a
+  bound of `"0.7"` alone was ignored with a warning on 1.13).
+- CI: `actions/checkout` v7 (#79) and `codecov/codecov-action` v7 (#78). Not shipped; no effect on
+  the package.
+
 ## [0.2.6] - 2026-10-01
 
 A non-breaking release in three parts. Only the DCAM4 part has run on hardware so
@@ -29,8 +71,7 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   camera code. One hang remains: after the rig's GPU code had loaded, a full-frame
   capture hung inside a camera library call, on several cores, until the process was
   ended. It is not fixed here and is tracked for 0.2.7. The NOTREADY, TIMEOUT and
-  NOTSTABLE errors the rig logs during GUI use are not fixed here either; the stop and release
-  checks and the buffer freed after a failed start (below) address two plausible causes, unconfirmed on the rig. The
+  NOTSTABLE errors the rig logs during GUI use are not fixed here either. The
   forced-timeout and sequence checks are still owed. `capture` now refuses while a
   live view or sequence runs.
 
@@ -112,18 +153,6 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   worked; the refusal message no longer claims a switch-off that was not made.
 - `CALIBRATION.md`: the calibration reference (step 3b) is recorded inside step 3, with the laser still on, and
   its code block ends with `light_off(laser); shutdown(laser)`, so running the blocks in order leaves the diode off.
-- `DCAM4Camera`: one internal lock per camera serializes the starts (`live`, `sequence`, `capture`) with
-  `stop_and_release!` and `abort`, and covers `getdata`'s check that its capture is still current, its frame reads
-  and its final stop and release, and the `sequence` task's stop. No status poll or frame wait runs under it. So a
-  `getdata` whose capture a newer one replaced, from another task, never reads the newer capture's frames or
-  releases its buffer, including a live view started during `getdata`'s cleanup; it logs one warning and returns
-  `nothing`, with `last_error` unchanged.
-- `DCAM4Camera` `stop_and_release!` checks the stop and release return codes; on failure it records `last_error`
-  and leaves `is_running` as it was, since the capture may still be running.
-- `DCAM4Camera` `sequence` and `live` free their buffer (`stop_and_release!`) when the capture fails to start,
-  instead of leaving it until the next start.
-- `DCAM4Camera` `getdata` in SEQUENCE mode: a failed `dcamcap_transferinfo` sets `last_error` and returns
-  `nothing`, instead of reading frames with a success code.
 
 ### Changed
 
@@ -159,6 +188,21 @@ far (below); the rig checks still owed are listed in #73 (the C-867 startup chec
   next `initialize`. Without one, that `light_on` warns once that the check is skipped. See `CALIBRATION.md`.
   **Every rig that uses power mode should record one** (`ref_current_mA`, `ref_photocurrent_A`),
   with its next W/A measurement; `CALIBRATION.md` step 3b says how.
+
+### Known issues
+
+- Camera (`DCAM4Camera`), planned for 0.2.7:
+  - A frame read waiting in `getdata` can stop and release a newer live view's buffer if another task starts one.
+  - A failed stop or buffer release is not recorded, and the camera is marked stopped; it recovers at the next start.
+  - A sequence or live view that fails to start leaves its buffer allocated until the next start.
+  - If the frame-count query fails, a sequence can return frames without checking that all arrived.
+  - Stop any threaded `getlastframe` loop before calling `abort`, `live`, `sequence` or `capture` from another task: a
+    buffer released during its frame wait can crash the process.
+- Laser (`TCubeLaser`):
+  - In power mode, a zero sent right after a failed enable counts as landed, so the next `light_on` may not warn
+    about a stale stored setpoint. The first moments after that enable are still bounded by the programmed clamp.
+  - In `CALIBRATION.md`, if reading the reference throws, the example's `light_off` and `shutdown` do not run:
+    switch the laser off by hand after any error there.
 
 ## [0.2.5] - 2026-09-29
 
