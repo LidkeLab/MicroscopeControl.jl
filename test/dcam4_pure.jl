@@ -306,3 +306,60 @@ Base.showerror(::IO, ::BadErr) = error("showerror failed")
         rm(path)
     end
 end
+
+# The frame wait must not stall the other threads' garbage collection (`gc_safe`, Julia 1.12 and later).
+const DCAM4_MODULE = MicroscopeControl.HardwareImplementations.DCAM4   # a macro cannot be looked up through a testset's local
+@testset "DCAM4 gc_safe (no library)" begin
+    DC = MicroscopeControl.HardwareImplementations.DCAM4
+
+    @static if VERSION >= v"1.12"
+        # The wait's own call site carries the flag: the third element of the foreigncall's calling-convention tuple.
+        # (A structural check, since no library here has `dcamwait_start` to block in.)
+        function gc_safe_sites(f, types)
+            ci = only(Base.code_typed(f, types))[1]
+            sites = Dict{Symbol,Bool}()
+            for st in ci.code
+                st isa Expr && st.head === :foreigncall || continue
+                name = st.args[1]
+                name isa Expr && name.head === :tuple && name.args[1] isa QuoteNode || continue
+                cconv = st.args[5]
+                cconv = cconv isa QuoteNode ? cconv.value : cconv
+                cconv isa Tuple && length(cconv) >= 3 && (sites[name.args[1].value] = cconv[3])
+            end
+            return sites
+        end
+        @test get(gc_safe_sites(DC.dcamwait_start, (Ptr{Cvoid}, Base.RefValue{DC.DCAMWAIT_START})), :dcamwait_start, false)
+        # No other call is marked: only a call that can block for long qualifies.
+        @test !get(gc_safe_sites(DC.dcamwait_abort, (Ptr{Cvoid},)), :dcamwait_abort, true)
+        @test !get(gc_safe_sites(DC.dcamcap_stop, (Ptr{Cvoid},)), :dcamcap_stop, true)
+
+        # What the flag does, through the macro: a collection on another thread does not wait for a gc_safe call.
+        # Like the trace's blocker test, it needs a thread that is not this task's.
+        if Threads.threadpool() !== :default || Threads.nthreads(:default) >= 2
+            @static if Sys.iswindows()
+                plain() = DCAM4_MODULE.@dcamcall Sleep(2000::UInt32)::Cvoid
+                safe() = DCAM4_MODULE.@dcamcall gc_safe = true Sleep(2000::UInt32)::Cvoid
+            else
+                plain() = DCAM4_MODULE.@dcamcall usleep(2_000_000::Cuint)::Cint
+                safe() = DCAM4_MODULE.@dcamcall gc_safe = true usleep(2_000_000::Cuint)::Cint
+            end
+            # The seconds a collection requested 0.3 s into a 2 s call on this thread takes on another.
+            function gc_stall(call)
+                helper = Threads.@spawn :default (Libc.systemsleep(0.3); t = time(); GC.gc(false); time() - t)
+                call()
+                return fetch(helper)
+            end
+            gc_stall(safe)   # compile both before the timed runs
+            stalled = gc_stall(plain)
+            free = gc_stall(safe)
+            @info "gc_safe test" stall_plain_s = stalled stall_gc_safe_s = free
+            @test stalled > 1.0      # the premise: a plain call holds the collection until it returns
+            @test free < 1.0
+        else
+            @test_skip false
+        end
+    else
+        # Before 1.12 the keyword does not exist: the macro must still expand to a plain call.
+        @test DC.dcamwait_start isa Function
+    end
+end

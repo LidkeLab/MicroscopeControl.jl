@@ -270,11 +270,28 @@ end
 
 """
     @dcamcall [lib.]fn(arg::T, ...)::Ret
+    @dcamcall gc_safe = true [lib.]fn(arg::T, ...)::Ret
 
 `@ccall`, plus a BEGIN and an END (or THROW) trace line when tracing is on (see `dcam_trace!`). Each argument
 expression is evaluated once.
+
+`gc_safe = true` is passed to `@ccall` on Julia 1.12 and later, and ignored before (the keyword does not exist in
+1.11, where the call stays a plain `@ccall`). It lets the garbage collector run while the thread is inside the
+call, which would otherwise stall every other thread at its next collection. Use it only for a call that can block
+for a long time and touches no Julia object while it runs: its arguments must not be moved or freed meanwhile, and it
+must not call back into Julia.
 """
 macro dcamcall(expr)
+    return dcamcall_expansion(expr, false)
+end
+
+macro dcamcall(opts, expr)
+    Meta.isexpr(opts, :(=), 2) && opts.args[1] === :gc_safe && opts.args[2] isa Bool ||
+        error("@dcamcall: the only option is `gc_safe = true` or `gc_safe = false`, got $opts")
+    return dcamcall_expansion(expr, opts.args[2])
+end
+
+function dcamcall_expansion(expr, gc_safe::Bool)
     Meta.isexpr(expr, :(::), 2) && Meta.isexpr(expr.args[1], :call) || error("@dcamcall: expected fn(args...)::Ret")
     call, ret = expr.args
     target = call.args[1]
@@ -290,7 +307,8 @@ macro dcamcall(expr)
         push!(tmps, t)
         push!(newargs, Expr(:(::), t, a.args[2]))
     end
-    plain = :(Base.@ccall $(Expr(:(::), Expr(:call, newargs...), ret)))
+    typed = Expr(:(::), Expr(:call, newargs...), ret)
+    plain = gc_safe && VERSION >= v"1.12" ? :(Base.@ccall gc_safe = true $typed) : :(Base.@ccall $typed)
     r = gensym("ret"); t0 = gensym("t0"); id = gensym("id"); e = gensym("err")
     on = GlobalRef(@__MODULE__, :TRACE_ON)
     return esc(quote
