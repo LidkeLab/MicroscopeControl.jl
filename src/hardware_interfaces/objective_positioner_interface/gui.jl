@@ -1,12 +1,9 @@
 using GLMakie
 
 function gui(positioner::Zpositioner)
-    try
-        initialize(positioner)
-    catch
-        @error "Failed to initialize the positioner. Please check the connection."
-        return
-    end
+    # A failed initialize is logged, and the panel still opens disconnected, as in 0.2.5:
+    # its callbacks refuse until `connectionstatus` is true.
+    MicroscopeControl.gui_initialize(positioner, "positioner")
 
     fig = Figure(size=(600, 400))
     

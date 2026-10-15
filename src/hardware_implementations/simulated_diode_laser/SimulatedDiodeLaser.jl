@@ -98,9 +98,10 @@ construction line serves a system and its simulated twin. `mode` defaults to
 `ConstantCurrent()`.
 In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
 `properties` and `max_current` are required, and the loop keywords `ramp_step_mW`,
-`ramp_step_s`, `lock_check_s` and `lock_ratio` are accepted into the
-[`PhotodiodeLoop`](@ref). `[limitation]` the simulation neither ramps nor
-checks for a loop lock; it only stores them. `threshold_current` defaults to
+`ramp_step_s`, `lock_check_s`, `lock_ratio`, `ref_current_mA`, `ref_photocurrent_A`
+and `ref_ratio` are accepted into the [`PhotodiodeLoop`](@ref). `[limitation]` the
+simulation neither ramps, checks for a loop lock, nor re-checks a calibration
+reference; it only stores them. `threshold_current` defaults to
 65 mA and, in `ConstantCurrent` mode, `max_current` to 160 mA (the 642 nm
 diode's numbers); the model fields are documented on the type.
 
@@ -122,6 +123,9 @@ function SimDiodeLaser(;
     ramp_step_s::Union{Nothing,Real}=nothing,
     lock_check_s::Union{Nothing,Real}=nothing,
     lock_ratio::Union{Nothing,Real}=nothing,
+    ref_current_mA::Union{Nothing,Real}=nothing,
+    ref_photocurrent_A::Union{Nothing,Real}=nothing,
+    ref_ratio::Union{Nothing,Real}=nothing,
     efficiency::Float64=1.2,
     responsivity::Union{Nothing,Float64}=nothing,
     responsivity_drift::Float64=0.0,
@@ -133,7 +137,8 @@ function SimDiodeLaser(;
 )
     name = "SimDiodeLaser"
     pd = LightSourceInterface.diode_loop_from_keywords(mode, name; wa_calibration, tia_range,
-        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio)
+        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio,
+        ref_current_mA, ref_photocurrent_A, ref_ratio)
     max_current = something(max_current, 160.0)
     props = something(properties, LightSourceProperties("mA", 0.0, false, min_current, max_current))
     resp = something(responsivity, pd === nothing ? 1 / 224.2 : 1 / pd.wa_calibration)

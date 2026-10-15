@@ -164,7 +164,7 @@ function gui1d(stage::Stage)
         stopmotion(stage)
     end
     on(control_buttons[3].clicks) do initialize_click
-        initialize(stage)
+        MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[] = stage.real_x
         xtarget[] = stage.targ_x
@@ -453,7 +453,7 @@ function gui2d(stage::Stage)
         stopmotion(stage)
     end
     on(control_buttons[3].clicks) do initialize_click
-        initialize(stage)
+        MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[], yposition[] = stage.real_x, stage.real_y
         xtarget[], ytarget[] = stage.targ_x, stage.targ_y
@@ -795,7 +795,7 @@ function gui3d(stage::Stage)
         stopmotion(stage)
     end
     on(control_buttons[3].clicks) do initialize_click
-        initialize(stage)
+        MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[], yposition[], zposition[] = stage.real_x, stage.real_y, stage.real_z
         xtarget[], ytarget[], ztarget[] = stage.targ_x, stage.targ_y, stage.targ_z

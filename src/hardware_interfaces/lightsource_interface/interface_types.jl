@@ -83,6 +83,16 @@ anywhere, and the name would say it did.
 struct ConstantPhotocurrent <: RegulationMode end
 
 """
+    LOCK_CHECK_MIN_S
+
+The shortest `lock_check_s` a [`PhotodiodeLoop`](@ref) accepts, in s: 0.1. The floor gives the
+loop time to settle before `check_lock` reads; `check_lock` makes its own reads and does not
+depend on polling. Below it the photodiode is read before the loop has answered a new setpoint. At 0, before 0.2.6, the lock check read the polled cache before the loop moved
+and could never trip; with the two-sided check it would trip on every upward step.
+"""
+const LOCK_CHECK_MIN_S = 0.1
+
+"""
     PhotodiodeLoop
 
 State of a monitor-photodiode regulation loop. Present on a
@@ -130,14 +140,38 @@ delivered power drifts while photocurrent is held steady. That is why
   (68.59 mW).
 - `ramp_step_s::Float64`: seconds between ramp steps. Default `0.01`.
 - `lock_check_s::Float64`: seconds the driver waits after sending a setpoint
-  before it compares the measured photocurrent with the request. Default `0.2`.
+  before it compares the measured photocurrent with the request. Default `0.2`;
+  at least [`LOCK_CHECK_MIN_S`](@ref).
 - `lock_ratio::Float64`: the measured photocurrent may exceed the request by
   this factor before the driver reports a suspected loop lock. Default `1.5`.
   `[limitation]` this threshold and wait are unvalidated on hardware: the one
   lock observed measured about 98 uA for 44.6 uA requested (2.2x). A false trip
   refuses, which is the safe direction.
+- `ref_current_mA::Float64`, `ref_photocurrent_A::Float64`: the calibration
+  reference. The open-loop drive current, and the photocurrent in A the controller
+  read at it, decoded with the same `tia_range` as the config states, recorded in
+  the same session and on the same range and gain as `wa_calibration`
+  (CALIBRATION.md). With one, the first power-mode `light_on` after each
+  `initialize` re-measures it and refuses on a mismatch. `NaN` (both) means none:
+  that `light_on` warns once and `check_lock` is the only guard. The reference is
+  in amps, decoded with `tia_range`, so a range the reading does not follow, or a
+  `tia_range` relabelled with W/A kept (the 642 nm rig's observation of
+  2026-09-29), fails the re-check. Re-measure W/A and the reference whenever the
+  DIP switch moves.
+- `ref_ratio::Float64`: the re-measured photocurrent must be within this factor
+  of `ref_photocurrent_A`, either way. Default `1.5`: a 10x change in counts is
+  caught with a wide margin, a scale drop under 1.5x passes, and the reading is
+  proportional to (I - I_th), so a small margin above threshold is sensitive to
+  ordinary drift. Choose the reference at least 20 mA above threshold.
+- `scale_checked::Bool`: state, `true` once this initialize's re-check passed or
+  was skipped for want of a reference.
+- `scale_refused::Bool`: state, `true` once this initialize's re-check found a mismatch.
+  Every later power-mode `light_on` refuses without lighting the diode until the next `initialize`.
+- `zero_failed::Bool`: state, `true` once a setpoint zero failed, until a zero lands (one that
+  succeeds while the output is recorded on; the controller ignores a zero sent with the output off)
+  or `initialize`. The next power-mode `light_on` warns that the controller's stored setpoint may be stale.
 
-Construct it with the keyword form, which fills the last seven fields.
+Construct it with the keyword form, which fills the last thirteen fields.
 """
 mutable struct PhotodiodeLoop
     wa_calibration::Float64
@@ -150,29 +184,50 @@ mutable struct PhotodiodeLoop
     ramp_step_s::Float64
     lock_check_s::Float64
     lock_ratio::Float64
+    ref_current_mA::Float64
+    ref_photocurrent_A::Float64
+    ref_ratio::Float64
+    scale_checked::Bool
+    scale_refused::Bool
+    zero_failed::Bool
 end
 
 """
     PhotodiodeLoop(; wa_calibration, tia_range, tec_stabilised,
-                   ramp_step_mW=Inf, ramp_step_s=0.01, lock_check_s=0.2, lock_ratio=1.5)
+                   ramp_step_mW=Inf, ramp_step_s=0.01, lock_check_s=0.2, lock_ratio=1.5,
+                   ref_current_mA=nothing, ref_photocurrent_A=nothing, ref_ratio=1.5)
 
 The first three are required, and none has a default: a power-mode laser cannot
 be built without a measured calibration, a stated amplifier range and an answer
-(possibly `missing`) to whether the diode's temperature is stabilised. The last
-four are documented on [`PhotodiodeLoop`](@ref).
+(possibly `missing`) to whether the diode's temperature is stabilised. The rest
+are documented on [`PhotodiodeLoop`](@ref).
 """
 function PhotodiodeLoop(; wa_calibration::Real, tia_range::Real, tec_stabilised::Union{Bool,Missing},
                         ramp_step_mW::Real=Inf, ramp_step_s::Real=0.01,
-                        lock_check_s::Real=0.2, lock_ratio::Real=1.5)
+                        lock_check_s::Real=0.2, lock_ratio::Real=1.5,
+                        ref_current_mA::Union{Nothing,Real}=nothing,
+                        ref_photocurrent_A::Union{Nothing,Real}=nothing, ref_ratio::Real=1.5)
     (isfinite(wa_calibration) && wa_calibration > 0) || throw(ArgumentError(
         "PhotodiodeLoop: wa_calibration is W/A measured at the laser output and must be finite and positive, got $(wa_calibration)"))
     (isfinite(tia_range) && tia_range > 0) || throw(ArgumentError(
         "PhotodiodeLoop: tia_range is the photodiode amplifier's full scale in A and must be finite and positive, got $(tia_range)"))
     ramp_step_mW > 0 || throw(ArgumentError("PhotodiodeLoop: ramp_step_mW must be positive (Inf for no ramp), got $(ramp_step_mW)"))
     (isfinite(ramp_step_s) && ramp_step_s >= 0) || throw(ArgumentError("PhotodiodeLoop: ramp_step_s must be finite and non-negative, got $(ramp_step_s)"))
-    (isfinite(lock_check_s) && lock_check_s >= 0) || throw(ArgumentError("PhotodiodeLoop: lock_check_s must be finite and non-negative, got $(lock_check_s)"))
+    (isfinite(lock_check_s) && lock_check_s >= LOCK_CHECK_MIN_S) || throw(ArgumentError("PhotodiodeLoop: lock_check_s must be finite and at least $(LOCK_CHECK_MIN_S) s, got $(lock_check_s)"))
     (isfinite(lock_ratio) && lock_ratio > 1) || throw(ArgumentError("PhotodiodeLoop: lock_ratio must be finite and above 1, got $(lock_ratio)"))
+    (ref_current_mA === nothing) == (ref_photocurrent_A === nothing) || throw(ArgumentError(
+        "PhotodiodeLoop: ref_current_mA and ref_photocurrent_A are one calibration reference; give both or neither, got ref_current_mA = $(repr(ref_current_mA)), ref_photocurrent_A = $(repr(ref_photocurrent_A))"))
+    if ref_current_mA !== nothing
+        (isfinite(ref_current_mA) && ref_current_mA > 0) || throw(ArgumentError(
+            "PhotodiodeLoop: ref_current_mA is the open-loop drive current of the calibration reference in mA and must be finite and positive, got $(ref_current_mA)"))
+        (isfinite(ref_photocurrent_A) && 0 < ref_photocurrent_A <= tia_range) || throw(ArgumentError(
+            "PhotodiodeLoop: ref_photocurrent_A is the photocurrent in A measured at ref_current_mA, decoded with tia_range, and must be finite with 0 < ref_photocurrent_A <= tia_range ($(tia_range) A), got $(ref_photocurrent_A)"))
+    end
+    (isfinite(ref_ratio) && ref_ratio > 1) || throw(ArgumentError("PhotodiodeLoop: ref_ratio must be finite and above 1, got $(ref_ratio)"))
     return PhotodiodeLoop(Float64(wa_calibration), Float64(tia_range), tec_stabilised, NaN, NaN, NaN,
-                          Float64(ramp_step_mW), Float64(ramp_step_s), Float64(lock_check_s), Float64(lock_ratio))
+                          Float64(ramp_step_mW), Float64(ramp_step_s), Float64(lock_check_s), Float64(lock_ratio),
+                          ref_current_mA === nothing ? NaN : Float64(ref_current_mA),
+                          ref_photocurrent_A === nothing ? NaN : Float64(ref_photocurrent_A),
+                          Float64(ref_ratio), false, false, false)
 end
 

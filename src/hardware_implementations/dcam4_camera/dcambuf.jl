@@ -60,7 +60,7 @@ end
 ## Functions 
 
 function dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)
-    err = @dcamcall "dcamapi.dll".dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)::DCAMERR
+    err = @dcamcall libdcam.dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Allocate Buffer"
     end
@@ -68,7 +68,7 @@ function dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)
 end
 
 function dcambuf_attach(hdcam::Ptr{Cvoid}, param::Ptr{DCAMBUF_ATTACH})
-    err = @dcamcall "dcamapi.dll".dcambuf_attach(hdcam::Ptr{Cvoid}, param::Ptr{DCAMBUF_ATTACH})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_attach(hdcam::Ptr{Cvoid}, param::Ptr{DCAMBUF_ATTACH})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Attach Buffer"
     end
@@ -77,7 +77,7 @@ end
 
 function dcambuf_release(hdcam::Ptr{Cvoid})
     iKind = Int32(0)
-    err = @dcamcall "dcamapi.dll".dcambuf_release(hdcam::Ptr{Cvoid}, iKind::Int32)::DCAMERR
+    err = @dcamcall libdcam.dcambuf_release(hdcam::Ptr{Cvoid}, iKind::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Release Buffer"
     end
@@ -85,7 +85,7 @@ function dcambuf_release(hdcam::Ptr{Cvoid})
 end
 
 function dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
-    err = @dcamcall "dcamapi.dll".dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Lock Frame"
     end
@@ -93,7 +93,7 @@ function dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
 end
 
 function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
-    err = @dcamcall "dcamapi.dll".dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Copy Frame"
     end
@@ -132,7 +132,7 @@ function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
 
     pFrame = Ref(dcf)
 
-    err = @dcamcall "dcamapi.dll".dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Copy Frame $(iFrame): $(err)"
         return err, nothing
@@ -152,7 +152,7 @@ function dcambuf_getlastframe(hdcam::Ptr{Cvoid})
 end
 
 function dcambuf_copymetadata(hdcam::Ptr{Cvoid}, hdr::Ptr{DCAM_METADATAHDR})
-    err = @dcamcall "dcamapi.dll".dcambuf_copymetadata(hdcam::Ptr{Cvoid}, hdr::Ptr{DCAM_METADATAHDR})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_copymetadata(hdcam::Ptr{Cvoid}, hdr::Ptr{DCAM_METADATAHDR})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Copy Metadata"
     end

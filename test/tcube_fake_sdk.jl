@@ -52,6 +52,19 @@
 # verified write from an unverified one. Each piece of state can be made to
 # misbehave (a pot that does not take, a mode bit that does not set, a
 # setpoint that reads back wrong) so that every refusal has a test.
+#
+# Since 0.2.6 the fake answers ONE REQUEST BEHIND, as the 642 nm rig's TLD001
+# does (2026-09-29): a request captures the controller's state, and the getters
+# return the state captured at the PREVIOUS request of the same kind, so two
+# requests in a row answer the state at the first. This holds for the status
+# word, the readings, the current limit, the potentiometer position and the W/A
+# factor. The exception is the setpoint read-back, which stays live: the driver
+# never requests it and the rig verified that polling refreshes it. The fake
+# also models the photodiode on the rig's numbers (threshold 67.6 mA, ~145
+# words per mA above it on the 1 mA range) with a `pd_scale` knob, and sets the
+# current-limit status bit (0x400) whenever the model saturates.
+# `photocurrent_raw` is an override of the model. `poll!` makes the status word
+# and the readings current, as a background poll that had caught up would.
 
 """
     FakeKinesis
@@ -91,7 +104,7 @@ driver's default scale.
 """
 const diode_limit_raw = Ref{Int}(23830)
 
-"Raw limit values the next `LD_GetLaserDiodeMaxCurrentLimit` reads return, first in first out, before `diode_limit_raw` applies again."
+"Raw limit values, first in first out, before `diode_limit_raw` applies again: consumed one per capture (each `LD_RequestLaserDiodeMaxCurrentLimit`, or a limit read before any request). A driver read is two requests and answers the first, so give each value twice."
 const limit_raw_queue = Int[]
 
 "A stale polled status word: while set, `LD_GetStatusBits` returns it instead of `bits`, until an `LD_RequestStatusBits` refreshes it (sets it back to `nothing`)."
@@ -100,12 +113,32 @@ const stale_bits = Ref{Union{Nothing,UInt32}}(nothing)
 "Raw diode-current reading; `nothing` returns `diode_limit_raw`, as before 0.2.5."
 const current_raw = Ref{Union{Nothing,Int}}(nothing)
 
-"Raw photocurrent reading (`LD_GetPhotoCurrentReading`)."
-const photocurrent_raw = Ref{Int}(0)
+"Raw photocurrent reading (`LD_GetPhotoCurrentReading`): an override of the photodiode model; `nothing` uses the model."
+const photocurrent_raw = Ref{Union{Nothing,Int}}(nothing)
+
+"What each kind's getters return (set by its requests), and the state captured at its last request."
+const answered = Dict{Symbol,Any}()
+const pending = Dict{Symbol,Any}()
+
+"The status bit the controller sets when the drive current is at its limit."
+const LIMIT = 0x00000400
+"The photocurrent word with no light: raw 65532 read signed (642 nm rig, 2026-09-29)."
+const PD_DARK_RAW = -4
+"The 642 nm rig's photodiode (2026-09-29): threshold 67.6 mA, ~145 words per mA above it on the 1 mA range."
+const pd_threshold_mA = Ref(67.6)
+const pd_words_per_mA = Ref(145.0)
+"Counts per unit light relative to calibration: 1.0 is the calibrated setup; 0.5 gives half the words for the same light."
+const pd_scale = Ref(1.0)
 
 const KEY, CLOSED, INTERLOCK, ENABLED = 0x00000002, 0x00000004, 0x00000008, 0x00000001
 const TIA_1mA, TIA_10mA, PSU_OK = 0x00000040, 0x00000080, 0x00001000
 const TIA_OVER, TIA_UNDER = 0x00002000, 0x00004000
+
+"While `true`, `LD_SetOpenLoopMode` records the call and returns success but leaves the closed-loop bit set."
+const open_loop_ignored = Ref(false)
+
+"While `true`, the captured status word has the current-limit bit (`LIMIT`, 0x400) set whatever the model says."
+const force_limit_bit = Ref(false)
 
 "The status word: key, interlock, PSU OK and the 1 mA range by default."
 const bits = Ref{UInt32}(KEY | INTERLOCK | PSU_OK | TIA_1mA)
@@ -174,9 +207,16 @@ function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     empty!(limit_raw_queue)
     stale_bits[] = nothing
     current_raw[] = nothing
-    photocurrent_raw[] = 0
+    photocurrent_raw[] = nothing
+    empty!(answered)
+    empty!(pending)
+    pd_scale[] = 1.0
+    pd_threshold_mA[] = 67.6
+    pd_words_per_mA[] = 145.0
     bits[] = KEY | INTERLOCK | PSU_OK | TIA_1mA
     closed_loop_takes[] = true
+    open_loop_ignored[] = false
+    force_limit_bit[] = false
     setpoint_held[] = stored
     setpoint_readback[] = nothing
     digpot[] = 204
@@ -210,6 +250,36 @@ throw!(op::AbstractString, msg::AbstractString="fake Kinesis failure in $op") = 
 "Set or clear status bits."
 setbits!(mask; on::Bool=true) = (bits[] = on ? (bits[] | UInt32(mask)) : (bits[] & ~UInt32(mask)); nothing)
 
+enabled() = bits[] & ENABLED != 0
+closed() = bits[] & CLOSED != 0
+"The controller's limit in mA, ignoring `limit_raw_queue` (the queue shapes what reads return, not the physics)."
+limit_mA_live() = limit_follows_pot[] ? limit_mA_for(digpot[]) : diode_limit_raw[] / 32767 * 220
+setpoint_mA() = setpoint_held[] / 32767 * 220
+"The drive current the closed loop needs to hold the held setpoint word."
+needed_mA() = pd_threshold_mA[] + setpoint_held[] / (pd_scale[] * pd_words_per_mA[])
+pd_word_at(mA) = mA <= pd_threshold_mA[] ? PD_DARK_RAW :
+    round(Int, pd_scale[] * pd_words_per_mA[] * (mA - pd_threshold_mA[]))
+saturated_now() = enabled() && (closed() ? needed_mA() > limit_mA_live() : setpoint_mA() > limit_mA_live())
+function photocurrent_now()
+    photocurrent_raw[] === nothing || return photocurrent_raw[]
+    enabled() || return PD_DARK_RAW
+    (closed() && !saturated_now()) && return Int(setpoint_held[])   # the loop holds its setpoint
+    return pd_word_at(min(closed() ? needed_mA() : setpoint_mA(), limit_mA_live()))
+end
+function capture(kind::Symbol)
+    kind === :status && return bits[] | (saturated_now() || force_limit_bit[] ? LIMIT : 0x00000000)
+    kind === :readings && return (current = something(current_raw[], diode_limit_raw[]), photocurrent = photocurrent_now())
+    kind === :limit && return (isempty(limit_raw_queue) ? (limit_follows_pot[] ?
+        floor(Int, limit_mA_for(digpot[]) / 220 * 32767) : diode_limit_raw[]) : popfirst!(limit_raw_queue))
+    kind === :digpot && return digpot[]
+    kind === :wa && return something(wa_readback[], wa[])
+    error("FakeKinesis: unknown kind $kind")
+end
+request!(kind::Symbol) = (now = capture(kind); answered[kind] = get(pending, kind, now); pending[kind] = now; nothing)
+answer(kind::Symbol) = haskey(answered, kind) ? answered[kind] : capture(kind)
+"A poll that has caught up: `:status` and `:readings` answer the live state (what the header says polling requests)."
+poll!() = (stale_bits[] = nothing; for k in (:status, :readings); now = capture(k); answered[k] = now; pending[k] = now; end; nothing)
+
 end
 
 @eval MicroscopeControl.HardwareImplementations.TCubeLaserControl begin
@@ -219,7 +289,7 @@ end
     LD_Close(serialNo) = (Main.FakeKinesis.record!("LD_Close"); nothing)
     function LD_SetOpenLoopMode(serialNo)
         s = Main.FakeKinesis.record!("LD_SetOpenLoopMode")
-        s == 0 && Main.FakeKinesis.setbits!(Main.FakeKinesis.CLOSED; on=false)
+        (s == 0 && !Main.FakeKinesis.open_loop_ignored[]) && Main.FakeKinesis.setbits!(Main.FakeKinesis.CLOSED; on=false)
         return s
     end
     function LD_SetClosedLoopMode(serialNo)
@@ -227,9 +297,9 @@ end
         (s == 0 && Main.FakeKinesis.closed_loop_takes[]) && Main.FakeKinesis.setbits!(Main.FakeKinesis.CLOSED)
         return s
     end
-    LD_RequestReadings(serialNo) = Main.FakeKinesis.record!("LD_RequestReadings")
+    LD_RequestReadings(serialNo) = (s = Main.FakeKinesis.record!("LD_RequestReadings"); Main.FakeKinesis.request!(:readings); s)
     LD_RequestLaserDiodeMaxCurrentLimit(serialNo) =
-        Main.FakeKinesis.record!("LD_RequestLaserDiodeMaxCurrentLimit")
+        (s = Main.FakeKinesis.record!("LD_RequestLaserDiodeMaxCurrentLimit"); Main.FakeKinesis.request!(:limit); s)
     function LD_EnableOutput(serialNo)
         s = Main.FakeKinesis.record!("LD_EnableOutput")
         if s == 0
@@ -259,25 +329,25 @@ end
     end
     function LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         Main.FakeKinesis.record!("LD_GetLaserDiodeMaxCurrentLimit")
-        isempty(Main.FakeKinesis.limit_raw_queue) || return popfirst!(Main.FakeKinesis.limit_raw_queue)
-        Main.FakeKinesis.limit_follows_pot[] || return Main.FakeKinesis.diode_limit_raw[]
-        return floor(Int, Main.FakeKinesis.limit_mA_for(Main.FakeKinesis.digpot[]) / 220 * 32767)
+        return Main.FakeKinesis.answer(:limit)
     end
     function LD_GetLaserDiodeCurrentReading(serialNo)
         Main.FakeKinesis.record!("LD_GetLaserDiodeCurrentReading")
-        return something(Main.FakeKinesis.current_raw[], Main.FakeKinesis.diode_limit_raw[])
+        return Main.FakeKinesis.answer(:readings).current
     end
     function LD_GetPhotoCurrentReading(serialNo)
         Main.FakeKinesis.record!("LD_GetPhotoCurrentReading")
-        return Main.FakeKinesis.photocurrent_raw[]
+        return Main.FakeKinesis.answer(:readings).photocurrent
     end
     function LD_RequestStatusBits(serialNo)
         Main.FakeKinesis.stale_bits[] = nothing
-        return Main.FakeKinesis.record!("LD_RequestStatusBits")
+        s = Main.FakeKinesis.record!("LD_RequestStatusBits")
+        Main.FakeKinesis.request!(:status)
+        return s
     end
     function LD_GetStatusBits(serialNo)
         Main.FakeKinesis.record!("LD_GetStatusBits")
-        return something(Main.FakeKinesis.stale_bits[], Main.FakeKinesis.bits[])
+        return something(Main.FakeKinesis.stale_bits[], Main.FakeKinesis.answer(:status))
     end
     function LD_EnableMaxCurrentAdjust(serialNo, enableAdjust, enableDiode)
         push!(Main.FakeKinesis.adjust_calls, (enableAdjust, enableDiode))
@@ -289,20 +359,20 @@ end
         (s == 0 && Main.FakeKinesis.digpot_takes[]) && (Main.FakeKinesis.digpot[] = Int(maxCurrent))
         return s
     end
-    LD_RequestMaxCurrentDigPot(serialNo) = Main.FakeKinesis.record!("LD_RequestMaxCurrentDigPot")
+    LD_RequestMaxCurrentDigPot(serialNo) = (s = Main.FakeKinesis.record!("LD_RequestMaxCurrentDigPot"); Main.FakeKinesis.request!(:digpot); s)
     function LD_GetMaxCurrentDigPot(serialNo)
         Main.FakeKinesis.record!("LD_GetMaxCurrentDigPot")
-        return UInt16(Main.FakeKinesis.digpot[])
+        return UInt16(Main.FakeKinesis.answer(:digpot))
     end
     function LD_SetWACalibFactor(serialNo, calibFactor)
         s = Main.FakeKinesis.record!("LD_SetWACalibFactor")
         s == 0 && (Main.FakeKinesis.wa[] = Float32(calibFactor))
         return s
     end
-    LD_RequestWACalibFactor(serialNo) = Main.FakeKinesis.record!("LD_RequestWACalibFactor")
+    LD_RequestWACalibFactor(serialNo) = (s = Main.FakeKinesis.record!("LD_RequestWACalibFactor"); Main.FakeKinesis.request!(:wa); s)
     function LD_GetWACalibFactor(serialNo)
         Main.FakeKinesis.record!("LD_GetWACalibFactor")
-        return something(Main.FakeKinesis.wa_readback[], Main.FakeKinesis.wa[])
+        return Main.FakeKinesis.answer(:wa)
     end
     function LD_StartPolling(serialNo, milliseconds)
         Main.FakeKinesis.record!("LD_StartPolling")

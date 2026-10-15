@@ -28,7 +28,7 @@ function PIStage(;
     units::String = "Milimeters",
     dimensions::Int = 2, 
     connectionstatus::Bool = false, 
-    id::Cint = Cint(0), 
+    id::Cint = Cint(-1), 
     x::Float64 = 12.5,
     y::Float64 = 12.5,
     targ_x::Float64 = 12.5,

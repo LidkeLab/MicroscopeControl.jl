@@ -5,6 +5,7 @@ module PI
 
     global const gcs2path = "C:\\Program Files (x86)\\Physik Instrumente (PI)\\Software Suite\\Development\\C++\\API\\PI_GCS2_DLL_x64.dll"
 
+    include("gcs2.jl")
     include("types.jl")
     include("move_methods.jl")
     include("query_methods.jl")

@@ -194,7 +194,8 @@ One consistent snapshot of the controller, as a `NamedTuple`:
 It is the only place the status bits are decoded, so panels, fault checks and a
 rig's logger share one definition. `[policy]` a rig running unattended polls
 this and treats a sustained `saturated` as a fault: the driver reports, the
-system decides.
+system decides. The TCube driver also refuses at each power-mode setpoint when `0x400`
+is set (`check_lock`, 0.2.6); after that check, nothing watches it.
 """
 function loop_status(laser::DiodeLaser)
     error("loop_status not implemented for $(typeof(laser))")

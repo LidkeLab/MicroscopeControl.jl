@@ -117,9 +117,12 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
                 "$name: drive_current must be NaN on a ConstantPhotocurrent laser, where the loop owns the current; got $(drive_current)"))
             any(r -> isapprox(pd.tia_range, r; rtol=1e-9), TLD001_TIA_RANGES) || throw(ArgumentError(
                 "$name: tia_range = $(pd.tia_range) A is not a TLD001 photodiode range; it must be one of $(TLD001_TIA_RANGES) A, as set on the rear-panel DIP switch"))
-            max_current >= DIGPOT_MIN_mA || throw(ArgumentError(
-                "$name: max_current = $(max_current) mA is below the lowest current the TLD001's max-current potentiometer can be set to ($(DIGPOT_MIN_mA) mA), " *
-                "so power mode could not clamp this diode. Use mode = ConstantCurrent()."))
+            if !isnan(pd.ref_current_mA)
+                ref_mW = pd.ref_photocurrent_A * pd.wa_calibration * 1000
+                ref_mW <= properties.max_power || throw(ArgumentError(
+                    "$name: the calibration reference indicates $(ref_mW) mW (ref_photocurrent_A $(pd.ref_photocurrent_A) A at $(pd.wa_calibration) W/A), " *
+                    "above properties.max_power = $(properties.max_power) mW; the re-check at the first light_on would emit it. Choose a lower reference current."))
+            end
         end
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
@@ -191,8 +194,9 @@ only in this mode, nothing enforces them (see the `properties` field).
   real protection while the loop raises the current by itself;
   `initialize` records the controller's own limit separately in
   `controller_max_current`, and `setcurrent!` enforces the smaller of the two.
-- `ramp_step_mW`, `ramp_step_s`, `lock_check_s` and `lock_ratio` (closed loop
-  only; passing one in open loop throws) set the fields of the same names on
+- `ramp_step_mW`, `ramp_step_s`, `lock_check_s`, `lock_ratio`, `ref_current_mA`,
+  `ref_photocurrent_A` and `ref_ratio` (closed loop
+  only; passing one in open loop throws; see [`PhotodiodeLoop`](@ref) and CALIBRATION.md) set the fields of the same names on
   [`PhotodiodeLoop`](@ref), which documents them: an optional ramp of upward
   setpoint steps and the loop-lock check.
 - `min_current` defaults to `0.0`. A non-zero default would reject safe small
@@ -221,10 +225,14 @@ function TCubeLaser(serialNo::String;
     ramp_step_s::Union{Nothing,Real}=nothing,
     lock_check_s::Union{Nothing,Real}=nothing,
     lock_ratio::Union{Nothing,Real}=nothing,
+    ref_current_mA::Union{Nothing,Real}=nothing,
+    ref_photocurrent_A::Union{Nothing,Real}=nothing,
+    ref_ratio::Union{Nothing,Real}=nothing,
 )
     name = "TCubeLaser $serialNo"
     pd = LightSourceInterface.diode_loop_from_keywords(mode, name; wa_calibration, tia_range,
-        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio)
+        tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio,
+        ref_current_mA, ref_photocurrent_A, ref_ratio)
     max_current = something(max_current, 160.0)
     props = something(properties, LightSourceProperties("mW", 0.0, false, 0.0, 100.0))
     TCubeLaser{typeof(mode)}(unique_id, props, laser_color, min_current, max_current,
