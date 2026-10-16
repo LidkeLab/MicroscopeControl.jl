@@ -501,6 +501,20 @@ using MicroscopeControl.HardwareInterfaces.LightSourceInterface
         l = ready(); scope.dacranges[3] = TS.ZEROTOFIVE
         enable_modulation!(l; TS.dac_output(scope, 3)..., writer=writer(l))
         @test l.modulation.output == "Triggerscope COM_TEST DAC 3" && l.modulation.v_max == 5.0
-        disable_modulation!(l)
+        # two lasers on two DACs of one scope; the same DAC for a second laser is refused
+        l2 = TCubeLaser("22222222"; mode=ConstantPhotocurrent(), wa_calibration=224.2, tia_range=1e-3,
+                        tec_stabilised=missing, properties=props(), max_current=160.0, lock_check_s=0.1, ramp_step_s=0.0)
+        quiet(() -> initialize(l2))
+        @test_throws "already driving" enable_modulation!(l2; TS.dac_output(scope, 3)..., writer=v -> nothing)
+        enable_modulation!(l2; TS.dac_output(scope, 4)..., writer=v -> nothing)
+        @test l2.modulation.output == "Triggerscope COM_TEST DAC 4" && length(TCube.MODULATION_OUTPUTS) == 2
+        disable_modulation!(l); disable_modulation!(l2)
+        @test isempty(TCube.MODULATION_OUTPUTS)
+        # one on a DAQ-style output and one on the scope, at the same time
+        l3 = ready(); scope.dacranges[5] = TS.ZEROTOFIVE
+        enable_modulation!(l3; writer=writer(l3), v_range=(0.0, 5.0), output_id="DevA/ao1")
+        enable_modulation!(l2; TS.dac_output(scope, 5)..., writer=v -> nothing)
+        @test Set(keys(TCube.MODULATION_OUTPUTS)) == Set(["DevA/ao1", "Triggerscope COM_TEST DAC 5"])
+        disable_modulation!(l3); disable_modulation!(l2)
     end
 end
