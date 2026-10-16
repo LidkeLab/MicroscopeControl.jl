@@ -55,7 +55,7 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 - Simulated stage for testing
 
 ### Light Sources
-- Thorlabs TCube laser diode controller (TLD001), any number of them, each opened by its own serial: open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`); fast power changes in closed loop (one write of about 0.5 ms instead of a verified setpoint's second or more; on a camera a step lands within about 2 ms) through the rear MOD IN from an analogue output you name: `enable_modulation!(laser; ao_channel = "<device>/ao<n>")`, `setmodulation!` (same file, "External modulation"). The driver holds no laser's serial, calibration or wiring: pass them from your rig's code
+- Thorlabs TCube laser diode controller (TLD001), any number of them, each opened by its own serial: open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`); fast power changes in closed loop (one write of about 0.5 ms instead of a verified setpoint's second or more; on a camera a step lands within about 2 ms) through the rear MOD IN from an analogue output you name, per laser: an NI DAQ channel (`enable_modulation!(laser; ao_channel = "<device>/ao<n>")`), a Triggerscope DAC (`enable_modulation!(laser; dac_output(scope, n)...)`), or any writer function; then `setmodulation!` (same file, "External modulation"). Any combination works: each laser claims its own output, or uses none. The driver holds no laser's serial, calibration or wiring: pass them from your rig's code
 - Simulated laser diode (`SimDiodeLaser`) for testing either mode
 - CrystaLaser 561nm
 - Vortran 488nm laser
