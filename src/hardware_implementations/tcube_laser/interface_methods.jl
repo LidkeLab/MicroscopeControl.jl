@@ -43,7 +43,7 @@ const REQUEST_WAIT_S = Ref(0.1)
     request_twice(request, name, serialNo)
 
 Send `request` (an `LD_Request*` wrapper) twice, waiting `REQUEST_WAIT_S` after each, so the
-`LD_Get*` that follows returns the controller's state at the first request. The 642 nm rig's
+`LD_Get*` that follows returns the controller's state at the first request. One TLD001's
 TLD001 answers one request behind (2026-09-29): the first request after a change returned the
 state before it, even 0.5 s later, and the next one was current. Every fresh read in this
 driver goes through here.
@@ -277,7 +277,7 @@ Open loop only, run by `initialize` after the controller's limit is recorded: if
 `max_current` the potentiometer is not touched: a rig that lowered it by hand
 keeps it. Closed loop programs its clamp in `enter_mode!` and this does nothing.
 
-If no potentiometer position gives a limit at or below `max_current` (the 642 nm
+If no potentiometer position gives a limit at or below `max_current` (one tested
 rig's reads 16.74 mA at the lowest), the search fails and it warns as below; `light_on`
 then refuses while the current limit stored in the controller is above `max_current`
 (see [`light_on`](@ref)). The search runs with `raise = false`, so no position above
@@ -329,7 +329,7 @@ const TLD001_TIA_RANGES = (10e-6, 100e-6, 1e-3, 10e-3)
 The TLD001's max-current potentiometer: positions 20..255. The manual gives a step of
 about 0.863 mA per position (the header's step, 220/255), used only to choose the next
 position. The header's scale, `position * 220 / 255` mA, is **not** the limit: the
-controller does not follow it. On the 642 nm rig's TLD001 (64849775, 2026-09-28)
+controller does not follow it. On a TLD001 (2026-09-28)
 position 204 gave a limit of 160.74 mA and 194 gave 152.43 mA -- about 0.83 mA per
 step. So no clamp value is ever computed from a position. The estimate is at least the
 measured step, so estimated moves fall short and the search approaches `max_current`
@@ -418,7 +418,7 @@ return. It never raises the potentiometer in that mode. The default,
 `raise = true`, is closed loop's search, which may move up toward the ceiling.
 
 `[limitation]` lowering the open-loop potentiometer is not validated on hardware
-beyond the 642 nm rig's closed-loop sequence; not yet run on hardware in open loop.
+beyond a tested rig's closed-loop sequence; not yet run on hardware in open loop.
 
 `[limitation]` that the controller clamps to the limit it reports (manual p.41, p.50;
 header :711), and not to the header's position scale, is inferred, not measured (rig
@@ -546,7 +546,7 @@ Only call it with the output enabled. Nothing is recorded by this function.
 
 # The setpoint only takes while the output is ON
 
-Hardware-verified on the 642 nm rig's TLD001 (64849775, 2026-09-28), and the
+Hardware-verified on a TLD001 (2026-09-28), and the
 single most important fact about this controller:
 
 - `LD_SetLaserSetPoint` sent while the output is **disabled** is **ignored**.
@@ -575,6 +575,7 @@ software it may be anything up to full scale, bounded only by the current limit
 function send_setpoint(light::TCubeLaser, code::UInt16)
     serialNo = light.serialNo
     check_err(LD_SetLaserSetPoint(serialNo, code), "LD_SetLaserSetPoint", serialNo)
+    light.modulation.written_at = time()   # MOD IN changes right after a write are lost (modulation.jl, MOD_SETTLE_S)
     close_enough(r) = abs(Int(r) - Int(code)) <= SETPOINT_READBACK_TOLERANCE
     deadline = time() + SETPOINT_CONFIRM_TIMEOUT_S[]
     readback = LD_GetLaserSetPoint(serialNo)
@@ -608,6 +609,7 @@ function send_setpoint_ramped(light::TCubeLaser{ConstantPhotocurrent}, code::UIn
     if 0 <= from && Int(code) - from > step
         for c in (from + step):step:(Int(code) - 1)
             check_err(LD_SetLaserSetPoint(serialNo, UInt16(c)), "LD_SetLaserSetPoint", serialNo)
+            light.modulation.written_at = time()
             sleep(pd.ramp_step_s)
         end
     end
@@ -641,7 +643,7 @@ REQUEST_WAIT_S` (`+ 2 x` at `code == 0`). It never disables the output by itself
 loop.
 
 `[limitation]` the thresholds and the wait are unvalidated on hardware (one night's lock
-measured about 98 uA for 44.6 uA requested, 2.2x) and need the 642 nm rig check. A false trip
+measured about 98 uA for 44.6 uA requested, 2.2x) and need a hardware check. A false trip
 refuses, which is the safe direction.
 
 `[limitation]` that `0x400` sets when the *closed* loop saturates is read from the Kinesis
@@ -654,9 +656,10 @@ check_lock(light::TCubeLaser{ConstantCurrent}, code) = nothing
 function check_lock(light::TCubeLaser{ConstantPhotocurrent}, code)
     pd, serialNo = light.pd, light.serialNo
     sleep(pd.lock_check_s)
+    # `code` is what was sent; with MOD IN active the senders already include the modulation in it.
     requested = photocurrent_from_code(light, code, pd.tia_range)
     measured = NaN
-    if code > 0
+    if requested > 0
         measured = photocurrent_from_raw(light, read_photocurrent_word(light), pd.tia_range)
         measured > pd.lock_ratio * requested && error(
             "TCubeLaser $(light.serialNo): loop lock suspected: the photodiode reads $(measured) A for a request of $(requested) A " *
@@ -666,10 +669,10 @@ function check_lock(light::TCubeLaser{ConstantPhotocurrent}, code)
     bits = read_status_fresh(serialNo)
     bits & STATUS_BITS.saturated != 0 && error(
         "TCubeLaser $serialNo: the controller reports its current limit reached (status 0x400) holding a request of $(requested) A" *
-        "$(code > 0 ? "; the photodiode reads $(measured) A" : " (a zero request)"). The loop is at the clamp and the power is not being held: the request needs more " *
+        "$(requested > 0 ? "; the photodiode reads $(measured) A" : " (a zero request)"). The loop is at the clamp and the power is not being held: the request needs more " *
         "current than the clamp allows, or the photodiode gives fewer counts per mW than at calibration (a moved DIP switch or " *
         "a changed TIA gain; see CALIBRATION.md).")
-    code > 0 && measured < requested / pd.lock_ratio && error(
+    requested > 0 && measured < requested / pd.lock_ratio && error(
         "TCubeLaser $serialNo: the photodiode reads $(measured) A for a request of $(requested) A, below 1/$(pd.lock_ratio) " *
         "of it after $(pd.lock_check_s) s: the loop is not holding its setpoint. Check the photodiode and the calibration (CALIBRATION.md).")
     return nothing
@@ -716,7 +719,7 @@ ceiling, a failure or a mismatch), `light_on` first switches the output off
 rethrows; the log says whether that switch-off worked.
 
 The reference is in amps, decoded with `tia_range`. A range the reading does not follow,
-or a `tia_range` relabelled with W/A kept (the 642 nm rig's fact 6), fails the re-check. A
+or a `tia_range` relabelled with W/A kept (a tested rig's fact 6), fails the re-check. A
 correct range change, where the words do follow, passes.
 
 `[limitation]` the reference emission (open loop at `ref_current_mA` for about
@@ -774,17 +777,26 @@ end
 
 The setpoint the driver's recorded request asks for: `setpoint_code(drive_current)`
 in `ConstantCurrent` mode, `photocurrent_code(output_power_requested)` in
-`ConstantPhotocurrent` mode, and 0 when nothing has been requested. What
-`light_on` sends right after enabling the output.
+`ConstantPhotocurrent` mode, plus the modulation level, and 0 when nothing has been
+requested. What `light_on` sends right after enabling the output. Both modes re-check
+the recorded request, and request + modulation, against the CURRENT bounds and throw
+if either fails: the ceiling (`max_current`, `properties.max_power`) may have been
+lowered since the request was accepted, and `light_on` calls this before the enable.
 """
 function intended_code(light::TCubeLaser{ConstantCurrent})
     isnan(light.drive_current) && return UInt16(0)
     check_current(light, light.drive_current) # the ceiling may have dropped since setcurrent!
-    return setpoint_code(light, light.drive_current)
+    light.modulation.enabled && check_total(light, light.drive_current, modulation_level(light))
+    return setpoint_code(light, light.drive_current + modulation_level(light))
 end
-intended_code(light::TCubeLaser{ConstantPhotocurrent}) =
-    isnan(light.pd.output_power_requested) ? UInt16(0) :
-    photocurrent_code(light, light.pd.output_power_requested / 1000 / light.pd.wa_calibration)
+# Plus the modulation level: a USB write replaces the controller's whole register (modulation.jl).
+function intended_code(light::TCubeLaser{ConstantPhotocurrent})
+    p = light.pd.output_power_requested
+    isnan(p) && return UInt16(0)
+    check_power(light, p)   # properties.max_power may have dropped since setoutputpower!
+    light.modulation.enabled && check_total(light, p, modulation_level(light))
+    return photocurrent_code(light, (p + modulation_level(light)) / 1000 / light.pd.wa_calibration)
+end
 
 "Whether a setpoint has been requested since construction: what `light_on` sends if not is 0."
 has_request(light::TCubeLaser{ConstantCurrent}) = !isnan(light.drive_current)
@@ -815,7 +827,7 @@ that results; if it is at or below `max_current` the potentiometer is never
 touched, so a limit a rig set lower by hand stays. If lowering fails, it warns the same way and goes on, so
 `initialize` never fails here where 0.2.4 did not; `light_on` then refuses while
 the current limit stored in the controller is above `max_current`. `[limitation]` the open-loop
-potentiometer lowering is unvalidated on hardware beyond the 642 nm rig's
+potentiometer lowering is unvalidated on hardware beyond a tested rig's
 closed-loop sequence; not yet run on hardware in open loop.
 
 `ConstantPhotocurrent` -- the closed-loop entry sequence. Every step is a
@@ -828,7 +840,7 @@ simplified away:
    throw; and throw if it disagrees with `pd.tia_range`, naming both and the
    rear-panel switch. A range moved between sessions is a silent factor-of-ten
    error in every commanded power. `[limitation]` the check reads the status bits;
-   on the 642 nm rig the photodiode words did not follow a DIP switch move that the
+   on a tested TLD001 the photodiode words did not follow a DIP switch move that the
    bits did (2026-09-29, rig check R4). The calibration reference is the check that
    does not depend on the bits.
 3. Program the clamp, **the only real protection in power mode**, because the
@@ -861,14 +873,15 @@ caller's ceiling for this diode, and overwriting it with the controller's
 (typically 160-220 mA) limit silently widened the range `setcurrent!` validates
 against, so a rig that asked for an 80 mA ceiling got the controller's instead.
 
-Hardware-verified on the 642 nm rig's TLD001 (64849775, 2026-09-28), output
+Hardware-verified on a TLD001 (2026-09-28), output
 off: polling refreshes the setpoint cache; a plain potentiometer set is ignored
 and adjust mode is required, with a pause before leaving it; the limit the
 controller reports is the truth, not the header's scale; entering closed loop
 sets status bit `0x4`; the W/A factor reads back. `[limitation]` the second flag
 of `LD_EnableMaxCurrentAdjust` (always passed `false`) is not verified.
 """
-function initialize(light::TCubeLaser)
+initialize(light::TCubeLaser) = with_setpoint_lock(() -> _initialize(light), light)
+function _initialize(light::TCubeLaser)
     reset_loop_state!(light)
     serialNo = light.serialNo
     check_err(TLI_BuildDeviceList(), "TLI_BuildDeviceList", serialNo)
@@ -894,7 +907,7 @@ function initialize(light::TCubeLaser)
         # without it can hand back a stale or never-populated cache -- and this
         # value feeds `effective_max_current`, so a stale one widens or narrows
         # the ceiling `setcurrent!` enforces. Not
-        # hardware-verified: reported by the 642 nm rig from the Kinesis header
+        # hardware-verified: reported on hardware from the Kinesis header
         # while building its probe, which will measure whether the two differ.
         request_twice(LD_RequestLaserDiodeMaxCurrentLimit, "LD_RequestLaserDiodeMaxCurrentLimit", serialNo)
         out = LD_GetLaserDiodeMaxCurrentLimit(serialNo)
@@ -1045,8 +1058,20 @@ controller power cycle can restore the pot).
 `[limitation]` those checks add two fresh reads (about 4 x `REQUEST_WAIT_S`), and
 `check_lock` adds `lock_check_s` plus about 4 x `REQUEST_WAIT_S`, to every closed-loop
 `light_on` and `setoutputpower!`; unvalidated on hardware.
+
+Before the enable, the recorded request and request + modulation are re-checked against
+the current ceiling ([`intended_code`](@ref)): lowering `max_power` or `max_current` after a
+request makes the next `light_on` refuse instead of emitting the old total.
+
+Holds the laser's setpoint lock for the whole call ([`with_setpoint_lock`](@ref)), as do
+`initialize`, `light_off`, `shutdown`, `setcurrent!` and `setoutputpower!`: they wait for
+each other (a `light_off` waits for a `setoutputpower!` in flight, up to its lock check),
+and `setmodulation!` refuses while any of them runs.
 """
-function LightSourceInterface.light_on(light::TCubeLaser)
+LightSourceInterface.light_on(light::TCubeLaser) = (with_setpoint_lock(() -> _light_on(light), light); wait_modulation_settled(light))
+function _light_on(light::TCubeLaser)
+    check_not_faulted(light, "light_on")
+    reconcile_scale!(light)
     require_clamp(regulation_mode(light), light, "light_on")
     try
         check_scale!(light)
@@ -1059,7 +1084,12 @@ function LightSourceInterface.light_on(light::TCubeLaser)
     serialNo = light.serialNo
     light.pd isa PhotodiodeLoop && light.pd.zero_failed && @warn "TCubeLaser $serialNo: the last setpoint zero failed, so the controller's stored setpoint may be stale (after a failed re-check, the calibration-reference word read as a power target); the first moments after this enable may run toward it, bounded by the programmed clamp"
     has_request(light) || @warn "TCubeLaser $(serialNo): light_on before any setpoint was requested; sending setpoint 0, since the controller's stored setpoint cannot be trusted"
-    code = intended_code(light)
+    code = try
+        intended_code(light)   # re-checks the recorded request (+ modulation) against the current ceiling
+    catch
+        output_may_be_on(light) && disable_after_failure(light, "light_on (the recorded request is above the current ceiling while the output may be on)")
+        rethrow()
+    end
     # On (or unknown) from the moment the enable is sent (Codex C3); a failed
     # enable is rolled back like a failed setpoint, since the SDK may report a
     # failure for an enable that took (C2).
@@ -1174,9 +1204,14 @@ in 0.2.4.
 throws and leaves the output on, at a setpoint that may be the new or the old
 one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
 """
-function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
+LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64) =
+    (with_setpoint_lock(() -> _setcurrent!(light, current), light); wait_modulation_settled(light))
+function _setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
+    check_not_faulted(light, "setcurrent!")
+    reconcile_scale!(light)
     check_current(light, current)
-    code = setpoint_code(light, current)
+    light.modulation.enabled && check_total(light, current, modulation_level(light))
+    code = setpoint_code(light, current + modulation_level(light))   # the register holds request + modulation (modulation.jl)
     # Fresh when the driver recorded the output off: the polled word can still
     # say on just after a light_off, and a send then would wait out its confirm.
     on = light.properties.is_on || read_status_fresh(light.serialNo) & STATUS_BITS.output_enabled != 0
@@ -1204,7 +1239,7 @@ Command the optical power at the laser output, in mW -- the plane where
    loop, or if the photodiode amplifier is over range (the status flag, or, with the
    output on, a fresh photocurrent word of -32768). An under-range flag with the output on
    only warns (the resolution is reduced; the loop still regulates, as seen at
-   1 mW on the 642 nm rig); with the output off it is expected and ignored.
+   1 mW on a tested TLD001); with the output off it is expected and ignored.
 4. Convert: photocurrent `= power_mW / 1000 / wa_calibration` A, encoded by
    [`photocurrent_code`](@ref), rounding DOWN; above full scale it throws
    naming the DIP switch.
@@ -1219,7 +1254,13 @@ Command the optical power at the laser output, in mW -- the plane where
    below 1/`lock_ratio` of the request zeroes and disables the output, logs, and
    rethrows ([`disable_after_failure`](@ref)); `properties.is_on` is `true`
    afterwards only if the disable failed. The request is not recorded.
-7. Record `pd.output_power_requested` and the DECODED `pd.photocurrent_requested`.
+7. Record `pd.output_power_requested` and the DECODED `pd.photocurrent_requested`, both
+   for the request alone: with MOD IN modulation on, the controller holds them plus
+   `modulation_level`.
+
+The whole call holds the laser's setpoint lock ([`with_setpoint_lock`](@ref)), so a
+`setmodulation!` from another task during it is refused rather than checked against the
+old setpoint.
 
 A safety check that refuses while the output may be on zeroes and disables it first.
 
@@ -1230,9 +1271,14 @@ It never touches `drive_current`: the loop owns the current. Whether the light
 at the output matches is a question for a power meter; see
 [`indicated_output_power`](@ref) and [`loop_status`](@ref).
 """
-function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64)
+LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64) =
+    (with_setpoint_lock(() -> _setoutputpower!(light, power_mW), light); wait_modulation_settled(light))
+function _setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64)
+    check_not_faulted(light, "setoutputpower!")
+    reconcile_scale!(light)
     bits = require_clamp(ConstantPhotocurrent(), light, "setoutputpower!")
     check_power(light, power_mW)
+    light.modulation.enabled && check_total(light, power_mW, modulation_level(light))
     pd, serialNo = light.pd, light.serialNo
     on = light.properties.is_on || bits & STATUS_BITS.output_enabled != 0
     on && (pd.scale_refused || !pd.scale_checked) && @warn "TCubeLaser $serialNo: the photodiode scale is unchecked (the calibration re-check was refused or has not run), so the delivered power may differ from the request (twice it at half the photodiode gain); " *
@@ -1249,14 +1295,18 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
             "TCubeLaser $serialNo: setoutputpower! refused: the photodiode amplifier reports OVER range, so the loop's feedback is invalid")
     end
     # UNDER range means the photocurrent is small for the selected range, not
-    # that it is invalid: on the 642 nm rig the flag was set at 1 mW (4.5 µA on
+    # that it is invalid: on a tested TLD001 the flag was set at 1 mW (4.5 µA on
     # the 1 mA range, 2026-09-29) while the loop regulated correctly. Warn only.
     (bits & STATUS_BITS.tia_under != 0 && on) && @warn(
         "TCubeLaser $serialNo: the photodiode amplifier reports UNDER range with the output on; the photocurrent is small for the selected range and its resolution is reduced")
-    code = photocurrent_code(light, power_mW / 1000 / pd.wa_calibration)
+    # With MOD IN active the controller's register holds request + modulation, and a USB write
+    # replaces the whole register (see `modulation.jl`), so the total is what is sent.
+    level = modulation_level(light)
+    code = photocurrent_code(light, (power_mW + level) / 1000 / pd.wa_calibration)
     if on
-        # What the controller holds is the previous request (read BEFORE `pd` is updated).
-        from = isnan(pd.photocurrent_requested) ? 0 : Int(photocurrent_code(light, pd.photocurrent_requested))
+        # What the controller holds is the previous request plus the modulation (read BEFORE `pd` is updated).
+        from = isnan(pd.output_power_requested) ? 0 :
+            Int(photocurrent_code(light, (pd.output_power_requested + level) / 1000 / pd.wa_calibration))
         try
             send_setpoint_ramped(light, code, from)
             check_lock(light, code)
@@ -1266,7 +1316,7 @@ function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocur
         end
     end
     pd.output_power_requested = power_mW
-    pd.photocurrent_requested = photocurrent_from_code(light, code, pd.tia_range)
+    pd.photocurrent_requested = photocurrent_from_code(light, photocurrent_code(light, power_mW / 1000 / pd.wa_calibration), pd.tia_range)
     println("Laser output power set to $power_mW mW (photocurrent setpoint $(pd.photocurrent_requested) A)",
             on ? "" : " (output off: applied at light_on)")
     return nothing
@@ -1287,6 +1337,8 @@ request is kept, and `light_on` re-applies it.
 """
 function zero_then_disable(light::TCubeLaser)
     serialNo = light.serialNo
+    moderr = zero_modulation(light)   # MOD IN first: it adds to whatever the setpoint is
+    isnothing(moderr) || @error "TCubeLaser $serialNo: writing 0 V to the modulation input before the disable failed ($moderr)"
     zeroed = zero_setpoint(light)
     isnothing(zeroed) || @error "TCubeLaser $serialNo: zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
     note_zero!(light, zeroed)
@@ -1307,6 +1359,8 @@ the next enable must start dark, not on a stale setpoint.
 """
 function disable_after_failure(light::TCubeLaser, what::AbstractString)
     serialNo = light.serialNo
+    moderr = zero_modulation(light)   # MOD IN first: it adds to whatever the setpoint is
+    isnothing(moderr) || @error "TCubeLaser $serialNo: writing 0 V to the modulation input failed ($moderr) during the cleanup of $what"
     zeroed = zero_setpoint(light)
     note_zero!(light, zeroed)
     disabled, offerr = false, nothing
@@ -1351,6 +1405,9 @@ to report.
 function zero_setpoint(light::TCubeLaser)
     try
         status = LD_SetLaserSetPoint(light.serialNo, UInt16(0))
+        # No `written_at` here: this zero is the switch-off path (the output is disabled right after it), and the next
+        # light_on re-sends the register and waits out MOD_SETTLE_S itself; counting it would refuse every
+        # setmodulation! for 1.3 s after a light_off (rig, 2026-10-15).
         return status == 0 ? nothing : "status $status"
     catch err
         return err
@@ -1366,7 +1423,8 @@ throw, since the output is still turned off; a failed disable throws and leaves
 `properties.is_on` unchanged. The recorded request (`drive_current`, or
 `pd.output_power_requested`) is kept, so `light_on` returns to it.
 """
-function LightSourceInterface.light_off(light::TCubeLaser)
+LightSourceInterface.light_off(light::TCubeLaser) = with_setpoint_lock(() -> _light_off(light), light)
+function _light_off(light::TCubeLaser)
     zero_then_disable(light)
     println("$(light.laser_color)" * "_laser is off")
     return nothing
@@ -1380,11 +1438,24 @@ polling and close the connection. A failed zero is logged; a failed disable
 throws, but the connection is closed either way: leaving the Kinesis handle open
 would also block the reconnection a caller needs in order to retry the disable.
 """
-function shutdown(light::TCubeLaser)
+shutdown(light::TCubeLaser) = with_setpoint_lock(() -> _shutdown(light), light)
+function _shutdown(light::TCubeLaser)
     serialNo = light.serialNo
     try
         zero_then_disable(light)
     finally
+        try
+            disable_modulation!(light)   # 0 V (already written by zero_then_disable) and the control source restored
+        catch moderr
+            @error "TCubeLaser $serialNo: disabling the modulation input during shutdown failed" exception = moderr
+        end
+        if !light.modulation.enabled && light.modulation.close === nothing
+            try
+                close_daq_output!(light)   # a task a standalone setupIO made, outside enable_modulation!
+            catch taskerr
+                @error "TCubeLaser $serialNo: deleting the DAQ task during shutdown failed" exception = taskerr
+            end
+        end
         try
             LD_StopPolling(serialNo) # returns Cvoid: no status to check
         catch stoperr
@@ -1433,14 +1504,14 @@ end
     PHOTOCURRENT_OVER_RANGE
 
 The raw photocurrent word the controller reports when the photodiode channel is
-over range: `0x8000`, i.e. -32768 read signed. Observed on the 642 nm rig's
+over range: `0x8000`, i.e. -32768 read signed. Observed on a tested rig's
 TLD001 (2026-09-28) at 110 mA and above, where the reading jumped from about
 3200 counts straight to this value. Decoded as `Inf`, and reported by
 `loop_status` as `tia_over`.
 """
 const PHOTOCURRENT_OVER_RANGE = -32768
 
-# Signed: the idle reading is a small negative offset (-3 on the 642 nm rig), so
+# Signed: the idle reading is a small negative offset (-3 on a tested TLD001), so
 # a negative value is a reading, not a protocol error.
 function photocurrent_from_raw(light::TCubeLaser, raw::Int, range::Float64)
     raw == PHOTOCURRENT_OVER_RANGE && return Inf
@@ -1502,41 +1573,46 @@ end
 Create the NI-DAQmx analogue-output task that drives this laser's modulation
 input, and store it in `light.task_mod`.
 
-Pass `daq_device=` and `ao_channel=` to the constructor to name the device and
-channel explicitly. When they are `nothing` the historical behaviour is kept --
-the **second** discovered device and its **second** AO channel -- because
-changing which analogue output a working rig drives is not something a driver
-should do quietly. What changed is that the discovery path now validates:
-where it used to raise a bare `BoundsError` on a single-device rig, it says
-what it found and what to pass instead.
+The output must be named: `ao_channel=` (e.g. `"<device>/ao<n>"`), and optionally
+`daq_device=`, on the constructor or on [`enable_modulation!`](@ref). Which output is
+wired to which controller belongs to the rig's own code, not to this driver, so there
+is no default: with no channel named, `setupIO` refuses and lists the AO channels it
+found. (Up to 0.2.6 it took the second discovered device's second channel.)
 """
 function setupIO(light::TCubeLaser)
-    devs = NIDAQcard.showdevices(light.daq)
-    device = if light.daq_device === nothing
-        length(devs) >= 2 || error("TCubeLaser $(light.serialNo): setupIO defaults to the 2nd DAQ device, but discovery found $(length(devs)): $(join(devs, ", ")). Pass `daq_device=` to TCubeLaser to name one.")
-        devs[2]
-    else
-        light.daq_device in devs || error("TCubeLaser $(light.serialNo): daq_device \"$(light.daq_device)\" is not among the DAQ devices found: $(join(devs, ", ")).")
-        light.daq_device
-    end
-
-    channelsAO = NIDAQcard.showchannels(light.daq, "AO", device)
-    channel = if light.ao_channel === nothing
-        length(channelsAO) >= 2 || error("TCubeLaser $(light.serialNo): setupIO defaults to the 2nd AO channel of \"$device\", but it has $(length(channelsAO)): $(join(channelsAO, ", ")). Pass `ao_channel=` to TCubeLaser to name one.")
-        channelsAO[2]
-    else
-        light.ao_channel in channelsAO || error("TCubeLaser $(light.serialNo): ao_channel \"$(light.ao_channel)\" is not among the AO channels of \"$device\": $(join(channelsAO, ", ")).")
-        light.ao_channel
-    end
-
+    _, channel = resolve_ao(light)
     light.task_mod = NIDAQcard.createtask(light.daq, "AO", channel)
     return nothing
 end
 
-function set_modvoltage(light::TCubeLaser, voltage::Float64)
-    NIDAQcard.setvoltage(light.daq, light.task_mod, voltage)
-    return nothing
+"""
+    resolve_ao(light::TCubeLaser) -> (device, channel)
+
+The DAQ device and AO channel [`setupIO`](@ref) uses: `light.ao_channel` (required) and
+`light.daq_device`, which defaults to the device part of the channel name
+(`"<device>/ao<n>"`); both are checked against discovery.
+"""
+function resolve_ao(light::TCubeLaser)
+    if light.ao_channel === nothing
+        found = try
+            join(("$d: " * join(NIDAQcard.showchannels(light.daq, "AO", d), ", ") for d in NIDAQcard.showdevices(light.daq)), "; ")
+        catch
+            "(DAQ discovery failed)"
+        end
+        error("TCubeLaser $(light.serialNo): no analogue output is named for its modulation input. " *
+            "Pass `ao_channel=` (and optionally `daq_device=`) to TCubeLaser or enable_modulation!. AO channels found: $found")
+    end
+    devs = NIDAQcard.showdevices(light.daq)
+    device = something(light.daq_device, String(first(split(light.ao_channel, '/'))))   # NIDAQcard takes String, not SubString
+    device in devs || error("TCubeLaser $(light.serialNo): DAQ device \"$device\" is not among the DAQ devices found: $(join(devs, ", ")).")
+    channelsAO = NIDAQcard.showchannels(light.daq, "AO", device)
+    light.ao_channel in channelsAO || error("TCubeLaser $(light.serialNo): ao_channel \"$(light.ao_channel)\" is not among the AO channels of \"$device\": $(join(channelsAO, ", ")).")
+    return String(device), String(light.ao_channel)
 end
+
+# `set_modvoltage(light, volts)` was removed in 0.3.0: it wrote MOD IN outside the setpoint
+# lock and the driver's bookkeeping, so the next USB setpoint absorbed its voltage (the
+# controller's one setpoint register, modulation.jl). Use `enable_modulation!` + `setmodulation!`.
 
 """
     export_state(light::TCubeLaser)
@@ -1577,6 +1653,11 @@ function export_state(light::TCubeLaser)
         "daq_device" => something(light.daq_device, ""), "ao_channel" => something(light.ao_channel, ""),
         "drive_current" => light.drive_current,
         "is_on" => light.properties.is_on,
+        # MOD IN (enable_modulation!): the level is in the setpoint's unit and adds to it.
+        "modulation_enabled" => light.modulation.enabled,
+        "modulation_level" => modulation_level(light),
+        "modulation_per_volt" => light.modulation.per_volt,
+        "modulation_faulted" => light.modulation.faulted,
         # 0.2.4's keys, kept next to the new ones.
         "min_current" => light.min_current, "max_current" => light.max_current,
         "power_unit" => light.properties.power_unit, "power" => light.properties.power,

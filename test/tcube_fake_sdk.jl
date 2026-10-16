@@ -53,7 +53,7 @@
 # misbehave (a pot that does not take, a mode bit that does not set, a
 # setpoint that reads back wrong) so that every refusal has a test.
 #
-# Since 0.2.6 the fake answers ONE REQUEST BEHIND, as the 642 nm rig's TLD001
+# Since 0.2.6 the fake answers ONE REQUEST BEHIND, as a TLD001
 # does (2026-09-29): a request captures the controller's state, and the getters
 # return the state captured at the PREVIOUS request of the same kind, so two
 # requests in a row answer the state at the first. This holds for the status
@@ -122,9 +122,9 @@ const pending = Dict{Symbol,Any}()
 
 "The status bit the controller sets when the drive current is at its limit."
 const LIMIT = 0x00000400
-"The photocurrent word with no light: raw 65532 read signed (642 nm rig, 2026-09-29)."
+"The photocurrent word with no light: raw 65532 read signed (a TLD001, 2026-09-29)."
 const PD_DARK_RAW = -4
-"The 642 nm rig's photodiode (2026-09-29): threshold 67.6 mA, ~145 words per mA above it on the 1 mA range."
+"An example diode's photodiode (measured 2026-09-29): threshold 67.6 mA, ~145 words per mA above it on the 1 mA range."
 const pd_threshold_mA = Ref(67.6)
 const pd_words_per_mA = Ref(145.0)
 "Counts per unit light relative to calibration: 1.0 is the calibrated setup; 0.5 gives half the words for the same light."
@@ -166,7 +166,7 @@ const digpot_sets = Int[]
 
 """
 When `true`, the diode current limit follows the potentiometer on the scale
-measured on the 642 nm rig's TLD001 (position 204 -> 160.74 mA, 194 -> 152.43
+measured on a TLD001 (position 204 -> 160.74 mA, 194 -> 152.43
 mA, about 0.831 mA per step) instead of returning `diode_limit_raw`. The
 closed-loop tests turn it on; the open-loop ones rely on a fixed limit.
 """
@@ -196,8 +196,48 @@ const output_on = OutputOn()
 "The stored setpoint at each successful `LD_EnableOutput`, i.e. what it ran on."
 const enable_log = Int[]
 
+"Control-source flags (1 software, 2 external, 4 pot; they add). 5 is what one cube reported."
+const source = Ref{Int}(5)
+"""
+The external input's contribution in setpoint words (a test's DAQ writer sets it); the
+controller adds its change since the last setpoint write (`ext_at_write`) only while `source` includes the external flag.
+"""
+const ext_words = Ref{Int}(0)
+"""
+The external input at the last setpoint write. The rig's TLD001 (2026-10-13) keeps ONE setpoint register:
+a USB write sets it outright and later MOD IN changes add only their DIFFERENCE, so the register holds
+the written word plus (ext_words - ext_at_write), and `LD_GetLaserSetPoint` reads that sum.
+"""
+const ext_at_write = Ref{Int}(0)
+"""
+The controller loses a MOD IN change made within `settle_s` of its last setpoint write (rig, 2026-10-14: up to
+~0.95 s): the change is absorbed into the register reference instead of adding (`apply_ext!`). 0 = no window.
+"""
+const settle_s = Ref(0.0)
+"`time()` of the last setpoint write the controller took (output on)."
+const last_write_t = Ref(0.0)
+"""
+    apply_ext!(words)
+
+The test DAQ writer sets the external input to `words`. Inside the settle window the change is lost: the
+register reference moves with it, so the held total does not change.
+"""
+function apply_ext!(words::Integer)
+    time() - last_write_t[] < settle_s[] && (ext_at_write[] += Int(words) - ext_words[])
+    ext_words[] = Int(words)
+    return nothing
+end
+"Voltages the test writer received, in order (also recorded in `calls` as \"MOD <v>\")."
+const mod_volts = Float64[]
+
 "Forget the recorded history and restore the default responses."
 function reset!(; limit_raw::Integer=23830, stored::Integer=0)
+    source[] = 5
+    ext_words[] = 0
+    ext_at_write[] = 0
+    settle_s[] = 0.0
+    last_write_t[] = 0.0
+    empty!(mod_volts)
     empty!(calls)
     empty!(status)
     empty!(setpoints)
@@ -255,15 +295,17 @@ closed() = bits[] & CLOSED != 0
 "The controller's limit in mA, ignoring `limit_raw_queue` (the queue shapes what reads return, not the physics)."
 limit_mA_live() = limit_follows_pot[] ? limit_mA_for(digpot[]) : diode_limit_raw[] / 32767 * 220
 setpoint_mA() = setpoint_held[] / 32767 * 220
+"The setpoint register the controller regulates to: the written word plus the external input's change since that write, when the source includes it."
+held_total() = max(0, Int(setpoint_held[]) + (source[] & 2 != 0 ? ext_words[] - ext_at_write[] : 0))
 "The drive current the closed loop needs to hold the held setpoint word."
-needed_mA() = pd_threshold_mA[] + setpoint_held[] / (pd_scale[] * pd_words_per_mA[])
+needed_mA() = pd_threshold_mA[] + held_total() / (pd_scale[] * pd_words_per_mA[])
 pd_word_at(mA) = mA <= pd_threshold_mA[] ? PD_DARK_RAW :
     round(Int, pd_scale[] * pd_words_per_mA[] * (mA - pd_threshold_mA[]))
 saturated_now() = enabled() && (closed() ? needed_mA() > limit_mA_live() : setpoint_mA() > limit_mA_live())
 function photocurrent_now()
     photocurrent_raw[] === nothing || return photocurrent_raw[]
     enabled() || return PD_DARK_RAW
-    (closed() && !saturated_now()) && return Int(setpoint_held[])   # the loop holds its setpoint
+    (closed() && !saturated_now()) && return held_total()   # the loop holds its setpoint (+ the external input)
     return pd_word_at(min(closed() ? needed_mA() : setpoint_mA(), limit_mA_live()))
 end
 function capture(kind::Symbol)
@@ -317,7 +359,11 @@ end
         push!(Main.FakeKinesis.setpoints, laserDiodeCurrent)
         s = Main.FakeKinesis.record!("LD_SetLaserSetPoint")
         on = Main.FakeKinesis.bits[] & Main.FakeKinesis.ENABLED != 0
-        (s == 0 && on) && (Main.FakeKinesis.setpoint_held[] = laserDiodeCurrent) # ignored with the output off
+        if s == 0 && on   # ignored with the output off
+            Main.FakeKinesis.setpoint_held[] = laserDiodeCurrent
+            Main.FakeKinesis.ext_at_write[] = Main.FakeKinesis.ext_words[]   # the write replaces the whole register
+            Main.FakeKinesis.last_write_t[] = time()
+        end
         return s
     end
     LD_RequestLaserSetPoint(serialNo) = Main.FakeKinesis.record!("LD_RequestLaserSetPoint")
@@ -325,7 +371,7 @@ end
         Main.FakeKinesis.record!("LD_GetLaserSetPoint")
         Main.FakeKinesis.setpoint_readback[] === nothing || return Main.FakeKinesis.setpoint_readback[]
         on = Main.FakeKinesis.bits[] & Main.FakeKinesis.ENABLED != 0
-        return on ? Main.FakeKinesis.setpoint_held[] : Main.FakeKinesis.STALE_SETPOINT
+        return on ? UInt16(Main.FakeKinesis.held_total()) : Main.FakeKinesis.STALE_SETPOINT   # the register, MOD IN changes included
     end
     function LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         Main.FakeKinesis.record!("LD_GetLaserDiodeMaxCurrentLimit")
@@ -379,6 +425,19 @@ end
         return Main.FakeKinesis.polling_ok[]
     end
     LD_StopPolling(serialNo) = (Main.FakeKinesis.record!("LD_StopPolling"); nothing)
+    LD_RequestControlSource(serialNo) = Main.FakeKinesis.record!("LD_RequestControlSource")
+    function LD_GetControlSource(serialNo)
+        Main.FakeKinesis.record!("LD_GetControlSource")
+        # As the rig's TLD001 (2026-10-13): a source of 2 or 3 reads back as 1, although the
+        # external input demonstrably works; 5 (and, assumed, 7) read back as set.
+        s = Main.FakeKinesis.source[]
+        return source_flags(s in (2, 3) ? 1 : s)
+    end
+    function LD_SetControlSource(serialNo, src)
+        s = Main.FakeKinesis.record!("LD_SetControlSource")
+        s == 0 && (Main.FakeKinesis.source[] = Int(src))
+        return s
+    end
 end
 
 # The driver waits between a Kinesis request and the read of its answer; the
@@ -386,3 +445,4 @@ end
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.REQUEST_WAIT_S[] = 0.0
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.CLAMP_WAIT_S[] = 0.0
 MicroscopeControl.HardwareImplementations.TCubeLaserControl.SETPOINT_CONFIRM_TIMEOUT_S[] = 0.05
+MicroscopeControl.HardwareImplementations.TCubeLaserControl.MOD_SETTLE_S[] = 0.0   # the fake has no MOD IN settle window

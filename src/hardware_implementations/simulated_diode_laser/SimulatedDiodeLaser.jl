@@ -102,7 +102,7 @@ In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
 and `ref_ratio` are accepted into the [`PhotodiodeLoop`](@ref). `[limitation]` the
 simulation neither ramps, checks for a loop lock, nor re-checks a calibration
 reference; it only stores them. `threshold_current` defaults to
-65 mA and, in `ConstantCurrent` mode, `max_current` to 160 mA (the 642 nm
+65 mA and, in `ConstantCurrent` mode, `max_current` to 160 mA (one tested
 diode's numbers); the model fields are documented on the type.
 
 Unlike `TCubeLaser`, whose default `properties` are 0.2.4's `"mW"` labels, the
@@ -141,7 +141,7 @@ function SimDiodeLaser(;
         ref_current_mA, ref_photocurrent_A, ref_ratio)
     max_current = something(max_current, 160.0)
     props = something(properties, LightSourceProperties("mA", 0.0, false, min_current, max_current))
-    resp = something(responsivity, pd === nothing ? 1 / 224.2 : 1 / pd.wa_calibration)
+    resp = something(responsivity, pd === nothing ? 1 / 224.2 : 1 / pd.wa_calibration)   # 224.2 W/A: an example diode
     range = something(tia_range_A, pd === nothing ? 1e-3 : pd.tia_range)
     SimDiodeLaser{typeof(mode)}(unique_id, props, min_current, max_current, threshold_current,
         NaN, pd, efficiency, resp, responsivity_drift, range, key, interlock,

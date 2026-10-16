@@ -10,6 +10,146 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+Release candidates (tags on the PR #83 branch, 2026-10-14/15): `v0.3.0-rc4` carries everything below, including the
+fixes from the re-review and the Triggerscope output; `v0.3.0-rc3` carried everything up to it,
+including the fixes from the PR review, and main merged in; `v0.3.0-rc2` was the first verified on
+hardware, without those fixes; `v0.3.0-rc1` had a bug (a channel's device part passed to NIDAQcard as
+a `SubString`, so `enable_modulation!(laser; ao_channel)` threw a MethodError on a real DAQ). The
+final 0.3.0 is tagged from main after the merge; the branch head reads `0.3.0-DEV` (main's convention), the
+rc tags carry their own version. 0.3.0, not 0.2.7: `max_current` is now required
+in open loop and `setupIO` has no default output (breaking).
+
+### Changed (breaking)
+
+- **TCube laser: no rig's numbers in the driver.** The driver now ships no serial, DAQ
+  device, channel or calibration of any one laser: a rig declares them in its own code.
+  - `max_current` is required in open loop too (`TCubeLaser(serial)` alone throws). Up to
+    0.2.6 open loop defaulted to 160 mA, one rig's diode.
+  - `setupIO` no longer picks the second discovered DAQ device's second AO channel: it
+    needs `ao_channel` (`"<device>/ao<n>"`; `daq_device` defaults to its device part) and,
+    with none named, refuses and lists the AO channels it found.
+  - CALIBRATION.md keeps the generic procedure and the TLD001's controller facts; one rig's
+    calibration table and wiring moved to that rig's repository. The constructor examples
+    use placeholder numbers.
+- **TCube laser: `set_modvoltage(laser, volts)` is removed** (PR #83 re-review). It wrote
+  MOD IN outside the setpoint lock and the driver's bookkeeping, so the next USB setpoint
+  absorbed its voltage. Use `enable_modulation!` + `setmodulation!` (one write, just as fast).
+- **Triggerscope: a DAC voltage outside its range now throws** (`ArgumentError`) instead of
+  being sent as a wrapped 16-bit code.
+
+### Added
+
+- **TCube laser: external modulation through the rear MOD IN, from an analogue output.**
+  `enable_modulation!(laser; ao_channel = "<device>/ao<n>")` (or `writer`, `v_range` and
+  `output_id` for any other output, all three required) creates the AO task, writes 0 V and
+  sets the controller's control source to software + external (the previous source is
+  restored by `disable_modulation!`). There is no default output. `setmodulation!(laser,
+  level)` then adds `level` to the software setpoint (mW in closed loop) in ONE write: no USB
+  call to the controller, no lock check. Every path that switches the output off
+  (`light_off`, `shutdown`, the failure cleanup) writes 0 V first; `setoutputpower!`/
+  `setcurrent!` and `setmodulation!` refuse a setpoint + modulation above the ceiling or
+  below 0. The controller keeps ONE setpoint register (a USB write sets it outright, MOD IN
+  changes add their difference), so while modulation is enabled `setoutputpower!`,
+  `setcurrent!` and `light_on` send request + modulation level, and `check_lock` checks that
+  total (sending the request alone absorbed the modulation on hardware: 12 + 5, then 0 V,
+  read 7 mW); `export_state` gains `modulation_enabled`, `modulation_level`,
+  `modulation_per_volt`. Also `control_source`/`set_control_source!`, which take flag sums
+  (3, 5, 7) that the `LD_InputSourceFlags` enum cannot represent. Off by default and per
+  laser: a laser whose MOD IN is not cabled behaves exactly as before. Hardware check on a
+  TLD001 in closed loop with an NI USB DAQ output (2026-10-13): the volts-to-mW scale within
+  0.4 % of `tia_range x wa_calibration / 10`; a write about 0.5 ms, against over a second for
+  a `setoutputpower!`; on a camera at 200 Hz a step lands within one 5 ms frame, without
+  overshoot; the input is ignored with control source 5 (software + pot); this driver code
+  passed 17 of 17 checks (enable, +5 mW, setpoints up and down while modulated, refusals,
+  `export_state`, `light_off` writing 0 V, the control source restored). A 0 mW base is dark
+  (OFF < 0.01 % of ON on the camera), never locked high (15 jumps from 0 V), and a +20 mW
+  pulse from it lands within one 5 ms frame even after 2 s dark.
+  Several lasers: each claims its analogue output (DAQ channel or `output_id` with a writer)
+  and a second laser asking for a held one is refused. Open loop + MOD IN is REFUSED: on a
+  TLD001 it acted only after the source was set while on, every `setcurrent!` or off/on
+  disarmed it, and re-arming left the current several mA off; open loop itself verified.
+  Removed the unused `tcube_laser/tcubeapi.jl` (an old script with a hard-coded serial).
+  See CALIBRATION.md, "External modulation".
+- **TCube laser: fixes from the PR #83 review (`v0.3.0-rc3`).**
+  - A per-laser setpoint lock (`light.modulation.lock`) serialises everything that writes
+    the controller's setpoint register: `initialize`, `light_on`, `light_off`, `shutdown`,
+    `setcurrent!`, `setoutputpower!`, `enable_modulation!`, `disable_modulation!`.
+    `setmodulation!` tries it and REFUSES at once while it is held, so a level is never
+    checked against a setpoint in flight (reproduced before the fix: 25 + 5 mW held against
+    a 28 mW ceiling) and the fast path never waits behind a verified USB write.
+  - Closed-loop `light_on` re-checks the recorded request and request + modulation against
+    the current `max_power` before the enable (open loop already re-checked the request).
+  - `disable_modulation!` stays enabled, with its output and claim, when 0 V could not be
+    written and the restored control source still includes the external input.
+  - The AO task is deleted on `disable_modulation!`, `shutdown` and a failed enable (the
+    range query moved inside the guarded block); a writer can pass `close=` for its own
+    release. A failed release keeps the claim.
+  - Smaller: outputs are claimed per laser OBJECT (two objects for one serial cannot share
+    one); the volts-per-mW scale is recomputed on every `setmodulation!` (an edited
+    `wa_calibration` takes effect); a writer that throws gets 0 V written and the level
+    recorded as 0; `photocurrent_requested` is documented as the request alone; the test
+    fake reads a control source of 2 or 3 back as 1, like the cube, and the test writer no
+    longer clips negative voltages.
+  - **New hardware fact, found while checking these fixes on the rig: a MOD IN change made
+    within about 1 s of a setpoint write is lost by the TLD001.** Measured 2026-10-14 in
+    closed loop: a change up to ~0.95 s after the last `LD_SetLaserSetPoint` was lost,
+    entirely or in part. The light kept the old total, and every later change counted from
+    it, so the light and the driver's record differed by the step until the next write. At
+    1.0 s a change was often partly lost; from 1.1 s every change was applied (bases 2-60 mW,
+    steps 1-10 mW). Status reads do not cause it, and MOD IN
+    changes alone were applied at every rate tried (to 2 kHz). The slow calls used to return
+    ~0.95 s after their write, just inside the window. Now `MOD_SETTLE_S` (1.3 s): with
+    modulation enabled and the output on, `light_on`, `setoutputpower!` and `setcurrent!`
+    return only that long after their last write (≈ 0.35 s more per base change), and
+    `setmodulation!` refuses inside the window. The driver records each write's time
+    (`light.modulation.written_at`).
+  - Hardware check of `v0.3.0-rc3` on a TLD001 + NI USB-6008 (2026-10-14, 38 of 38): the 17
+    checks of 2026-10-13; 10 enable/disable cycles on one AO channel, each leaving the
+    channel free; the review's race at 200 Hz (1602 attempts refused while a setpoint
+    change held the lock, none above the 30 mW ceiling on the record or the photodiode, no
+    false lock-check trip); a DAQ task deleted under the driver (writes refused, `light_off`
+    still switches off, disable restores the source, a re-enable works); control source
+    5 → 3 with the output on (no potentiometer step: 0.14 mW, the DAQ's 0 V offset); and a
+    modulation change the instant `light_on`/`setoutputpower!` returns is applied (9 of 9).
+  - Further hardware checks the same night (docs only, no code change after `v0.3.0-rc3`):
+    - the loss window was measured at bases of 2–60 mW with steps of 1–10 mW: changes are
+      always applied from 1.1 s;
+    - a 30-minute run at 400 Hz: 684,194 `setmodulation!` writes, 0 errors, the light
+      matching the record at all 57 checks; write median 0.47 ms, with rare outliers up to
+      12.5 ms;
+    - small steps on a camera: from a 0 mW base, steps of 0.5 mW or less give no light; from
+      a base near threshold every step is linear (CALIBRATION.md, "What off means");
+    - full range, 0 ↔ 70 mW (that rig's ceiling): 71.1 mW read at 138.6 mA, under the
+      150 mA clamp with no current-limit bit, 70.5 mW refused; on a camera, 2 frames per edge
+      at 199 and 399 Hz, with no overshoot and a dark "off".
+- **TCube laser: fixes from the PR #83 re-review (`v0.3.0-rc4`).**
+  - `light_on`, `setoutputpower!` and `setcurrent!` now wait out `MOD_SETTLE_S` AFTER releasing
+    the setpoint lock, in a loop, so a `light_off` issued meanwhile is no longer held up by
+    that wait (up to 1.3 s on rc3). `setmodulation!` still refuses inside the window.
+  - **Faulted state:** when the voltage on MOD IN becomes unknown (a write throws and the 0 V
+    rescue fails, or a 0 V write throws), `modulation.faulted` is set. `setmodulation!` then
+    accepts only 0, and `light_on`, `setoutputpower!` and `setcurrent!` refuse, until a 0 V
+    write succeeds (`setmodulation!(laser, 0)`, `disable_modulation!` or `light_off`). It closes
+    the reviewer's cases (≈ 35 and 40 mW against a 30 mW ceiling on the fake).
+    `export_state` gains `modulation_faulted`.
+  - The settle guards no longer trust `properties.is_on`: the wait and the refusal apply
+    whenever modulation is enabled (the front panel can enable the output).
+  - A level written before an edit of `pd.wa_calibration` is re-recorded at the new scale
+    before it is used (`reconcile_scale!`).
+  - A release (DAQ task deletion) that failed is kept and retried by the next
+    `disable_modulation!`, `enable_modulation!` (which refuses while it fails, so the claim
+    is never dropped under a stuck task) or `shutdown`; `shutdown` also deletes a task a
+    standalone `setupIO` made.
+  - The test fake now models the settle window (`settle_s`: a MOD IN change that soon after a
+    setpoint write is absorbed), and the tests show the driver's waits beat it.
+- **Triggerscope: a DAC as a generic analogue output, and safe sharing.**
+  - `dac_output(scope, dac; range)` returns `(; writer, v_range, output_id)` for any DAC 1–16,
+    e.g. `enable_modulation!(laser; dac_output(scope, 3; range = ZEROTOFIVE)...)`.
+    `dac_range_volts(range)` gives a range's span. It warns when `compause` > 10 ms (each
+    write costs twice `compause`).
+  - Every command and its reply now run under a per-scope lock (`scope.lock`), so attenuators
+    and a MOD IN output on one Triggerscope never interleave on its serial port.
+
 ### Changed
 
 - Compat entries for the two dependencies that had none: `LibSerialPort = "0.5"` (#82) and

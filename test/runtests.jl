@@ -128,9 +128,9 @@ lab_summary("Core") do
     # answers: see CHANGELOG 0.2.3 and 0.2.5, hardware verification NOT DONE.
     @testset "TCube Laser (no hardware)" begin
         TCube = MicroscopeControl.HardwareImplementations.TCubeLaserControl
-        # Open-loop and closed-loop lasers as the rigs would build them. The
-        # closed-loop numbers are the 642 nm rig's measured calibration.
-        cc(; kw...) = TCubeLaser("00000000"; mode=ConstantCurrent(), kw...)
+        # Open-loop and closed-loop lasers with example values (any diode; nothing here is
+        # tied to one rig). max_current is required in both modes.
+        cc(; kw...) = TCubeLaser("00000000"; mode=ConstantCurrent(), max_current=160.0, kw...)
         cp_props() = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)
         cp(; kw...) = TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2,
                                  tia_range=1e-3, tec_stabilised=missing, properties=cp_props(), max_current=160.0,
@@ -150,7 +150,10 @@ lab_summary("Core") do
 
             # `mode` defaults to ConstantCurrent(), the 0.2.x behaviour, so no
             # existing construction line changes meaning.
-            @test TCubeLaser("00000000") isa TCubeLaser{ConstantCurrent}
+            @test TCubeLaser("00000000"; max_current=160.0) isa TCubeLaser{ConstantCurrent}
+            # No default ceiling in open loop either (up to 0.2.6: 160 mA, one rig's diode).
+            @test_throws "max_current is required" TCubeLaser("00000000")
+            @test_throws "max_current is required" TCubeLaser("00000000"; mode=ConstantCurrent())
 
             laser = cc()
             @test laser isa TCubeLaser{ConstantCurrent}
@@ -196,11 +199,11 @@ lab_summary("Core") do
 
             full = TCubeLaser("TCubeLaser", props, "red", 0.0, 160.0,
                 220.0, 32767.0, "00000000", 0, NIdaq(),
-                150.0, "Dev2", "Dev2/ao1", 40.0)
+                150.0, "DevA", "DevA/ao0", 40.0)
             @test full isa TCubeLaser{ConstantCurrent}
             @test full.controller_max_current == 150.0
-            @test full.daq_device == "Dev2"
-            @test full.ao_channel == "Dev2/ao1"
+            @test full.daq_device == "DevA"
+            @test full.ao_channel == "DevA/ao0"
             @test full.drive_current == 40.0
 
             # A caller-supplied `properties` is kept as given.
@@ -1557,7 +1560,7 @@ lab_summary("Core") do
         end
 
         @testset "export_state" begin
-            laser = cc(; daq_device="Dev2", ao_channel="Dev2/ao1", threshold_current=65.0)
+            laser = cc(; daq_device="DevA", ao_channel="DevA/ao0", threshold_current=65.0)
             attrs, data, children = export_state(laser)
             @test attrs isa Dict{String,Any}
             @test attrs["regulation_mode"] == "ConstantCurrent"
@@ -1567,8 +1570,8 @@ lab_summary("Core") do
             @test attrs["threshold_current_mA"] == 65.0
             @test isnan(attrs["controller_max_current"])
             @test isnan(attrs["drive_current"]) # nothing commanded yet
-            @test attrs["daq_device"] == "Dev2"
-            @test attrs["ao_channel"] == "Dev2/ao1"
+            @test attrs["daq_device"] == "DevA"
+            @test attrs["ao_channel"] == "DevA/ao0"
             # 0.2.4's keys are kept next to the new ones.
             for k in ("min_current", "max_current", "power_unit", "power", "min_power", "max_power")
                 @test haskey(attrs, k)
@@ -1771,12 +1774,13 @@ lab_summary("Core") do
         end
 
         include("tcube_output_order.jl")
+        include("tcube_modulation.jl")
     end
 
     @testset "NIdaq digital output" begin
         # Digital scalar writes are PORT format: bit n is line n of the port,
         # even for a single-line task. Confirmed on hardware (NI-DAQmx 23.5,
-        # USB-6008): a shutter on port0/line1 ignored 1 and responded to 2.
+        # NI USB DAQ): a shutter on port0/line1 ignored 1 and responded to 2.
         # `do_port_word` is the whole of the fix and is testable without a DAQ.
         DAQ = MicroscopeControl.HardwareImplementations.NIDAQcard
 

@@ -1,5 +1,5 @@
 # The TLD001 ignores LD_SetLaserSetPoint while its output is disabled and runs
-# on its stored setpoint at the next enable (642 nm rig, 2026-09-28). These
+# on its stored setpoint at the next enable (seen on a TLD001, 2026-09-28). These
 # cases pin the order the driver sends things in, against the fake controller
 # in `tcube_fake_sdk.jl`, which models that behaviour.
 using Test
@@ -14,7 +14,7 @@ using MicroscopeControl.HardwareImplementations.TCubeLaserControl
     # above-full-scale setpoint word, as found on the rig.
     function fresh()
         FK.reset!(stored = 32767)
-        l = TCubeLaser("00000000")
+        l = TCubeLaser("00000000"; max_current=160.0)
         redirect_stdout(devnull) do
             initialize(l)
         end

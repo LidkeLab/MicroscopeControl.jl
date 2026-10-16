@@ -1,5 +1,62 @@
 
 """
+    ExternalModulation
+
+State of the TLD001's analog control input (rear SMA `MOD IN`) when a DAQ analog output
+drives it: see [`enable_modulation!`](@ref). Every `TCubeLaser` carries one
+(`light.modulation`), disabled until `enable_modulation!`.
+
+- `enabled`: the control source includes the external input and the DAQ writer exists.
+- `level`: the modulation last written, in the setpoint's unit (mW in closed loop, mA in
+  open loop); the controller adds it to the software setpoint.
+- `per_volt`: the controller's scale at the last write. 10 V is full scale: the photodiode's
+  full-scale power (`tia_range x wa_calibration`) in closed loop, the current limit in open
+  loop (TLD001 manual, section 5.5). `setmodulation!` recomputes it on every write, so an
+  edit of `pd.wa_calibration` takes effect at once.
+- `v_min`, `v_max`: the DAQ channel's output range in volts.
+- `prev_source`: the control-source flags read by `enable_modulation!`, restored by
+  `disable_modulation!`.
+- `write`: `v -> nothing`, one voltage to the output (the DAQ channel, or any writer passed
+  to `enable_modulation!`).
+- `output`: the name of the analogue output this laser has claimed (the DAQ channel, or the
+  `output_id` given with a writer), or `nothing`. No two laser objects can hold the same
+  one, even two for the same serial number.
+- `close`: `() -> nothing`, run when the output is released (`disable_modulation!`,
+  `shutdown`, a failed `enable_modulation!`): deletes the DAQ task, or a writer's own
+  `close=`. `nothing` when there is nothing to release. A release that failed stays here,
+  and the next `disable_modulation!`, `enable_modulation!` or `shutdown` retries it.
+- `faulted`: the voltage on MOD IN is unknown. A write failed and the 0 V rescue write failed
+  too, or a 0 V write itself threw (it may or may not have applied). While set,
+  `setmodulation!` accepts only 0 and every setpoint write refuses (`light_on`,
+  `setoutputpower!`, `setcurrent!`); a 0 V write that succeeds clears it
+  (`setmodulation!(laser, 0)`, `disable_modulation!`, `light_off`).
+- `lock`: the laser's setpoint lock. Everything that writes the controller's setpoint
+  register holds it: `initialize`, `light_on`, `light_off`, `shutdown`, `setcurrent!`,
+  `setoutputpower!`, `enable_modulation!`, `disable_modulation!` and `setmodulation!`.
+  The slow calls wait for it. `setmodulation!` only tries it and refuses when it is held,
+  so a fast write never waits behind a verified USB setpoint and never lands inside one.
+- `written_at`: `time()` of the last setpoint write to the controller (`LD_SetLaserSetPoint`),
+  0 before the first. The switch-off zero (`light_off`, `shutdown`, failure cleanup) does not
+  count: the output is disabled right after it, and the next `light_on` re-sends and waits. A MOD IN change too soon after one is lost by the controller
+  ([`MOD_SETTLE_S`](@ref)).
+"""
+mutable struct ExternalModulation
+    enabled::Bool
+    level::Float64
+    per_volt::Float64
+    v_min::Float64
+    v_max::Float64
+    prev_source::Int
+    write::Any
+    output::Union{Nothing,String}
+    close::Any
+    lock::ReentrantLock
+    written_at::Float64
+    faulted::Bool
+end
+ExternalModulation() = ExternalModulation(false, 0.0, NaN, 0.0, 0.0, -1, nothing, nothing, nothing, ReentrantLock(), 0.0, false)
+
+"""
     TCubeLaser{M<:RegulationMode} <: DiodeLaser
 
 A laser diode on a Thorlabs TLD001 T-Cube controller, in one of two regulation
@@ -49,10 +106,11 @@ so that an 80 mA call can never become an 80 mW one.
 - `controller_max_current::Float64`: The controller's own diode current limit
   in mA, read from `LD_GetLaserDiodeMaxCurrentLimit` by `initialize`. `NaN`
   until `initialize` runs.
-- `daq_device::Union{Nothing,String}`: DAQ device name `setupIO` should use.
-  `nothing` keeps the historical discovery behaviour (see `setupIO`).
-- `ao_channel::Union{Nothing,String}`: AO channel name `setupIO` should use.
-  `nothing` keeps the historical discovery behaviour (see `setupIO`).
+- `daq_device::Union{Nothing,String}`: DAQ device `setupIO` should use; `nothing` =
+  the device part of `ao_channel`.
+- `ao_channel::Union{Nothing,String}`: AO channel wired to the controller's MOD IN,
+  e.g. `"<device>/ao<n>"`. `setupIO` and `enable_modulation!` require it (no
+  default: which output drives which controller belongs to the rig's code).
 - `drive_current::Float64`: The drive current in mA that `setcurrent!` last
   accepted: the last accepted *request*, not what reached the wire (a request
   below one setpoint code encodes to zero). `NaN` before the first. It stays
@@ -66,6 +124,8 @@ so that an 80 mA call can never become an 80 mW one.
 - `pd::Union{Nothing,PhotodiodeLoop}`: The photodiode loop's calibration and
   state; a [`PhotodiodeLoop`](@ref) exactly when `M === ConstantPhotocurrent`,
   `nothing` otherwise.
+- `modulation::ExternalModulation`: the analog control input's state
+  ([`enable_modulation!`](@ref)); not a constructor argument, always starts disabled.
 
 The first fourteen fields are in the order they have always been in, and the
 two added in 0.2.5 are at the end, so the pre-0.2.5 positional forms still
@@ -75,7 +135,7 @@ construct: they build a `TCubeLaser{ConstantCurrent}` with both defaulted.
 
 The Thorlabs TLD001 ignores `LD_SetLaserSetPoint` while its output is disabled
 and, on the next `LD_EnableOutput`, runs on whatever setpoint it had stored
-(observed on the 642 nm rig's TLD001 64849775, 2026-09-28). So a requested
+(observed on a TLD001, 2026-09-28). So a requested
 setpoint (`setcurrent!`, `setoutputpower!`) reaches the diode only because
 `light_on` sends it right after enabling, and `light_off` and `shutdown` zero
 the setpoint before disabling, so the next enable starts dark.
@@ -103,6 +163,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     drive_current::Float64
     threshold_current::Float64
     pd::Union{Nothing,PhotodiodeLoop}
+    modulation::ExternalModulation
 
     function TCubeLaser{M}(unique_id, properties, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
@@ -127,7 +188,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
             controller_max_current, daq_device, ao_channel, drive_current,
-            threshold_current, pd)
+            threshold_current, pd, ExternalModulation())
     end
 end
 
@@ -164,19 +225,19 @@ no existing construction line changes meaning. Closed loop is chosen explicitly
 with `mode = ConstantPhotocurrent()`. The default will not change.
 
 ```julia
-# 642 nm rig, closed loop. Calibration: see CALIBRATION.md beside this file.
+# Closed loop. The numbers are placeholders: measure your own (CALIBRATION.md beside this file).
 laser = TCubeLaser("00000000";
     mode              = ConstantPhotocurrent(),
-    wa_calibration    = 224.2,     # W/A, measured with a power meter before the fibre
+    wa_calibration    = 200.0,     # W/A, measured with a power meter where you quote power
     tia_range         = 1e-3,      # A: the rear-panel DIP switch, as set
     tec_stabilised    = missing,   # honest until checked
-    threshold_current = 65.0,      # mA, from a bench sweep
-    max_current       = 150.0,     # mA, your diode's rating: programmed as the loop's clamp
-    properties        = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)) # max_power 70.0 mW: your diode's rating
+    threshold_current = 60.0,      # mA, from a bench sweep
+    max_current       = 120.0,     # mA, your diode's rating: programmed as the loop's clamp
+    properties        = LightSourceProperties("mW", 0.0, false, 0.0, 50.0)) # max_power 50.0 mW: your diode's rating
 
 # The same diode in open loop.
 laser = TCubeLaser("00000000"; mode = ConstantCurrent(), # mode is optional here: the default
-    min_current = 70.0, max_current = 150.0)             # max_current: your diode's rating
+    min_current = 0.0, max_current = 120.0)              # max_current: your diode's rating, required
 ```
 
 In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
@@ -188,10 +249,11 @@ clamp. In
 defaults to 0.2.4's `LightSourceProperties("mW", 0.0, false, 0.0, 100.0)`: labels
 only in this mode, nothing enforces them (see the `properties` field).
 
-- `max_current` is **your** ceiling for this diode and is never overwritten. In
-  `ConstantCurrent` mode it defaults to `160.0`; in `ConstantPhotocurrent` mode
-  it has no default, because it is the clamp `initialize` programs and the only
-  real protection while the loop raises the current by itself;
+- `max_current` is **your** ceiling for this diode and is never overwritten. It is
+  required in both modes (up to 0.2.6 open loop defaulted to `160.0`, one rig's
+  diode): the driver cannot know your diode's rating. In `ConstantPhotocurrent`
+  mode it is also the clamp `initialize` programs, the only real protection while
+  the loop raises the current by itself;
   `initialize` records the controller's own limit separately in
   `controller_max_current`, and `setcurrent!` enforces the smaller of the two.
 - `ramp_step_mW`, `ramp_step_s`, `lock_check_s`, `lock_ratio`, `ref_current_mA`,
@@ -208,7 +270,7 @@ function TCubeLaser(serialNo::String;
     properties::Union{Nothing,LightSourceProperties}=nothing,
     laser_color::String="red",
     min_current::Float64=0.0,
-    max_current::Union{Nothing,Float64}=nothing, # ConstantCurrent: 160.0; 220.0 is the max of the TCube
+    max_current::Union{Nothing,Float64}=nothing, # required: your diode's ceiling (220.0 is the TCube's full scale)
     controller_max_current::Float64=NaN,
     max_setcurrent::Float64=220.0,
     max_setpoint::Float64=32767.0,
@@ -233,7 +295,9 @@ function TCubeLaser(serialNo::String;
     pd = LightSourceInterface.diode_loop_from_keywords(mode, name; wa_calibration, tia_range,
         tec_stabilised, properties, max_current, ramp_step_mW, ramp_step_s, lock_check_s, lock_ratio,
         ref_current_mA, ref_photocurrent_A, ref_ratio)
-    max_current = something(max_current, 160.0)
+    max_current === nothing && throw(ArgumentError(
+        "$name: max_current is required: your ceiling for this diode in mA (its rating, at most the TCube's " *
+        "$(max_setcurrent) mA full scale). There is no default since 0.3.0; up to 0.2.6 open loop defaulted to 160.0."))
     props = something(properties, LightSourceProperties("mW", 0.0, false, 0.0, 100.0))
     TCubeLaser{typeof(mode)}(unique_id, props, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
