@@ -38,6 +38,30 @@ MicroscopeControl.setpower(light::RecordingLight, ::Float64) = (push!(light.log,
 MicroscopeControl.light_on(light::RecordingLight) = (push!(light.log, :light_on); nothing)
 MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_off); nothing)
 
+# A camera whose frame reads follow a script: `nothing` (a timeout, a refused read) or a frame, one per call. The
+# loop needs only `is_running` and `getlastframe`; it stops being "running" once the script is used up.
+mutable struct ScriptedCamera <: MicroscopeControl.Camera
+    is_running::Int
+    script::Vector{Any}
+    reads::Int
+end
+ScriptedCamera(script...) = ScriptedCamera(1, collect(Any, script), 0)
+function MicroscopeControl.getlastframe(camera::ScriptedCamera)
+    camera.reads += 1
+    frame = camera.script[camera.reads]
+    camera.reads == length(camera.script) && (camera.is_running = 0)
+    return frame
+end
+
+# End a child process in bounded time: SIGTERM, a grace period, then SIGKILL, then a bounded wait. A child stuck in exit
+# cleanup can survive SIGTERM, and an unbounded `wait` would then hang the suite. Returns whether the process is gone.
+function terminate_process!(proc; grace = 5.0, final = 10.0)
+    process_running(proc) && kill(proc, Base.SIGTERM)
+    timedwait(() -> !process_running(proc), grace; pollint = 0.05) === :ok && return true
+    process_running(proc) && kill(proc, Base.SIGKILL)
+    return timedwait(() -> !process_running(proc), final; pollint = 0.05) === :ok
+end
+
 @testset "GUI panels" begin
     @testset "Simulated Camera" begin
         cam = SimCamera()
@@ -45,6 +69,82 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
         gui(cam)
         GLMakie.closeall()
         @test state_snapshot(cam) == before
+    end
+
+    @testset "Camera live display" begin
+        CI = MicroscopeControl.HardwareInterfaces.CameraInterface
+        quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+        ended(tasks...) = timedwait(() -> all(istaskdone, tasks), 10.0; pollint = 0.005) === :ok
+
+        # The frame loop: the blocking read on its own task, the display callback on this thread's.
+        cam = SimCamera(exposure_time = 0.001, roi = CameraROI(0, 0, 8, 4))
+        live(cam)
+        shown = Matrix{UInt16}[]
+        show_tids = Int[]
+        reader, display_task, _ = CI.run_live_loop(cam; fps = 200) do frame
+            push!(shown, frame)
+            push!(show_tids, Threads.threadid())
+        end
+        @test timedwait(() -> length(shown) >= 3, 10.0; pollint = 0.005) === :ok
+        @test size(first(shown)) == (4, 8)
+        abort(cam)
+        @test ended(reader, display_task)
+        @test all(==(Threads.threadid()), show_tids)   # `@async` runs on the thread that made it: only it updates Observables
+
+        # A nothing frame does not end the loop, and a display callback that throws does not either.
+        frame = ones(UInt16, 2, 2)
+        shown = Matrix{UInt16}[]
+        scripted = ScriptedCamera(nothing, nothing, frame, frame, nothing, frame)
+        quiet() do
+            reader, display_task, _ = CI.run_live_loop(scripted; fps = 500) do f
+                push!(shown, f)
+                length(shown) == 1 && error("the display failed on the first frame")
+            end
+            @test ended(reader, display_task)
+            @test !istaskfailed(reader) && !istaskfailed(display_task)
+        end
+        @test scripted.reads == 6
+        @test length(shown) == 3
+
+        # `stop` ends the reader without `abort`.
+        cam = SimCamera(exposure_time = 0.001, roi = CameraROI(0, 0, 8, 4))
+        live(cam)
+        reader, display_task, stop = CI.run_live_loop(_ -> nothing, cam; fps = 200)
+        stop[] = true
+        @test ended(reader, display_task)
+        @test cam.is_running == 1
+        abort(cam)
+
+        # The reader runs on its own thread: a read that blocks in a foreign call must not stop the render side. That
+        # needs a second thread, so it runs in a `julia -t 2,1` subprocess (see the file), where `Pkg.test()` and CI
+        # exercise it. The child's waits have deadlines; the parent kills it after 60 s and fails.
+        check = joinpath(@__DIR__, "gui_threads_check.jl")
+        outfile = tempname()
+        proc = run(pipeline(ignorestatus(`$(Base.julia_cmd()) -t 2,1 --project=$(Base.active_project()) $check`); stdout = outfile, stderr = outfile); wait = false)
+        finished_in_time = timedwait(() -> !process_running(proc), 60.0; pollint = 0.1) === :ok
+        finished_in_time || terminate_process!(proc)
+        ok = finished_in_time && !process_running(proc) && success(proc)
+        ok || print(read(outfile, String))
+        rm(outfile; force = true)
+        @test finished_in_time
+        @test ok
+
+        # The escalation itself: a child that ignores SIGTERM is still ended, in bounded time.
+        if Sys.islinux()
+            stubborn = run(`bash -c 'trap "" TERM; while true; do sleep 0.2; done'`; wait = false)
+            sleep(0.5)
+            t0 = time()
+            @test terminate_process!(stubborn; grace = 1.0, final = 10.0)
+            @test !process_running(stubborn) && time() - t0 < 8
+        end
+
+        # The whole display, on the simulated camera: it runs, and closing the window stops the camera and the loop.
+        cam = SimCamera(exposure_time = 0.001, roi = CameraROI(0, 0, 64, 48))
+        task = quiet(() -> CI.start_live(cam))
+        @test cam.is_running == 1
+        sleep(0.2)
+        GLMakie.closeall()
+        @test timedwait(() -> cam.is_running == 0 && istaskdone(task), 10.0; pollint = 0.01) === :ok
     end
 
     @testset "Simulated Light Source" begin
