@@ -10,6 +10,14 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in per-call trace of the DCAM library calls, turned on only by `DCAM4.dcam_trace!(path)` (a local-disk
+  path): a flushed BEGIN line before each call and an END or THROW line after it, with a per-call id, the arguments,
+  the elapsed time, the return value or the error, and the GC pause and time-to-safepoint counters. While tracing is
+  on a once-a-second heartbeat line is written, and the file is marked `trace on` and `trace off`. A failed write
+  turns tracing off with one warning. Off by default; one `Ref{Bool}` check per call.
+
 ### Changed
 
 - Compat entries for the two dependencies that had none: `LibSerialPort = "0.5"` (#82) and

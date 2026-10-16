@@ -60,7 +60,7 @@ end
 ## Functions 
 
 function dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)
-    err = @ccall libdcam.dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)::DCAMERR
+    err = @dcamcall libdcam.dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Allocate Buffer"
     end
@@ -68,7 +68,7 @@ function dcambuf_alloc(hdcam::Ptr{Cvoid}, framecount::Int32)
 end
 
 function dcambuf_attach(hdcam::Ptr{Cvoid}, param::Ptr{DCAMBUF_ATTACH})
-    err = @ccall libdcam.dcambuf_attach(hdcam::Ptr{Cvoid}, param::Ptr{DCAMBUF_ATTACH})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_attach(hdcam::Ptr{Cvoid}, param::Ptr{DCAMBUF_ATTACH})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Attach Buffer"
     end
@@ -77,7 +77,7 @@ end
 
 function dcambuf_release(hdcam::Ptr{Cvoid})
     iKind = Int32(0)
-    err = @ccall libdcam.dcambuf_release(hdcam::Ptr{Cvoid}, iKind::Int32)::DCAMERR
+    err = @dcamcall libdcam.dcambuf_release(hdcam::Ptr{Cvoid}, iKind::Int32)::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Release Buffer"
     end
@@ -85,7 +85,7 @@ function dcambuf_release(hdcam::Ptr{Cvoid})
 end
 
 function dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
-    err = @ccall libdcam.dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Lock Frame"
     end
@@ -93,43 +93,12 @@ function dcambuf_lockframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
 end
 
 function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})
-    err = @ccall libdcam.dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Copy Frame"
     end
     return err
 end
-
-# Old version of dcambuf_getframe that was not working properly for rectangular ROIs
-# function dcambuf_getframe(hdcam::Ptr{Cvoid}, iFrame::Int32)
-
-#     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
-#     err, height = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_HEIGHT))
-#     err, rowbytes = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_ROWBYTES))
-#     err, type = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_PIXELTYPE))
-
-#     if DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO16
-#         data = zeros(UInt16, Int(height), Int(width))
-#     elseif DCAM_PIXELTYPE(Int32(type)) == DCAM_PIXELTYPE_MONO8
-#         data = zeros(UInt8, Int(height), Int(width))
-#     end
-
-#     dcf = DCAMBUF_FRAME()
-#     dcf.iFrame = iFrame
-#     dcf.width = Int32(width)
-#     dcf.height = Int32(height)
-#     dcf.rowbytes = Int32(rowbytes)
-#     dcf.type = DCAM_PIXELTYPE(Int32(type))
-#     dcf.buf = pointer(data)
-
-#     pFrame=Ref(dcf)
-
-#     err = @ccall libdcam.dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
-#     if is_failed(err)
-#         @error "DCAM Failed to Copy Frame"
-#     end
-#     return data
-# end
 
 
 function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
@@ -163,7 +132,7 @@ function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
 
     pFrame = Ref(dcf)
 
-    err = @ccall libdcam.dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ptr{DCAMBUF_FRAME})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Copy Frame $(iFrame): $(err)"
         return err, nothing
@@ -183,7 +152,7 @@ function dcambuf_getlastframe(hdcam::Ptr{Cvoid})
 end
 
 function dcambuf_copymetadata(hdcam::Ptr{Cvoid}, hdr::Ptr{DCAM_METADATAHDR})
-    err = @ccall libdcam.dcambuf_copymetadata(hdcam::Ptr{Cvoid}, hdr::Ptr{DCAM_METADATAHDR})::DCAMERR
+    err = @dcamcall libdcam.dcambuf_copymetadata(hdcam::Ptr{Cvoid}, hdr::Ptr{DCAM_METADATAHDR})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Copy Metadata"
     end
