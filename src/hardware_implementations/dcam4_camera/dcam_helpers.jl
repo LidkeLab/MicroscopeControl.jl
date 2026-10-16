@@ -4,14 +4,16 @@
     showdevicelist()
 
 Print the DCAM devices. It borrows a count of the DCAM API (`api_acquire!`), so it neither initializes the API under
-a camera that is open nor uninitializes it afterwards.
+a camera that is open nor uninitializes it afterwards. Returns the `DCAMERR` of `dcamapi_uninit` when it uninitialized
+the API, as before, and `DCAMERR_SUCCESS` when another holder keeps the API up.
 """
 function showdevicelist()
     err, n = api_acquire!()
     if is_failed(err)
         @error "DCAM Failed to Initialize"
-        return
+        return err
     end
+    local uninit_err = DCAMERR_SUCCESS
     try
         println("Found $(n) devices")
 
@@ -35,9 +37,9 @@ function showdevicelist()
             dcamdev_close(hdcam)
         end
     finally
-        api_release!()
+        uninit_err = api_release!()
     end
-    return nothing
+    return uninit_err
 end
 
 function showproperties(camera::DCAM4Camera)
@@ -342,8 +344,22 @@ function drain_waits!(camera::DCAM4Camera)
         end
     finally
         camera.draining -= 1
+        notify(camera.acquisition_changed; all = true)  # a `capture` may be waiting for the drains to end
     end
     return nothing
+end
+
+# What `capture` does first: wait, with the lock released, until no other drain is in progress, then drain. A drain
+# that ends is not followed by a registration that starts it again, because a registering `capture` has to get past
+# this first, and the loop covers a drain that began while this one was joining.
+function drain_before_registering!(camera::DCAM4Camera)
+    while true
+        while camera.draining > 0
+            wait(camera.acquisition_changed)
+        end
+        drain_waits!(camera)
+        camera.draining == 0 && return nothing
+    end
 end
 
 """
@@ -423,7 +439,12 @@ function wait_not_busy(camera::DCAM4Camera, timeout_ms::Integer, what::AbstractS
             return true
         end
         if time() >= deadline
-            camera.last_error = is_failed(err) ? err : DCAMERR_TIMEOUT
+            # Recorded under the lock and only while this is still the capture it watches, so a stale call never
+            # overwrites a newer capture's `last_error`.
+            @lock camera.acquisition_lock begin
+                current() && camera.closing != 2 || return false
+                camera.last_error = is_failed(err) ? err : DCAMERR_TIMEOUT
+            end
             @error "DCAM4Camera $(camera.unique_id): $(what) timed out after $(timeout_ms) ms " *
                    (is_failed(err) ? "(the status read fails: $(err))" : "with the capture still running")
             return false

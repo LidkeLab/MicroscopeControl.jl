@@ -34,7 +34,10 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 - `capture` no longer stops a live view or sequence that another task started while it waited for its frame: it reads
   its frame and cleans up only while its capture is still the current one, and otherwise returns `nothing` after one
   warning, as `getdata` does. A stale cleanup (a `getdata` or `capture` whose capture was replaced) aborts nobody's
-  wait and stops nothing. `getdata` in LIVE mode likewise reads only while its capture is current.
+  wait and stops nothing. `getdata` in LIVE mode likewise reads only while its capture is current, and a `getdata`
+  poll resolves its readout and records its timeout only while its capture is current, so it never calls the camera
+  after `shutdown` or overwrites a newer capture's `last_error`. A loop of `capture` calls cannot keep a stop from
+  finishing: `capture` waits for a stop in progress before it starts.
 - A stop that failed (`stop_and_release!`, and so `abort`) no longer moves the capture on to a new owner: the capture
   may still be running, and the `sequence` task or `getdata` that owned it keeps owning it, so a sequence that ends later
   still clears `is_running`. A stop that worked, or that found nothing running, does as before. The waits in progress
@@ -44,12 +47,14 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 - Two `DCAM4Camera`s in one process: shutting one down no longer uninitializes the DCAM API under the other. The API
   is initialized by the first camera and uninitialized by the last `shutdown`, and never before the device close has
   returned; a constructor that fails gives back only its own hold; `showdevicelist` borrows a hold rather than
-  initializing and uninitializing around a camera that is open. A camera built positionally (not public) adopts a hold
-  without initializing, so its `shutdown` uninitializes when it is the last, as before.
+  initializing and uninitializing around a camera that is open, and returns what it did before (the `dcamapi_uninit` code, or `DCAMERR_SUCCESS` while
+  another camera holds the API). A camera built positionally (not public) adopts a hold without initializing, so its
+  `shutdown` uninitializes when it is the last, as before.
 - `DCAM4Camera` `shutdown` is one coordinated step: it aborts and joins any frame wait (no `abort` first is needed,
   which answers 0.2.6's "stop any threaded `getlastframe` loop" advice for `shutdown`), stops and releases any capture,
   makes any `sequence` task and `getdata` in progress stale, closes the device, and then gives back the camera's hold on
-  the API. A second `shutdown`, at once or later, waits for the first and touches nothing. After it, `getlastframe` and
+  the API. A second `shutdown`, at once or later, waits for the first and touches nothing; one interrupted before it
+  finishes leaves the camera open, and the next `shutdown` does the whole job. After it, `getlastframe` and
   `getdata` return `nothing`, `capture` throws, `live` and `sequence` log an error and return, and none makes a DCAM
   call. It returns what it did before: the code of `dcamapi_uninit` when it uninitialized the API, and `DCAMERR_SUCCESS`
   when another camera keeps the API up.

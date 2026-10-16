@@ -43,7 +43,8 @@ mutable struct DCAM4Camera <: Camera
     # camera state, and holds the lock continuously from then on. A frame wait registers under the lock
     # and nothing registers while it is held, so once the drain returns nothing in the start or stop
     # releases the lock: the nested `stop_and_release!`'s drain is empty, and no other task sees or
-    # changes the camera until the start is whole. The blocking DCAM waits (`dcamwait_event`, in
+    # changes the camera until the start is whole. `capture`, which registers a wait, first waits (with the
+    # lock released) until no other drain is in progress, so a loop of captures cannot keep a drain from ending. The blocking DCAM waits (`dcamwait_event`, in
     # `getlastframe` and `capture`) and `wait_not_busy`'s sleep run with the lock released. A frame wait is
     # registered in `waits` under the lock, before it starts, and its handle is closed and unregistered
     # in one hold of the lock when it ends (`finish_wait!`), so a drain that ends leaves no handle open.
@@ -51,7 +52,9 @@ mutable struct DCAM4Camera <: Camera
     # Every wait is bounded. A frame wait ends when a drain aborts it (it repeats the abort every
     # `DRAIN_POLL_S`, so an abort that reached a wait before it entered `dcamwait_start` is not lost) or
     # at its own `capture_timeout_ms`. While a drain runs (`draining > 0`) and once `shutdown` has begun
-    # (`closing > 0`) no new frame wait registers, so a polling loop cannot keep a drain from ending. A
+    # (`closing > 0`) no new frame wait registers: `getlastframe` returns `nothing`, `capture` waits for the drain
+    # to end (or refuses), so a polling loop cannot keep a drain from ending. A `shutdown` that fails
+    # before it finishes (an interrupt) returns the camera to open, so the next one retries it. A
     # task that holds the lock while it waits for a frame (a caller that locked it and then called
     # `getlastframe`) delays a stop by at most that wait's timeout. So every drain ends, and every other
     # hold ends in bounded time.
@@ -59,7 +62,7 @@ mutable struct DCAM4Camera <: Camera
     acquisition_changed::Threads.Condition  # on `acquisition_lock`; notified when a frame wait ends or `shutdown` finishes
     waits::Vector{Ptr{Cvoid}}               # the DCAM wait handles of the frame waits in progress
     draining::Int                           # the drains in progress (`drain_waits!`)
-    closing::Int                            # 0 open, 1 `shutdown` under way, 2 shut down: the device is closed
+    closing::Int                            # 0 open, 1 `shutdown` under way, 2 shut down: the device is closed; a failed `shutdown` goes back to 0
     api_held::Bool                          # whether this camera holds a count of the DCAM API (see `api_acquire!`)
 end
 
@@ -76,9 +79,10 @@ assemble_camera(unique_id, camera_format, camera_handle, exposure_time, frame_ra
 # initializing it (`api_adopt!`), and its `shutdown` uninitializes when it is the last holder, as on 0.2.6.
 function DCAM4Camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
                      sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation)
-    api_adopt!()
-    return assemble_camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
-                           sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation, true)
+    camera = assemble_camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
+                             sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation, true)
+    api_adopt!()  # only once the camera exists: a failed assembly must not leave a count that nothing can give back
+    return camera
 end
 
 """

@@ -65,7 +65,8 @@ first stops and releases any leftover from an earlier call. It waits at most
 `capture_timeout_ms(exposure, readout)` (2 x (exposure + readout) + 1 s, with the readout read from the camera).
 A timeout or a failed wait logs, sets `last_error` and throws, after the capture is stopped and the buffer
 released. A failed buffer allocation or start returns `nothing` with `last_error` set, as before. A frame that cannot be copied returns `nothing` with `last_error` set.
-Another task's `abort`, `live`, `sequence`, `capture` or `shutdown` during the frame wait aborts the wait (see
+It waits, with the lock released, for any stop in progress to finish before it starts, so a loop of captures cannot
+keep a stop from ending. Another task's `abort`, `live`, `sequence`, `capture` or `shutdown` during the frame wait aborts the wait (see
 `DCAM4Camera`). `capture` then returns `nothing` after one warning, reads no frame, leaves `last_error` as it was,
 and stops and releases nothing: the camera is the other task's now, and the stopper owns the capture. If that stop
 failed, the capture stays as a leftover (`last_error` says so) that the next `capture`, start or `abort` stops and
@@ -90,7 +91,7 @@ function CameraInterface.capture(camera::DCAM4Camera)
         # decided first, so a refused call disturbs no one's wait; it is decided again after the drain.
         why = refused()
         why === nothing || error("DCAM4Camera $(camera.unique_id): $why")
-        drain_waits!(camera)  # first, then one continuous hold (see `DCAM4Camera`)
+        drain_before_registering!(camera)  # first, then one continuous hold (see `DCAM4Camera`)
         hdcam = camera.camera_handle
         why = refused()
         why === nothing || error("DCAM4Camera $(camera.unique_id): $why")
@@ -173,6 +174,19 @@ function begin_start!(camera::DCAM4Camera, what::AbstractString)
         drained || drain_waits!(camera)
     end
     return true
+end
+
+# The timeout of `getdata`'s sequence poll, or `nothing` (with one warning) if the capture was replaced or the camera
+# shut down meanwhile. The cached readout can miss, which reads the camera, so it is all done under the lock with the
+# check: no DCAM call is made on a closed handle.
+function sequence_timeout_ms(camera::DCAM4Camera, n::Integer, current::Function)
+    @lock camera.acquisition_lock begin
+        if !current() || camera.closing != 0
+            @warn "DCAM4Camera $(camera.unique_id): getdata found its capture replaced by a newer one (abort, live, sequence, capture or shutdown); returning nothing and leaving the newer capture alone"
+            return nothing
+        end
+        return capture_timeout_ms(camera.exposure_time * n, cached_readout_time(camera) * n)
+    end
 end
 
 # `getdata`'s LIVE read: the newest frame, with no stop and no release, only while the generation `current` watches is
@@ -334,8 +348,10 @@ function CameraInterface.getdata(camera::DCAM4Camera)
     try
         ended = true
         if mode == SEQUENCE
-            # 2 x N x (exposure + readout) + 1 s, inside the try so a throw here still cleans up.
-            timeout_ms = capture_timeout_ms(camera.exposure_time * n, cached_readout_time(camera) * n)
+            # 2 x N x (exposure + readout) + 1 s, inside the try so a throw here still cleans up. The readout
+            # may need a camera read, so it is resolved under the lock, with the shutdown and currency check.
+            timeout_ms = sequence_timeout_ms(camera, n, current)
+            timeout_ms === nothing && return nothing
             # Poll the status against that deadline rather than wait for the end-of-cycle event:
             # a sequence that has already ended cannot be missed, and an interrupt can land. The
             # lock is released while it polls.
@@ -488,31 +504,41 @@ Shut the camera down in one step, under its acquisition lock: aborts and joins e
 of the DCAM API. The API is uninitialized when the last holder gives its count back, and never before the device close
 has returned, so shutting one camera down leaves another one in the process working. Returns the `DCAMERR` of
 `dcamapi_uninit` when it uninitialized the API, and `DCAMERR_SUCCESS` when another holder keeps it up. A second
-`shutdown`, concurrent or later, waits for the first to finish, touches nothing and returns `DCAMERR_SUCCESS`. After
+`shutdown`, concurrent or later, waits for the first to finish, touches nothing and returns `DCAMERR_SUCCESS`. A
+`shutdown` that fails before it finishes (an interrupt while it joins a wait) leaves the camera open, and the next
+`shutdown`, including a concurrent one that was waiting for it, does the whole shutdown. After
 `shutdown`, `getlastframe` and `getdata` return `nothing` and `capture` throws; `live` and `sequence` log an error and
 return, and set `last_error` to `DCAMERR_INVALIDHANDLE` where they set it at all; none of them makes a DCAM call.
 """
 function shutdown(camera::DCAM4Camera)
     @lock camera.acquisition_lock begin
-        if camera.closing != 0
-            while camera.closing == 1
-                wait(camera.acquisition_changed)  # releases the lock until the first shutdown finishes
-            end
-            return DCAMERR_SUCCESS
+        while camera.closing == 1
+            wait(camera.acquisition_changed)  # releases the lock until the first shutdown finishes or fails
+        end
+        if camera.closing == 2
+            # Shut down already. Only a failure after the device closed leaves the API count behind: give it back.
+            camera.api_held || return DCAMERR_SUCCESS
+            camera.api_held = false
+            return api_release!()
         end
         camera.closing = 1  # from here no frame wait registers and no start proceeds
         err = DCAMERR_SUCCESS
+        finished = false
+        device_closed = false
         try
             drain_waits!(camera)
-            stop_and_release!(camera)  # a failure is in last_error; the device is closed regardless
+            hdcam = camera.camera_handle
+            hdcam isa Ptr && hdcam != C_NULL && stop_and_release!(camera)  # a failure is in last_error; the device is closed regardless
             camera.capture_generation += 1  # pollers and getdata in progress go stale whether or not the stop worked
             camera.is_running = false
-            hdcam = camera.camera_handle
             camera.camera_handle = C_NULL
+            device_closed = true
             hdcam isa Ptr && hdcam != C_NULL && dcamdev_close(hdcam)
             camera.api_held && (camera.api_held = false; err = api_release!())
+            finished = true
         finally
-            camera.closing = 2
+            # Only a finished shutdown is final; one that failed earlier leaves the camera open for the next to retry.
+            camera.closing = finished || device_closed ? 2 : 0
             notify(camera.acquisition_changed; all = true)
         end
         return err
