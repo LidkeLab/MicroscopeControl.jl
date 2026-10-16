@@ -54,7 +54,10 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   which answers 0.2.6's "stop any threaded `getlastframe` loop" advice for `shutdown`), stops and releases any capture,
   makes any `sequence` task and `getdata` in progress stale, closes the device, and then gives back the camera's hold on
   the API. A second `shutdown`, at once or later, waits for the first and touches nothing; one interrupted before it
-  finishes leaves the camera open, and the next `shutdown` does the whole job. After it, `getlastframe` and
+  finishes is resumed by the next `shutdown`, or by the concurrent one that was waiting for it: a step that never
+  began runs, a finished step is skipped, and the device close or `dcamapi_uninit`, if interrupted mid-call, is logged
+  once as of unknown outcome and not repeated, so neither runs twice (an interrupt before the call was entered, in the
+  trace wrapper's lock, therefore leaves the device open or the API initialized, with that error logged). After it, `getlastframe` and
   `getdata` return `nothing`, `capture` throws, `live` and `sequence` log an error and return, and none makes a DCAM
   call. It returns what it did before: the code of `dcamapi_uninit` when it uninitialized the API, and `DCAMERR_SUCCESS`
   when another camera keeps the API up.

@@ -98,6 +98,10 @@ const after_wait = Ref{Function}(() -> nothing)
 const on_wait_enter = Ref{Function}(() -> nothing)
 const on_wait_close = Ref{Function}(() -> nothing)
 const on_dev_close = Ref{Function}(() -> nothing)
+"Called as `dcamdev_close` is entered, before it is recorded or closes anything, and as it returns; and as `dcamapi_uninit` is entered. A test throws here to land an interrupt."
+const before_dev_close = Ref{Function}(() -> nothing)
+const after_dev_close = Ref{Function}(() -> nothing)
+const before_uninit = Ref{Function}(() -> nothing)
 
 "Makes a `:block` wait return success, as a frame arriving."
 const ready_now = Ref(false)
@@ -144,6 +148,9 @@ function reset!()
     on_wait_enter[] = () -> nothing
     on_wait_close[] = () -> nothing
     on_dev_close[] = () -> nothing
+    before_dev_close[] = () -> nothing
+    after_dev_close[] = () -> nothing
+    before_uninit[] = () -> nothing
     ready_now[] = false
     empty!(start_modes)
     on_start[] = m -> nothing
@@ -217,6 +224,7 @@ end
     end
     function dcamapi_uninit()
         FK = Main.FakeDCAM
+        FK.before_uninit[]()
         push!(FK.calls, "dcamapi_uninit")
         FK.uninits[] += 1
         FK.api_up[] = false
@@ -231,11 +239,13 @@ end
     end
     function dcamdev_close(hdcam::Ptr{Cvoid})
         FK = Main.FakeDCAM
+        FK.before_dev_close[]()
         isempty(FK.open_waits) || push!(FK.violations, "dcamdev_close with a wait handle open")
         push!(FK.closed, hdcam)
         err = FK.record!("dcamdev_close", DCAMERR_SUCCESS)
         FK.on_dev_close[]()
         push!(FK.calls, "dcamdev_close_end")
+        FK.after_dev_close[]()
         return err
     end
     dcamdev_getstring(hdcam::Ptr{Cvoid}, strid::DCAM_IDSTR) =

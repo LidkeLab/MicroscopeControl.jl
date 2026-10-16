@@ -2,12 +2,12 @@
 # must run on its own thread. A reader whose `getlastframe` blocks in a foreign call stands in for a DCAM frame wait; a
 # ticker stands in for the render side. Every wait here has a deadline, so a regression fails the test and cannot hang it.
 #
-# Threads: `-t 2,1` is two default threads and one interactive thread (Julia 1.9 and later; documented in the manual's
-# section on threadpools, and not run on 1.11 by the authors). The ticker is spawned in the interactive pool, so it has a
-# thread the reader never gets, on 1.11 and 1.13 alike; `Threads.@spawn` in `run_live_loop` puts the reader in the default
-# pool. On 1.12 and later the main task, which runs the display callback, is on the interactive thread as well, so a reader
-# that shared its thread (an `@async` instead of `Threads.@spawn`) would also stop the ticker; there the test fails on
-# that regression. On 1.11 the main task is a default-pool task, so the test then checks the pool placement only.
+# Threads: `-t 2,1` is two default threads and one interactive thread (Julia 1.9 and later; see the manual's section on
+# threadpools). With an interactive pool the main task runs on the interactive thread (documented for 1.11 as well as 1.12
+# and later; not run on 1.11 by the authors). The ticker is spawned in the interactive pool too, and `Threads.@spawn` in
+# `run_live_loop` puts the reader in the default pool, so the reader never shares a thread with the ticker or with the
+# display callback, which runs on the main task. A reader that shared the main thread (an `@async` instead of
+# `Threads.@spawn`) would stop the ticker and fail the checks below, on every version.
 using MicroscopeControl, Test
 
 const CI = MicroscopeControl.HardwareInterfaces.CameraInterface
@@ -59,9 +59,7 @@ end
     @test Threads.threadpool(ticker_thread[]) === :interactive
     @test all(t -> Threads.threadpool(t) === :default, camera.reader_threads)   # the reader is off the interactive thread
     @test ticker_thread[] ∉ camera.reader_threads
-    @static if VERSION >= v"1.12"
-        @test show_thread[] ∉ camera.reader_threads          # the display callback's thread is not the reader's
-    end
+    @test show_thread[] ∉ camera.reader_threads              # the display callback's thread is not the reader's
     # Over READS x READ_S = 1.2 s of blocked reads the ticker runs about 100 times, unless the reads block its thread.
     @info "render-side ticks during blocking reads" ticks = ticks[] reader_threads = camera.reader_threads ticker_thread = ticker_thread[]
     @test ticks[] >= 40

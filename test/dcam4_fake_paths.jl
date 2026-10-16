@@ -672,4 +672,87 @@
             false, 0, "not an array", NaN, 0)
         @test DC.DCAM_API_USERS[] == 0
     end
+
+    @testset "Round 4 item 1: an interrupted shutdown resumes without repeating a native step" begin
+        interrupt() = throw(InterruptException())
+        # A camera that is the only API holder, its device open, and a first shutdown that is interrupted at `arm`.
+        function interrupted_shutdown(arm)
+            FK.reset!()
+            DC.DCAM_API_USERS[] = 0
+            DC.dcamapi_init()
+            cam = handle_camera(DC.LIVE)
+            arm()
+            quiet() do
+                @test_throws InterruptException DC.shutdown(cam)
+            end
+            return cam
+        end
+        retry(cam) = quiet() do
+            DC.shutdown(cam)
+        end
+        done(cam) = DC.shutdown(cam) === DC.DCAMERR_SUCCESS && length(FK.closed) <= 1 && FK.uninits[] <= 1
+
+        # Interrupted before the close was entered (the trace lock wait): begun but unknown, so it is not repeated.
+        cam = interrupted_shutdown(() -> FK.before_dev_close[] = () -> (FK.before_dev_close[] = () -> nothing; interrupt()))
+        @test cam.close_step == 1 && cam.api_held
+        @test_logs (:error, r"device close was interrupted") match_mode = :any DC.shutdown(cam)
+        @test isempty(FK.closed) && FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0 && cam.closing == 2
+        @test done(cam)
+
+        # Interrupted after the close returned, before it was recorded: closed once, not twice.
+        cam = interrupted_shutdown(() -> FK.after_dev_close[] = () -> (FK.after_dev_close[] = () -> nothing; interrupt()))
+        @test cam.close_step == 1 && cam.camera_handle != C_NULL
+        @test_logs (:error, r"device close was interrupted") match_mode = :any DC.shutdown(cam)
+        @test length(FK.closed) == 1 && FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0
+        @test done(cam)
+
+        # Interrupted while waiting for the API lock: nothing was given back, and the retry gives it back.
+        FK.reset!()
+        DC.DCAM_API_USERS[] = 0
+        DC.dcamapi_init()
+        cam = handle_camera(DC.LIVE)
+        lock(DC.DCAM_API_LOCK)
+        s1 = @async DC.shutdown(cam)
+        @test timedwait(() -> !isempty(FK.closed) && istaskstarted(s1), 10.0; pollint = 0.002) === :ok
+        yield()
+        schedule(s1, InterruptException(); error = true)
+        unlock(DC.DCAM_API_LOCK)
+        quiet() do
+            @test finished(s1) && istaskfailed(s1)
+        end
+        @test cam.api_held && DC.DCAM_API_USERS[] == 1 && cam.close_step == 2 && FK.uninits[] == 0   # untouched
+        retry(cam)
+        @test length(FK.closed) == 1 && FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0
+        @test done(cam)
+
+        # Interrupted between the decrement and dcamapi_uninit: begun, unknown, not repeated.
+        cam = interrupted_shutdown(() -> FK.before_uninit[] = () -> (FK.before_uninit[] = () -> nothing; interrupt()))
+        @test cam.api_step == 1 && !cam.api_held && DC.DCAM_API_USERS[] == 0
+        @test_logs (:error, r"dcamapi_uninit was interrupted") match_mode = :any DC.shutdown(cam)
+        @test length(FK.closed) == 1 && FK.uninits[] == 0 && cam.api_step == 2
+        @test done(cam)
+
+        # A concurrent shutdown that was waiting for the interrupted one resumes it instead of reporting success.
+        FK.reset!()
+        FK.on_dev_close[] = () -> nothing
+        DC.DCAM_API_USERS[] = 0
+        DC.dcamapi_init()
+        cam = handle_camera(DC.LIVE)
+        FK.wait_mode[] = :block
+        FK.entry_delay[] = 0.3
+        FK.status[] = DC.DCAMCAP_STATUS_BUSY
+        cam.is_running = true
+        quiet() do
+            waiter = @async CameraInterface.getlastframe(cam)
+            @test in_wait()
+            FK.after_dev_close[] = () -> (FK.after_dev_close[] = () -> nothing; interrupt())
+            s1 = @async DC.shutdown(cam)
+            @test timedwait(() -> cam.closing == 1 && cam.draining == 1, 10.0; pollint = 0.002) === :ok
+            s2 = @async DC.shutdown(cam)
+            @test finished(s1) && finished(s2) && finished(waiter)
+            @test istaskfailed(s1) && !istaskfailed(s2)
+        end
+        @test length(FK.closed) == 1 && FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0
+    end
 end
+

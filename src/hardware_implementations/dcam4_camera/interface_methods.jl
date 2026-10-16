@@ -505,8 +505,9 @@ of the DCAM API. The API is uninitialized when the last holder gives its count b
 has returned, so shutting one camera down leaves another one in the process working. Returns the `DCAMERR` of
 `dcamapi_uninit` when it uninitialized the API, and `DCAMERR_SUCCESS` when another holder keeps it up. A second
 `shutdown`, concurrent or later, waits for the first to finish, touches nothing and returns `DCAMERR_SUCCESS`. A
-`shutdown` that fails before it finishes (an interrupt while it joins a wait) leaves the camera open, and the next
-`shutdown`, including a concurrent one that was waiting for it, does the whole shutdown. After
+`shutdown` that is interrupted before it finishes is resumed by the next one, including a concurrent one that was waiting
+for it: a step that never began runs, a finished step is skipped, and a step interrupted mid-call (the device close, or
+`dcamapi_uninit`) is logged once as of unknown outcome and not repeated. After
 `shutdown`, `getlastframe` and `getdata` return `nothing` and `capture` throws; `live` and `sequence` log an error and
 return, and set `last_error` to `DCAMERR_INVALIDHANDLE` where they set it at all; none of them makes a DCAM call.
 """
@@ -515,30 +516,39 @@ function shutdown(camera::DCAM4Camera)
         while camera.closing == 1
             wait(camera.acquisition_changed)  # releases the lock until the first shutdown finishes or fails
         end
-        if camera.closing == 2
-            # Shut down already. Only a failure after the device closed leaves the API count behind: give it back.
-            camera.api_held || return DCAMERR_SUCCESS
-            camera.api_held = false
-            return api_release!()
-        end
+        camera.closing == 2 && camera.close_step == 2 && camera.api_step == 2 && return DCAMERR_SUCCESS  # all done
         camera.closing = 1  # from here no frame wait registers and no start proceeds
         err = DCAMERR_SUCCESS
-        finished = false
-        device_closed = false
         try
             drain_waits!(camera)
             hdcam = camera.camera_handle
-            hdcam isa Ptr && hdcam != C_NULL && stop_and_release!(camera)  # a failure is in last_error; the device is closed regardless
+            camera.close_step == 0 && hdcam isa Ptr && hdcam != C_NULL && stop_and_release!(camera)  # a failure is in last_error; the device is closed regardless
             camera.capture_generation += 1  # pollers and getdata in progress go stale whether or not the stop worked
             camera.is_running = false
-            camera.camera_handle = C_NULL
-            device_closed = true
-            hdcam isa Ptr && hdcam != C_NULL && dcamdev_close(hdcam)
-            camera.api_held && (camera.api_held = false; err = api_release!())
-            finished = true
+            # The two native steps, each recorded before it runs and cleared only after it returns, so a retry after an
+            # interrupt runs a step that never began, skips one that finished, and does not repeat one interrupted
+            # mid-call (a second `dcamdev_close` on a freed handle, or `dcamapi_uninit`, can crash).
+            if camera.close_step == 1
+                @error "DCAM4Camera $(camera.unique_id): a device close was interrupted and its outcome is unknown; not repeating it"
+                camera.camera_handle = C_NULL
+                camera.close_step = 2
+            elseif camera.close_step == 0
+                if hdcam isa Ptr && hdcam != C_NULL
+                    camera.close_step = 1
+                    dcamdev_close(hdcam)
+                end
+                camera.camera_handle = C_NULL
+                camera.close_step = 2
+            end
+            if camera.api_held
+                err = api_release!(camera)
+            elseif camera.api_step == 1
+                @error "DCAM4Camera $(camera.unique_id): dcamapi_uninit was interrupted and its outcome is unknown; not repeating it"
+                camera.api_step = 2
+            end
         finally
-            # Only a finished shutdown is final; one that failed earlier leaves the camera open for the next to retry.
-            camera.closing = finished || device_closed ? 2 : 0
+            # Closed once the device close has begun (the camera is unusable); open again if nothing was done, for a retry.
+            camera.closing = camera.close_step == 0 ? 0 : 2
             notify(camera.acquisition_changed; all = true)
         end
         return err

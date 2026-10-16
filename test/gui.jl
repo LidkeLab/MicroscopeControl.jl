@@ -53,6 +53,15 @@ function MicroscopeControl.getlastframe(camera::ScriptedCamera)
     return frame
 end
 
+# End a child process in bounded time: SIGTERM, a grace period, then SIGKILL, then a bounded wait. A child stuck in exit
+# cleanup can survive SIGTERM, and an unbounded `wait` would then hang the suite. Returns whether the process is gone.
+function terminate_process!(proc; grace = 5.0, final = 10.0)
+    process_running(proc) && kill(proc, Base.SIGTERM)
+    timedwait(() -> !process_running(proc), grace; pollint = 0.05) === :ok && return true
+    process_running(proc) && kill(proc, Base.SIGKILL)
+    return timedwait(() -> !process_running(proc), final; pollint = 0.05) === :ok
+end
+
 @testset "GUI panels" begin
     @testset "Simulated Camera" begin
         cam = SimCamera()
@@ -113,13 +122,21 @@ end
         outfile = tempname()
         proc = run(pipeline(ignorestatus(`$(Base.julia_cmd()) -t 2,1 --project=$(Base.active_project()) $check`); stdout = outfile, stderr = outfile); wait = false)
         finished_in_time = timedwait(() -> !process_running(proc), 60.0; pollint = 0.1) === :ok
-        finished_in_time || kill(proc)
-        wait(proc)
-        ok = finished_in_time && success(proc)
+        finished_in_time || terminate_process!(proc)
+        ok = finished_in_time && !process_running(proc) && success(proc)
         ok || print(read(outfile, String))
         rm(outfile; force = true)
         @test finished_in_time
         @test ok
+
+        # The escalation itself: a child that ignores SIGTERM is still ended, in bounded time.
+        if Sys.islinux()
+            stubborn = run(`bash -c 'trap "" TERM; while true; do sleep 0.2; done'`; wait = false)
+            sleep(0.5)
+            t0 = time()
+            @test terminate_process!(stubborn; grace = 1.0, final = 10.0)
+            @test !process_running(stubborn) && time() - t0 < 8
+        end
 
         # The whole display, on the simulated camera: it runs, and closing the window stops the camera and the loop.
         cam = SimCamera(exposure_time = 0.001, roi = CameraROI(0, 0, 64, 48))

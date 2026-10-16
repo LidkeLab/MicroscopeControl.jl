@@ -64,6 +64,8 @@ mutable struct DCAM4Camera <: Camera
     draining::Int                           # the drains in progress (`drain_waits!`)
     closing::Int                            # 0 open, 1 `shutdown` under way, 2 shut down: the device is closed; a failed `shutdown` goes back to 0
     api_held::Bool                          # whether this camera holds a count of the DCAM API (see `api_acquire!`)
+    close_step::Int                         # `shutdown`'s device close: 0 not begun, 1 begun (outcome unknown if interrupted), 2 done
+    api_step::Int                           # `shutdown`'s API release: 0 not begun, 1 `dcamapi_uninit` begun, 2 done
 end
 
 # Assemble a camera with its lock and what goes with it, all new.
@@ -72,7 +74,7 @@ assemble_camera(unique_id, camera_format, camera_handle, exposure_time, frame_ra
     (lock = ReentrantLock();
      DCAM4Camera(unique_id, camera_format, camera_handle, exposure_time, frame_rate, roi, capture_mode, trigger_mode,
                  sequence_length, last_error, is_running, camerastate, data, readout_s, capture_generation,
-                 lock, Threads.Condition(lock), Ptr{Cvoid}[], 0, 0, api_held))
+                 lock, Threads.Condition(lock), Ptr{Cvoid}[], 0, 0, api_held, 0, 0))
 
 # The fields before the lock, positionally; the lock and what goes with it are always new. The caller
 # initialized the DCAM API and opened the device, so the camera adopts a count of the API without
@@ -126,6 +128,32 @@ end
 Take a count of the DCAM API without initializing it, for a camera whose caller did.
 """
 api_adopt!() = (@lock DCAM_API_LOCK (DCAM_API_USERS[] += 1); nothing)
+
+"""
+    api_release!(camera::DCAM4Camera) -> err
+
+`shutdown`'s API step: give back the camera's count, clearing `api_held` and decrementing `DCAM_API_USERS` in one hold of
+`DCAM_API_LOCK`, so an interrupt while waiting for that lock leaves both untouched. The last holder records
+`api_step = 1` before `dcamapi_uninit` and `2` after it, so a retry after an interrupt inside the call knows the
+outcome is unknown. Returns the `DCAMERR` of `dcamapi_uninit` when it ran, else `DCAMERR_SUCCESS`.
+"""
+function api_release!(camera::DCAM4Camera)
+    @lock DCAM_API_LOCK begin
+        camera.api_held || return DCAMERR_SUCCESS
+        camera.api_held = false
+        if DCAM_API_USERS[] > 0
+            DCAM_API_USERS[] -= 1
+            if DCAM_API_USERS[] == 0
+                camera.api_step = 1
+                err = dcamapi_uninit()
+                camera.api_step = 2
+                return err
+            end
+        end
+        camera.api_step = 2
+        return DCAMERR_SUCCESS
+    end
+end
 
 """
     api_release!() -> err
