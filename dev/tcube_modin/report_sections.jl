@@ -155,3 +155,15 @@ function sec_followup()
             """<p>Open loop, source 3 set with the output on, base 80 mA, +0.2 V = +3.07 mA. <b>Off/on does not disarm MOD IN.</b> Cycles 1-3 (no USB write after the enable): the output comes back at the full register including the MOD contribution (83.07 mA), the next step adds its difference (+3.07 mA), and MOD 0 returns to 79.99 mA. 3 of 3. Cycles 4-6 (USB re-write of 80 mA right after the enable, as the driver's light_on does): the write absorbs the applied 0.2 V (80.0 mA), the next +0.2 V adds +3.07 mA, and MOD 0 then gives 76.9 mA (= 80 - 3.07). 3 of 3, the one-register model exactly. A driver that re-writes the bare request on light_on/setcurrent! makes MOD IN look disarmed or offset, and a first change within ~1 s of that write is lost (section 6). That is a likely account of the earlier "disarm" report, not a measurement on that unit.</p><p class="src">""" * basename(f) * "</p>")
     end
 end
+
+function sec_wa()
+    f = latest("wa_test"); f === nothing && return
+    h5open(f) do h
+        wa = read(h, "wa_set"); rb = read(h, "wa_readback"); v = read(h, "v"); sp = read(h, "sp"); pd = read(h, "pd"); cur = read(h, "cur"); x = read(h, "xpd")
+        rows = [[f1(wa[i]) * (i > 8 ? " (restored)" : ""), f1(rb[i]), f1(v[i]), string(sp[i]), f1(pd[i]), f2(cur[i]), f3(x[i])] for i in eachindex(v)]
+        ks = [(pd[b+3] - pd[b+1], x[b+3] - x[b+1]) for b in (0, 4, 8)]
+        push!(SECTIONS, "8c. Is the controller's W/A factor in the MOD IN path?" => tbl(["W/A set", "readback", "MOD V", "setpoint readback", "monitor PD", "drive mA", "ext PD V"], rows) *
+            @sprintf("<p>Closed loop, source 3, base 800 words, MOD-only steps. W/A 100 (as found): <b>%.1f words/V</b>, ext PD %.3f V/V. W/A 200 (not persisted): <b>%.1f words/V</b>, %.3f V/V. Restored to 100 (readback 100.0): <b>%.1f words/V</b>, %.3f V/V. <b>No: the W/A factor does not enter the MOD IN path</b> (0.1 %% between 100 and 200). The light agrees with the photocurrent: the external PD moved by the same amount in all three (within 2.4 %%, a slow drift that also appears between the two W/A = 100 sets, not a W/A effect). So the driver's initialize writing wa_calibration does not change the MOD scale; the manual's \"10 V = max optical power\" is not W/A-scaled on this unit.</p><p class=\"src\">%s</p>",
+            ks[1][1], ks[1][2], ks[2][1], ks[2][2], ks[3][1], ks[3][2], basename(f)))
+    end
+end

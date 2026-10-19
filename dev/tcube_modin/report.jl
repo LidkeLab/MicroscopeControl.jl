@@ -62,7 +62,7 @@ function write_report()
     empty!(SECTIONS)
     sec_summary(); sec_inventory(); sec_xpd(); li_section(); sec_modscale(); sec_registers(); sec_settle()
     isdefined(@__MODULE__, :sec_speed) && sec_speed()
-    sec_followup()
+    sec_followup(); sec_wa()
     body = join(["<section><h2>$t</h2>$h</section>" for (t, h) in SECTIONS], "\n")
     html = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TLD001 MOD IN</title><style>
