@@ -139,3 +139,19 @@ function sec_summary()
 <li><b>Not measured:</b> W/A and mW (no power meter); the external PD's identity and bandwidth (rise times are upper bounds); latency from the write (host and DAQ clocks not shared); Triggerscope (not opened).</li>
 </ol>""")
 end
+
+function sec_followup()
+    f = latest("followup"); f === nothing && return
+    h5open(f) do h
+        part = read(h, "part"); st = read(h, "step"); v = read(h, "v"); sp = read(h, "sp"); pd = read(h, "pd"); cur = read(h, "cur"); x = read(h, "xpd"); tia = read(h, "tia")
+        p1 = findall(part .== 1); p2 = findall(part .== 2)
+        vv = v[p1]; yy = pd[p1]; xm, ym = mean(vv), mean(yy); b = sum((vv .- xm) .* (yy .- ym)) / sum((vv .- xm) .^ 2)
+        notes2 = ["base, MOD 0"; vcat([["cycle $c: MOD step", "cycle $c: output off", "cycle $c: on" * (c > 3 ? " + USB 80 mA rewrite" : " (no USB write)"), "cycle $c: MOD step after on", "cycle $c: MOD 0"] for c in 1:6]...)]
+        t1 = tbl(["MOD V", "setpoint readback", "monitor PD (words)", "drive mA", "ext PD V", "reported TIA range (A)"], [[f3(v[i]), string(sp[i]), f1(pd[i]), f2(cur[i]), f3(x[i]), string(tia[i])] for i in p1])
+        t2 = tbl(["step", "MOD V", "setpoint readback", "drive mA", "monitor PD", "ext PD V"], [[notes2[k], f3(v[i]), string(sp[i]), f2(cur[i]), f1(pd[i]), f3(x[i])] for (k, i) in enumerate(p2)])
+        push!(SECTIONS, "8. Follow-ups (MicroscopeControl.jl-kitt)" => """<h3>8a. Closed-loop MOD scale at the current TIA gain</h3>""" * t1 *
+            @sprintf("<p>Source 3, base 800 words, MOD-only steps: <b>%.1f words/V</b> = <b>%.1f µA/V</b> decoded with the reported 1 mA range (manual, 10 V = full scale: 3277 words/V = 100 µA/V; measured = %.0f %%). Same as modscale (1015.5). The range readback was 1 mA at every point. <b>The TIA gain cannot be read or set in software</b>: the Kinesis DLL exports only LD_EnableTIAGainAdjust and LD_FindTIAGain (header checked), so the pre-FindTIAGain state can only come back by power cycling, if at all, and this was not done. One pre-FindTIAGain point does exist, on the 10 mA range before the DIP change: +56 words for +0.1 V at base 300 (ao_probe), i.e. ~560 words/V = ~171 µA/V on that range (manual 1000 µA/V, 17 %%). The PD slope against drive current was the same (×10.1) before and after FindTIAGain on the 1 mA range; FindTIAGain removed the clip at ~6000 words.</p>", b, b / 32767 * 1e3, 100 * b / 3276.7) *
+            """<h3>8b. Open-loop off/on: disarm?</h3>""" * t2 *
+            """<p>Open loop, source 3 set with the output on, base 80 mA, +0.2 V = +3.07 mA. <b>Off/on does not disarm MOD IN.</b> Cycles 1-3 (no USB write after the enable): the output comes back at the full register including the MOD contribution (83.07 mA), the next step adds its difference (+3.07 mA), and MOD 0 returns to 79.99 mA. 3 of 3. Cycles 4-6 (USB re-write of 80 mA right after the enable, as the driver's light_on does): the write absorbs the applied 0.2 V (80.0 mA), the next +0.2 V adds +3.07 mA, and MOD 0 then gives 76.9 mA (= 80 - 3.07). 3 of 3, the one-register model exactly. A driver that re-writes the bare request on light_on/setcurrent! makes MOD IN look disarmed or offset, and a first change within ~1 s of that write is lost (section 6). That is a likely account of the earlier "disarm" report, not a measurement on that unit.</p><p class="src">""" * basename(f) * "</p>")
+    end
+end
