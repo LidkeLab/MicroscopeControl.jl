@@ -106,7 +106,7 @@ from each driver's `interface_methods.jl`; only the Sim row was executed.
 | `SimCamera` | the enum, not a frame | the frame. This is the only driver where this is the right call. |
 | `DCAM4Camera` | the frame `(H, W)`, after allocating one buffer, snapping, reading, and **releasing** the buffer | waits on a cycle-end event for an acquisition that no longer exists, then copies from released buffers. Do not call it. |
 | `ThorcamDCXCamera` | the frame, then frees the image memory | in any mode reads `sequence_length` frames from `pImage_Mem` and calls `abort`; only valid after `sequence`. |
-| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch references an undefined variable `sequence_frames` and hard-codes 1080 x 1440; it will error. |
+| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch loops `getlastframe` `sequence_length` times, so it has the same limit. |
 
 So on every hardware driver in the package, the frame is the **return value of
 `capture`**, and `getdata` is for sequences. **[policy]** Put the difference in one place in your
@@ -124,7 +124,7 @@ value differs:
 |---|---|
 | `DCAM4Camera` | logs `@error`, sets `cam.last_error`, returns `nothing` (or the copy step returns `nothing` with `@error "DCAM Failed to Copy Frame"`) |
 | `ThorcamDCXCamera` | logs `@error`, returns `nothing` |
-| `ThorCamCSCCamera` | **returns `zeros(UInt16, 1080, 1440)`**. `getlastframe` substitutes an all-zero image whenever the frame fetch yields nothing, and that happens on two paths (`thorcamcsc_camcontrol.jl`): the SDK call fails (logged, `@error "Frame not collected"`), or the SDK call succeeds but hands back a null buffer (**not logged at all**). So the placeholder can arrive silently. A `=== nothing` check passes it as valid data, and the log cannot be relied on. The only detection is `all(iszero, frame)`, and that is a heuristic: a genuinely black frame is indistinguishable from the placeholder. Treat an all-zero CSC frame as suspect, not as data. |
+| `ThorCamCSCCamera` | **returns `zeros(UInt16, roi.height, roi.width)`**. `getlastframe` substitutes an all-zero image whenever the frame fetch yields nothing, and that happens on two paths (`thorcamcsc_camcontrol.jl`): the SDK call fails (logged, `@error "Frame not collected"`), or the SDK call succeeds but hands back a null buffer (**not logged at all**). So the placeholder can arrive silently. A `=== nothing` check passes it as valid data, and the log cannot be relied on. The only detection is `all(iszero, frame)`, and that is a heuristic: a genuinely black frame is indistinguishable from the placeholder. Treat an all-zero CSC frame as suspect, not as data. |
 | `SimCamera` | cannot fail |
 
 A zero-filled frame in a z-stack is a worse failure than a thrown error, because it
@@ -168,7 +168,7 @@ is per driver**:
 | `SimCamera` | `(roi.height, roi.width)` (executed) |
 | `DCAM4Camera` | the SDK's current sub-array, `(height, width)` from `dcamprop_getsize`, which is the ROI as the SDK accepted it (the driver `@warn`s if the SDK rounded your offsets) |
 | `ThorcamDCXCamera` | `(roi.height, roi.width)`; `capture` allocates image memory of exactly that size |
-| `ThorCamCSCCamera` | `(roi.height, roi.width)`, from `frame_size(camera)` (the size logic is tested through a replaced `getlastframeornothing`). **[limitation]** The driver never forwards `roi` to the SDK, which delivers the full sensor, 1440 x 1080, so `roi` must keep that size (the default does); changing `cam.roi = CameraROI(1, 1, 512, 256)` makes the driver read the full-sensor buffer as 512 x 256 and return a sheared image. Querying the SDK for the image size is the open fix. |
+| `ThorCamCSCCamera` | `(roi.height, roi.width)` (tested through a replaced `getlastframeornothing`). **[limitation]** The driver never forwards `roi` to the SDK, which always delivers the full sensor (`camera_format`, default 1440 x 1080): the driver converts the full frame and crops it to `roi` in software (`x_start`, `y_start` 1-based), so a small `roi` is no faster, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. |
 
 Preallocate from the first returned frame (`similar(frame, size(frame)..., N)`)
 rather than from `roi` where the driver is not known to honour it. Whether `x_start = 1` means the

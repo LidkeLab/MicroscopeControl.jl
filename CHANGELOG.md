@@ -41,10 +41,11 @@ the next version with `-DEV`).
 - `DCAM4Camera` frames from a camera that pads its rows (`rowbytes` larger than `width` pixels) are read by the row
   stride and the padding dropped; the buffer was allocated for `rowbytes` but reshaped to `(width, height)`, which
   threw on a length mismatch.
-- `ThorCamCSCCamera` sizes its zero frame, its reshape, its sequence array and its read buffer from `roi` instead of a
-  hard-coded 1440 x 1080. The driver still does not forward `roi` to the SDK, so `roi` must keep the size the camera
-  delivers, which the default does. `getdata` in `SEQUENCE` mode looped to an undefined `sequence_frames`; it now
-  loops to `sequence_length`.
+- `ThorCamCSCCamera` sizes its read buffer from the sensor (`camera_format`) instead of a hard-coded 1440 x 1080,
+  converts the full frame, and crops it to `roi` (`x_start`, `y_start`, 1-based) in software; the zero frame and the
+  `getdata` sequence array follow the cropped size. The driver does not send `roi` to the camera, so there is no
+  readout speedup, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `getdata` in
+  `SEQUENCE` mode looped to an undefined `sequence_frames`; it now loops to `sequence_length`.
 - Dev scripts that showed a frame without `permutedims` on a `yreversed` axis (`dcam4_camera/capture_single_frame.jl`,
   `thorcam_csc/capture_single_frame.jl`, `dev/laser_tracking.jl`) follow the display rule; the DCAM4 one also took
   `dcambuf_getlastframe`'s frame as an `(err, data)` pair.

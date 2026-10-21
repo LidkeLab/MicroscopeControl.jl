@@ -25,11 +25,12 @@ function disarmcamera(camera::ThorCamCSCCamera)
 end
 
 function getlastframeornothing(camera::ThorCamCSCCamera)    #Calls tl_camera_get_pending_frame_or_null, returns Nothing, Nothing if no image collected
+    validate_roi(camera)
     image_buffer_ref = Ref{Ptr{UInt16}}()
     frame_count = Ref{Cint}(Cint(0))
     metadata_ref = Ref{Ptr{Cchar}}()
     metadate_size_bytes = Ref{Cint}(Cint(0))
-    image = Vector{UInt16}(undef, camera.roi.width * camera.roi.height)
+    image = Vector{UInt16}(undef, prod(sensor_size(camera)))   # the full sensor, which is what the camera delivers
 
     is_frame_collected = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_pending_frame_or_null(camera.camera_handle::Ptr{Cvoid}, image_buffer_ref::Ref{Ptr{UInt16}}, frame_count::Ref{Cint}, metadata_ref::Ref{Ptr{Cchar}}, metadate_size_bytes::Ref{Cint})::Cint
 

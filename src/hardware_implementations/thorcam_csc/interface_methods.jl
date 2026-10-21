@@ -1,31 +1,34 @@
 
-# The frame's (H, W): the camera's ROI. The driver does not forward `roi` to the SDK, so it must match the size the
-# camera delivers, which is the full sensor, 1440 x 1080, unless it was changed in the SDK.
-frame_size(camera::ThorCamCSCCamera) = (camera.roi.height, camera.roi.width)
-
 """
     CameraInterface.getlastframe(camera::ThorCamCSCCamera)
 
-The last frame, `(roi.height, roi.width)` indexed `[y, x]`: the SDK's row-major buffer is converted once with
-`CameraInterface.rowmajor_to_yx` (lab decision 0040; see `docs/src/conventions.md`). A zero frame of that shape if no
+The last frame, `(roi.height, roi.width)` indexed `[y, x]` (lab decision 0040; see `docs/src/conventions.md`). The
+camera always delivers the full sensor, `camera_format.y_pixels` x `camera_format.x_pixels`, because the driver never
+sends `roi` to it: the SDK's row-major buffer is converted once with `CameraInterface.rowmajor_to_yx`, and `roi`
+(`x_start`, `y_start`, 1-based) is then applied in software, so a small `roi` gives no readout speedup. Throws an
+`ArgumentError`, before anything is copied, if `roi` is not inside the sensor. A zero frame of the `roi`'s shape if no
 frame has been collected.
 """
 function CameraInterface.getlastframe(camera::ThorCamCSCCamera)
+    validate_roi(camera)
     last_frame = ThorCamCSC.getlastframeornothing(camera)    #Gets last frame, loop insures that frame is collected
     height, width = frame_size(camera)
     if last_frame == Nothing
         return zeros(UInt16, height, width)   # (H, W) convention
     else
-        # The SDK delivers a row-major buffer; convert it once to (H, W)
-        return CameraInterface.rowmajor_to_yx(last_frame, width, height)
+        # The SDK delivers a row-major buffer of the full sensor; convert it once to (H, W), then crop
+        sensor_height, sensor_width = sensor_size(camera)
+        full = CameraInterface.rowmajor_to_yx(last_frame, sensor_width, sensor_height)
+        y0, x0 = camera.roi.y_start, camera.roi.x_start
+        return full[y0:y0+height-1, x0:x0+width-1]
     end
 end
 
 """
     CameraInterface.capture(camera::ThorCamCSCCamera)
 
-Capture one frame and return it, `(roi.height, roi.width)` indexed `[y, x]` (see `getlastframe`; lab decision 0040,
-`docs/src/conventions.md`).
+Capture one frame and return it, `(roi.height, roi.width)` indexed `[y, x]`, the full sensor cropped to `roi` in
+software (see `getlastframe`; lab decision 0040, `docs/src/conventions.md`).
 """
 function CameraInterface.capture(camera::ThorCamCSCCamera)
     camera.capture_mode = SINGLE_FRAME
@@ -115,7 +118,8 @@ end
     CameraInterface.getdata(camera::ThorCamCSCCamera)
 
 `(roi.height, roi.width, sequence_length)` in `SEQUENCE` mode and `(roi.height, roi.width)` otherwise, indexed
-`[y, x[, frame]]` (lab decision 0040; see `docs/src/conventions.md`).
+`[y, x[, frame]]` (lab decision 0040; see `docs/src/conventions.md`). Each frame is the full sensor cropped to `roi`
+in software; see `getlastframe`.
 """
 function CameraInterface.getdata(camera::ThorCamCSCCamera)
     if camera.capture_mode == SEQUENCE

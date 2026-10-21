@@ -58,27 +58,57 @@
         @test stack[:, :, 1] == img && stack[:, :, 2] == img
     end
 
-    @testset "ThorCam CSC frame size follows the ROI" begin
-        csc_camera(w, h) = CSC.ThorCamCSCCamera(C_NULL, 40, Cint(1000), UInt8[], Cint(5), CameraFormat(1440, 1080, 1, 0, "CMOS"),
-            Cint(2), Cint(0), Cint(1), Cint(30), CameraROI(1, 1, w, h), 3, CSC.SINGLE_FRAME, CSC.SOFTWARE_TRIGGER,
+    @testset "ThorCam CSC reads the full sensor and crops to the ROI" begin
+        # A sensor 8 wide and 6 tall; the camera always delivers all of it.
+        csc_camera(roi) = CSC.ThorCamCSCCamera(C_NULL, 40, Cint(1000), UInt8[], Cint(5), CameraFormat(8, 6, 1, 0, "CMOS"),
+            Cint(2), Cint(0), Cint(1), Cint(30), roi, 3, CSC.SINGLE_FRAME, CSC.SOFTWARE_TRIGGER,
             Cint(0), Cint(0), 0)
-        @test CSC.frame_size(csc_camera(7, 3)) == (3, 7)
+        full = layout_image(6, 8)
+        raw = layout_rowmajor(full)
+        reads = Ref(0)
+        @eval CSC function getlastframeornothing(camera::ThorCamCSCCamera)
+            $reads[] += 1
+            return $raw
+        end
 
-        img = layout_image(3, 7)                        # roi width 7, height 3
-        raw = layout_rowmajor(img)
-        @eval CSC getlastframeornothing(camera::ThorCamCSCCamera) = $raw
-        cam = csc_camera(7, 3)
+        # The default ROI is the full frame
+        cam = csc_camera(CameraROI(1, 1, 8, 6))
+        @test CSC.frame_size(cam) == (6, 8)
+        @test CameraInterface.getlastframe(cam) == full
+
+        # An offset, non-square ROI (x_start = 3, y_start = 2, 4 wide, 3 tall) is exactly that sub-block
+        cam = csc_camera(CameraROI(3, 2, 4, 3))
+        @test CSC.frame_size(cam) == (3, 4)
         frame = CameraInterface.getlastframe(cam)
-        @test size(frame) == (3, 7)
-        @test frame == img
+        @test size(frame) == (3, 4)
+        @test frame == full[2:4, 3:6]
+        @test frame[1, 1] == 203                         # row 2, column 3
 
+        # A sequence follows the cropped size
         cam.capture_mode = CSC.SEQUENCE
         stack = CameraInterface.getdata(cam)
-        @test size(stack) == (3, 7, 3)
-        @test all(stack[:, :, i] == img for i in 1:3)
+        @test size(stack) == (3, 4, 3)
+        @test all(stack[:, :, i] == full[2:4, 3:6] for i in 1:3)
 
-        # No frame yet: a zero frame of the ROI's shape, not the full sensor's
+        # No frame yet: a zero frame of the ROI's shape
         @eval CSC getlastframeornothing(camera::ThorCamCSCCamera) = Nothing
-        @test CameraInterface.getlastframe(cam) == zeros(UInt16, 3, 7)
+        @test CameraInterface.getlastframe(cam) == zeros(UInt16, 3, 4)
+
+        # An ROI outside the sensor (past an edge, or empty) throws before anything is read
+        @eval CSC function getlastframeornothing(camera::ThorCamCSCCamera)
+            $reads[] += 1
+            return $raw
+        end
+        reads[] = 0
+        for roi in (CameraROI(1, 1, 9, 6), CameraROI(1, 1, 8, 7), CameraROI(6, 1, 4, 3), CameraROI(1, 5, 4, 3),
+                    CameraROI(0, 1, 4, 3), CameraROI(1, 0, 4, 3), CameraROI(1, 1, 0, 3), CameraROI(1, 1, 4, 0))
+            cam = csc_camera(roi)
+            @test_throws ArgumentError CSC.validate_roi(cam)
+            @test_throws ArgumentError CameraInterface.getlastframe(cam)
+        end
+        @test reads[] == 0
+        err = try CameraInterface.getlastframe(csc_camera(CameraROI(6, 1, 4, 3))) catch e e end
+        msg = sprint(showerror, err)
+        @test occursin("x_start = 6", msg) && occursin("8 x 6", msg)   # names the ROI and the sensor
     end
 end
