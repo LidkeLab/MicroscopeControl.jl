@@ -1851,6 +1851,7 @@ lab_summary("Core") do
     include("pi_stage.jl")
 
     include("dcam4_pure.jl")
+    include("image_layout.jl")
 
     include("contract.jl")
     include("skills.jl")
@@ -1860,6 +1861,7 @@ lab_summary("Core") do
     # process (same seam as tcube_fake_sdk.jl; see the file), so no other test runs against it.
     include("dcam4_fake_sdk.jl")
     include("dcam4_fake_paths.jl")
+    include("image_layout_fakes.jl")
     # Likewise for the MCL stage's Madlib wrappers (see the file).
     include("mcl_stage.jl")
 end

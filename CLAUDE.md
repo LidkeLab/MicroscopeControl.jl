@@ -141,12 +141,17 @@ vendor wrappers with a recorder (`test/tcube_fake_sdk.jl`,
 
 ### Camera Image Data Convention
 
-**Convention:** Image data is stored and displayed as column-major `(H, W, N)` arrays where `data[row, col]` = `data[y, x]`.
+The lab's image layout (decision 0040: `conventions/image-layout.md` in the admiral repo; restated in
+`docs/src/conventions.md`). **Convention:** an image is a column-major `[y, x]` array, a stack `(ny, nx, nframes)`
+(`(H, W, N)`), a camera map `(ny, nx)`, with `[1, 1]` at the top left, so `data[row, col]` = `data[y, x]`. The only
+transposes are at a device boundary: camera in (the driver), display out, devices out. Tests use non-square images.
 
-**At DLL boundary (getdata):** C SDKs return row-major buffers. Must permute after reshape:
+**At DLL boundary (the driver):** C SDKs return row-major buffers, possibly with padded rows. Convert once, in the
+driver, with the shared `CameraInterface.rowmajor_to_yx(buf, width, height; stride)`, where `stride` is the SDK's
+row length in elements (`rowbytes` divided by the bytes per pixel):
 ```julia
 # WRONG: reshape(buffer, (W, H)) - Julia reads column-first, data is transposed
-# CORRECT: permutedims(reshape(buffer, (W, H)), (2, 1)) -> (H, W)
+# CORRECT: rowmajor_to_yx(buffer, W, H; stride) -> (H, W), padding dropped
 ```
 
 **Display (Makie image/heatmap):** Both `image()` and `heatmap()` map dim1→x, dim2→y. For `(H, W)` data:
@@ -156,7 +161,10 @@ image(permutedims(data); axis=(yreversed=true,))    # W→x, H→y, origin top-l
 heatmap(permutedims(data); axis=(yreversed=true,))  # W→x, H→y, origin top-left
 ```
 
-**Saving (HDF5):** No transform needed if getdata follows convention. Save `(H, W, N)` directly.
+**Saving (HDF5):** No transform needed if getdata follows convention. Save `(H, W, N)` directly. `save_h5` stamps
+every dataset of two or more dimensions with `dimension_order = "y,x"` / `"y,x,frame"` and
+`dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"` (files from 2026-01-29 to
+the change carry `"HW"` / `"HWN"`; readers elsewhere keep accepting both).
 
 ### Claude Code Skills
 

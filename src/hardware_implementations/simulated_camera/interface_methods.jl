@@ -17,6 +17,12 @@ function shutdown(camera::SimCamera)
     return nothing
 end
 
+"""
+    CameraInterface.getlastframe(camera::SimCamera)
+
+A random `UInt16` frame of shape `(roi.height, roi.width)`, indexed `[y, x]` (lab decision 0040; see
+`docs/src/conventions.md`). The values carry no orientation; the shape does.
+"""
 function CameraInterface.getlastframe(camera::SimCamera)
     # Get the last image frame from the camera
     # Return an image
@@ -52,6 +58,12 @@ function CameraInterface.abort(camera::SimCamera)
     camera.is_running = 0
 end
 
+"""
+    CameraInterface.getdata(camera::SimCamera)
+
+Random `UInt16` data: `(roi.height, roi.width, sequence_length)` in `SEQUENCE` mode and `(roi.height, roi.width)`
+otherwise, indexed `[y, x[, frame]]` (lab decision 0040; see `docs/src/conventions.md`).
+"""
 function CameraInterface.getdata(camera::SimCamera)
     if camera.capture_mode == SEQUENCE
         return rand(UInt16, camera.roi.height, camera.roi.width, camera.sequence_length)  # (H, W, N) convention

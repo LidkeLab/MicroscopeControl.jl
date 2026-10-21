@@ -58,6 +58,12 @@ function initialize(camera::ThorcamDCXCamera)
     camera.camera_handle = hcam;
 end
 
+"""
+    CameraInterface.capture(camera::ThorcamDCXCamera)
+
+Capture one frame and return it, `(roi.height, roi.width)` indexed `[y, x]` (see `getlastframe`; lab decision 0040,
+`docs/src/conventions.md`).
+"""
 function CameraInterface.capture(camera::ThorcamDCXCamera)
 
     setroi!(camera)
@@ -90,6 +96,12 @@ function CameraInterface.capture(camera::ThorcamDCXCamera)
     return data
 end
 
+"""
+    CameraInterface.getlastframe(camera::ThorcamDCXCamera)
+
+The frame copied from the SDK's image memory, `(roi.height, roi.width)` indexed `[y, x]`: the SDK's row-major
+buffer is converted once with `CameraInterface.rowmajor_to_yx` (lab decision 0040; see `docs/src/conventions.md`).
+"""
 function CameraInterface.getlastframe(camera::ThorcamDCXCamera)
     Width = INT(camera.roi.width)
     Height = INT(camera.roi.height)
@@ -101,9 +113,8 @@ function CameraInterface.getlastframe(camera::ThorcamDCXCamera)
         return
     end
 
-    # Reshape and permute to column-major Julia (H, W) convention
-    # SDK returns row-major (W, H), permute to (H, W)
-    data = permutedims(reshape(img_vector, (Width, Height)), (2, 1))
+    # The SDK copies a row-major buffer; convert it once to (H, W)
+    data = CameraInterface.rowmajor_to_yx(img_vector, Width, Height)
 
     return data
 end
@@ -189,6 +200,13 @@ function CameraInterface.sequence(camera::ThorcamDCXCamera)
 end
 
 
+"""
+    CameraInterface.getdata(camera::ThorcamDCXCamera)
+
+The sequence as `(roi.height, roi.width, sequence_length)` `UInt8`, indexed `[y, x, frame]`, each frame converted
+once from the SDK's row-major buffer with `CameraInterface.rowmajor_to_yx` (lab decision 0040; see
+`docs/src/conventions.md`).
+"""
 function CameraInterface.getdata(camera::ThorcamDCXCamera)
     Width = camera.roi.width
     Height = camera.roi.height
@@ -196,8 +214,7 @@ function CameraInterface.getdata(camera::ThorcamDCXCamera)
     for i in 1:camera.sequence_length
         img_vector = zeros(UInt8, Width * Height)
         success = is_CopyImageMem(camera.camera_handle, camera.pImage_Mem[i][], camera.pImage_Id[i][], img_vector)
-        # SDK returns row-major (W, H), permute to (H, W)
-        data[:,:,i] = permutedims(reshape(img_vector, (Width, Height)), (2, 1))
+        data[:,:,i] = CameraInterface.rowmajor_to_yx(img_vector, Width, Height)
     end
 
     # release Memory
@@ -257,6 +274,12 @@ function setroi!(camera::ThorcamDCXCamera)
 
 end
 
+"""
+    export_state(camera::ThorcamDCXCamera)
+
+Settings only: `data` is `nothing`, so the state holds no image. A driver that puts frames there follows the image
+layout, `(height, width[, N])` indexed `[y, x]`, unpermuted (lab decision 0040; see `docs/src/conventions.md`).
+"""
 function export_state(camera::ThorcamDCXCamera)
     attributes = Dict(
         "unique_id" => camera.unique_id,

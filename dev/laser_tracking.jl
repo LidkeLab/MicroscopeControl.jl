@@ -17,10 +17,10 @@ function live_makie_display(camera::ThorcamDCXCamera)
     
     # Create figure and axis
     fig = Figure(resolution = (1280, 1024))
-    ax = Axis(fig[1, 1], title = "Live Camera Feed")
+    ax = Axis(fig[1, 1], title = "Live Camera Feed", aspect = DataAspect(), yreversed = true)
     
-    # Create observable for real-time updates
-    frame_obs = Observable(initial_frame)
+    # Create observable for real-time updates; the frame is (H, W), displayed as its permutedims on a yreversed axis
+    frame_obs = Observable(permutedims(initial_frame))
     
     # Create heatmap
     hm = heatmap!(ax, frame_obs, colormap = :greys)
@@ -39,7 +39,7 @@ function live_makie_display(camera::ThorcamDCXCamera)
                 frame_count += 1
                 
                 # Update the observable (this triggers plot update)
-                frame_obs[] = frame
+                frame_obs[] = permutedims(frame)
 
                 duration = round(time() - start, digits = 2)
                 # Update title

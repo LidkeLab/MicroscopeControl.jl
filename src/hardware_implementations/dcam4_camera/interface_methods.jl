@@ -12,6 +12,10 @@ wait is registered with the camera (see `DCAM4Camera`), and a stop aborts it and
 is released or the device closed. When the capture it waited on has been stopped or replaced meanwhile it returns
 `nothing`, reads no frame and leaves `last_error` as it was, with one warning per session. While a stop is under way, or
 after `shutdown`, it returns `nothing` at once with the same warning, makes no DCAM call and opens no wait.
+
+Image layout: a frame is `(height, width)`, indexed `[y, x]` with `[1, 1]` at the top left, and a stack is
+`(height, width, N)`. `dcambuf_readframe` converts the SDK's row-major buffer once, dropping any row padding, with
+`CameraInterface.rowmajor_to_yx`; see `docs/src/conventions.md` (lab decision 0040).
 """
 function CameraInterface.getlastframe(camera::DCAM4Camera)
     hwait = C_NULL
@@ -71,6 +75,10 @@ keep a stop from ending. Another task's `abort`, `live`, `sequence`, `capture` o
 and stops and releases nothing: the camera is the other task's now, and the stopper owns the capture. If that stop
 failed, the capture stays as a leftover (`last_error` says so) that the next `capture`, start or `abort` stops and
 releases, as after any failed capture.
+
+Image layout: a frame is `(height, width)`, indexed `[y, x]` with `[1, 1]` at the top left, and a stack is
+`(height, width, N)`. `dcambuf_readframe` converts the SDK's row-major buffer once, dropping any row padding, with
+`CameraInterface.rowmajor_to_yx`; see `docs/src/conventions.md` (lab decision 0040).
 """
 function CameraInterface.capture(camera::DCAM4Camera)
     hdcam = camera.camera_handle
@@ -208,6 +216,9 @@ end
 
 # Keyword Arguments
 - `nframes::Int = 10`: The number of frames to capture
+
+Frames are read with `getlastframe` or `getdata`; their layout is `(height, width)` indexed `[y, x]` (lab decision
+0040; see `docs/src/conventions.md`).
 """
 function CameraInterface.live(camera::DCAM4Camera; nframes=10)
     # Start a live view, with no other start or stop interleaving (see `DCAM4Camera`)
@@ -246,6 +257,9 @@ Start a sequence of `nframes` and return. A task marks `is_running` false when t
 `capture_timeout_ms(N * exposure, N * readout)`, when it stops a capture still running (logged, with `last_error`
 set). The task acts only while the sequence is current (no `abort`, `live`, `sequence`, `capture` or `getdata`
 since); it always ends, and a throw inside it still clears `is_running` for its own sequence.
+
+The stack is read with `getdata`, `(height, width, N)` indexed `[y, x, frame]` (lab decision 0040; see
+`docs/src/conventions.md`).
 """
 function CameraInterface.sequence(camera::DCAM4Camera, nframes::Real)
     # Start collection of a sequence, with no other start or stop interleaving (see `DCAM4Camera`)
@@ -300,6 +314,9 @@ end
 
 """
     CameraInterface.sequence(camera::DCAM4Camera)
+
+`sequence(camera, camera.sequence_length)`; the stack is read with `getdata`, `(height, width, N)` indexed
+`[y, x, frame]` (lab decision 0040; see `docs/src/conventions.md`).
 """
 function CameraInterface.sequence(camera::DCAM4Camera)
     return CameraInterface.sequence(camera, camera.sequence_length)
@@ -328,6 +345,10 @@ the newer capture's buffer alone. The replacement check, the reads and the clean
 lock, and so does each status read of the poll; the sleep between reads does not. After `shutdown` it returns `nothing`
 with `last_error` set to `DCAMERR_INVALIDHANDLE`. The cleanup first aborts and joins any frame wait in progress (a `getlastframe` on
 another thread; see `stop_and_release!`), and is skipped if the capture was replaced meanwhile.
+
+Image layout: a frame is `(height, width)`, indexed `[y, x]` with `[1, 1]` at the top left, and a stack is
+`(height, width, N)`. `dcambuf_readframe` converts the SDK's row-major buffer once, dropping any row padding, with
+`CameraInterface.rowmajor_to_yx`; see `docs/src/conventions.md` (lab decision 0040).
 """
 function CameraInterface.getdata(camera::DCAM4Camera)
     # Read together under the lock, so a start in progress on another task is never seen half done.
@@ -465,6 +486,9 @@ end
 
 """
     export_state(camera::DCAM4Camera)
+
+Settings only: `data` is `nothing`, so the state holds no image. A driver that puts frames there follows the image
+layout, `(height, width[, N])` indexed `[y, x]`, unpermuted (lab decision 0040; see `docs/src/conventions.md`).
 """
 function export_state(camera::DCAM4Camera)
     # Convert frame_rate if it's a tuple

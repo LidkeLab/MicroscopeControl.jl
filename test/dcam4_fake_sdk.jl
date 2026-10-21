@@ -7,8 +7,11 @@
 # `dcamapi.dll`. Defining a method with the identical signature into that module
 # replaces it, so the driver's own code runs unmodified against a recorder.
 # Only the wrappers the capture tests reach are replaced: the capture, buffer
-# and property calls below. `dcamprop_getsize` is replaced too, to return a fixed
-# 2 x 2 sensor.
+# and property calls below. `dcambuf_getframe_err` itself is not replaced: it runs against the replaced
+# `dcamprop_getvalue`, which reports the image width, height, row bytes and pixel type (by default a 2 x 2 MONO16 frame
+# with no padding, unless the test set them in `FakeDCAM.values`), and the replaced `dcambuf_copyframe`, which fills
+# the driver's buffer from `FakeDCAM.frame`, the row-major buffer a camera would write, padding included (zeros if
+# `frame` is `nothing`). `dcamprop_getsize` is replaced too, to return a fixed 2 x 2 sensor.
 #
 # Each replaced wrapper records its name in `FakeDCAM.calls` and returns
 # `DCAMERR_SUCCESS` unless the test set a code for it in `FakeDCAM.codes`.
@@ -66,7 +69,10 @@ const on_status = Ref{Function}(() -> nothing)
 "The frame count `dcamcap_transferinfo` reports."
 const frames_transferred = Ref(0)
 
-"Property values written by `dcamprop_setvalue`, read back by `dcamprop_getvalue` (default 0)."
+"The row-major SDK buffer `dcambuf_copyframe` writes into the driver's buffer, padding included; `nothing` writes none."
+const frame = Ref{Any}(nothing)
+
+"Property values written by `dcamprop_setvalue`, read back by `dcamprop_getvalue` (default 0, and a 2 x 2 MONO16 image)."
 const values = Dict{Int32,Float64}()
 
 "Whether the API is initialized (`dcamapi_init` and not yet `dcamapi_uninit`)."
@@ -133,6 +139,7 @@ function reset!()
     empty!(calls)
     empty!(codes)
     empty!(values)
+    frame[] = nothing
     status[] = nothing
     on_status[] = () -> nothing
     frames_transferred[] = 0
@@ -195,9 +202,22 @@ end
         Main.FakeDCAM.in_wait[] > 0 && push!(Main.FakeDCAM.violations, "dcambuf_release")
         return Main.FakeDCAM.record!("dcambuf_release", DCAMERR_SUCCESS)
     end
-    function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
-        err = Main.FakeDCAM.record!("dcambuf_getframe_err", DCAMERR_SUCCESS)
-        return err, is_failed(err) ? nothing : zeros(UInt16, 2, 2)
+    function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ref{DCAMBUF_FRAME})
+        FK = Main.FakeDCAM
+        err = FK.record!("dcambuf_copyframe", DCAMERR_SUCCESS)
+        if !is_failed(err)
+            dcf = pFrame isa Ptr ? unsafe_load(pFrame) : pFrame[]   # the driver passes a Ref; a Ptr must also dispatch
+            nbytes = Int(dcf.rowbytes) * Int(dcf.height)
+            src = FK.frame[]
+            if src === nothing
+                fill!(unsafe_wrap(Array, Ptr{UInt8}(dcf.buf), nbytes), 0x00)
+            elseif sizeof(src) > nbytes
+                push!(FK.violations, "dcambuf_copyframe: the driver's buffer is smaller than the camera's frame")
+            else
+                unsafe_copyto!(Ptr{eltype(src)}(dcf.buf), pointer(src), length(src))
+            end
+        end
+        return err
     end
     dcamprop_getsize(hdcam::Ptr{Cvoid}) = (2, 2)
     function dcamprop_getattr(hdcam::Ptr{Cvoid}, iProp::Int32)
@@ -209,8 +229,13 @@ end
         Main.FakeDCAM.values[iProp] = fValue
         return Main.FakeDCAM.record!("dcamprop_setvalue", DCAMERR_SUCCESS)
     end
-    dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32) =
-        (Main.FakeDCAM.record!("dcamprop_getvalue", DCAMERR_SUCCESS), get(Main.FakeDCAM.values, iProp, 0.0))
+    function dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32)
+        default = iProp == Int32(DCAM_IDPROP_IMAGE_WIDTH) ? 2.0 :
+                  iProp == Int32(DCAM_IDPROP_IMAGE_HEIGHT) ? 2.0 :
+                  iProp == Int32(DCAM_IDPROP_IMAGE_ROWBYTES) ? 4.0 :
+                  iProp == Int32(DCAM_IDPROP_IMAGE_PIXELTYPE) ? Float64(Int32(DCAM_PIXELTYPE_MONO16)) : 0.0
+        return Main.FakeDCAM.record!("dcamprop_getvalue", DCAMERR_SUCCESS), get(Main.FakeDCAM.values, iProp, default)
+    end
 
     function dcamapi_init()
         FK = Main.FakeDCAM

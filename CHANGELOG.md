@@ -17,8 +17,29 @@ the next version with `-DEV`).
   the elapsed time, the return value or the error, and the GC pause and time-to-safepoint counters. While tracing is
   on a once-a-second heartbeat line is written, and the file is marked `trace on` and `trace off`. A failed write
   turns tracing off with one warning. Off by default; one `Ref{Bool}` check per call.
+- The lab image layout (decision 0040), stated where readers look: a new docs page, `docs/src/conventions.md`; the
+  docstrings of the functions that take or return an image (`getlastframe`, `getdata`, `capture`, `sequence`, `live`,
+  `save_h5`, `save_attributes_and_data`, camera `export_state`); `CLAUDE.md`; and the skills that describe images.
+  An image is `[y, x]`, a stack `(ny, nx, nframes)`, `[1, 1]` at the top left; the only transposes are at a device
+  boundary.
+- `CameraInterface.rowmajor_to_yx(buf, width, height; stride = width)`, one documented conversion of an SDK's
+  row-major buffer to a `(height, width)` `[y, x]` array, dropping row padding. Not exported. `DCAM4Camera`,
+  `ThorcamDCXCamera` and `ThorCamCSCCamera` all call it. Tested on non-square images with known content, with and
+  without padding, and through the DCAM4 fake SDK, replaced ThorCam DCx and CSC SDK calls, and `SimCamera`.
 
 ### Fixed
+
+- `DCAM4Camera` frames from a camera that pads its rows (`rowbytes` larger than `width` pixels) are read by the row
+  stride and the padding dropped; the buffer was allocated for `rowbytes` but reshaped to `(width, height)`, which
+  threw on a length mismatch.
+- `ThorCamCSCCamera` sizes its read buffer from the sensor (`camera_format`) instead of a hard-coded 1440 x 1080,
+  converts the full frame, and crops it to `roi` (`x_start`, `y_start`, 1-based) in software; the zero frame and the
+  `getdata` sequence array follow the cropped size. The driver does not send `roi` to the camera, so there is no
+  readout speedup, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `getdata` in
+  `SEQUENCE` mode looped to an undefined `sequence_frames`; it now loops to `sequence_length`.
+- Dev scripts that showed a frame without `permutedims` on a `yreversed` axis (`dcam4_camera/capture_single_frame.jl`,
+  `thorcam_csc/capture_single_frame.jl`, `dev/laser_tracking.jl`) follow the display rule; the DCAM4 one also took
+  `dcambuf_getlastframe`'s frame as an `(err, data)` pair.
 
 Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answers". The camera entries are for
 `DCAM4Camera`.
@@ -99,6 +120,12 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   the package.
 - `DCAM4Camera` `getlastframe` returns `nothing` at once, with one warning per session, while a stop is under way or
   after `shutdown`, where it used to wait out its timeout. With no live view running it still waits and reads, as before.
+- `save_h5` and `save_attributes_and_data` write `dimension_order = "y,x"` (two dimensions) or `"y,x,frame"` (more) on
+  a dataset, where they wrote `"HW"` and `"HWN"` from 2026-01-29, and add
+  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`. `dimension_labels` and
+  `memory_layout` are kept and the array is written unpermuted, as before, so only the attribute value changes. This
+  package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
+  layout.
 
 ### Known issues
 
@@ -109,6 +136,11 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 - `PIStage`: `targ_x` and `targ_y` start at 12.5 and `initialize` does not read the position after the reference
   move, so the stage panel's first X step can move Y to 12.5 instead of leaving it. (`MCLStage` had the same gap, fixed
   above; `MCS2Stage` reads its position at `initialize`.)
+- `ThorCamCSCCamera` copies `camera_format.x_pixels * camera_format.y_pixels` pixels from the SDK's buffer on every
+  frame, and does not check that against the SDK. `camera_format` must state the sensor the camera delivers (the default,
+  1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
+  image. The fix is to ask the SDK for the image size (`tl_camera_get_image_width` and `_height`), which needs the
+  Thorlabs camera SDK header; none is archived yet.
 
 ## [0.2.6] - 2026-10-01
 

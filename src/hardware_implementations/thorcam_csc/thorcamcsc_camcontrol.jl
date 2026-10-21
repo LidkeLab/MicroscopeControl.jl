@@ -25,11 +25,11 @@ function disarmcamera(camera::ThorCamCSCCamera)
 end
 
 function getlastframeornothing(camera::ThorCamCSCCamera)    #Calls tl_camera_get_pending_frame_or_null, returns Nothing, Nothing if no image collected
+    validate_roi(camera)
     image_buffer_ref = Ref{Ptr{UInt16}}()
     frame_count = Ref{Cint}(Cint(0))
     metadata_ref = Ref{Ptr{Cchar}}()
     metadate_size_bytes = Ref{Cint}(Cint(0))
-    image = Vector{UInt16}(undef, 1440 * 1080)
 
     is_frame_collected = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_pending_frame_or_null(camera.camera_handle::Ptr{Cvoid}, image_buffer_ref::Ref{Ptr{UInt16}}, frame_count::Ref{Cint}, metadata_ref::Ref{Ptr{Cchar}}, metadate_size_bytes::Ref{Cint})::Cint
 
@@ -41,11 +41,18 @@ function getlastframeornothing(camera::ThorCamCSCCamera)    #Calls tl_camera_get
     image_buffer = image_buffer_ref[]
     #prevents crashing if no frame is collected
     if image_buffer != C_NULL
-        unsafe_copyto!(pointer(image), image_buffer, length(image))
+        return copy_sensor_frame(camera, image_buffer)
     else
         return Nothing
     end
+end
 
+# Copies the frame the SDK holds at `image_buffer` into a Julia vector. The camera delivers the full sensor, so the
+# length is the sensor's pixel count from `camera_format`; the SDK is not asked, so `camera_format` must state the
+# sensor the camera delivers, or this reads past the SDK's buffer.
+function copy_sensor_frame(camera::ThorCamCSCCamera, image_buffer::Ptr{UInt16})
+    image = Vector{UInt16}(undef, prod(sensor_size(camera)))
+    unsafe_copyto!(pointer(image), image_buffer, length(image))
     return image
 end
 

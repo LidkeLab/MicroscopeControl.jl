@@ -17,6 +17,7 @@ export abort, capture, getdata, getlastframe, live, sequence #, shutdown
 export setexposuretime!, setroi!, settriggermode!
 
 include("interface_types.jl")
+include("image_layout.jl")
 include("interface_functions.jl")
 include("gui.jl")
 

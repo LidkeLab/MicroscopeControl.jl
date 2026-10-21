@@ -65,7 +65,7 @@
         cam = fake_camera(DC.SEQUENCE)
         @test CameraInterface.getdata(cam) === nothing
         @test cam.last_error == DC.DCAMERR_NOTREADY
-        @test FK.first_index("dcambuf_getframe_err") === nothing
+        @test FK.first_index("dcambuf_copyframe") === nothing
     end
 
     @testset "X3: getdata superseded during a status read that ends the poll reads no frame" begin
@@ -75,7 +75,7 @@
         cam = fake_camera(DC.SEQUENCE)
         FK.on_status[] = () -> (cam.capture_generation += 1)   # a newer capture replaces it during that read
         @test_logs (:warn, r"replaced by a newer one") @test CameraInterface.getdata(cam) === nothing
-        @test FK.first_index("dcamcap_transferinfo") === nothing && FK.first_index("dcambuf_getframe_err") === nothing
+        @test FK.first_index("dcamcap_transferinfo") === nothing && FK.first_index("dcambuf_copyframe") === nothing
         @test FK.first_index("dcamcap_stop") === nothing && FK.first_index("dcambuf_release") === nothing
     end
 
@@ -142,7 +142,7 @@
         @test isempty(FK.violations)            # no stop or release ran with a wait inside the library
         @test FK.timeouts[] == 0                # it ended at the abort, not at its own timeout
         @test FK.first_index("dcamwait_abort") < FK.first_index("dcamcap_stop")
-        @test FK.first_index("dcambuf_getframe_err") === nothing
+        @test FK.first_index("dcambuf_copyframe") === nothing
         @test cam.last_error == DC.DCAMERR_SUCCESS && !cam.is_running
         @test isempty(cam.waits) && cam.draining == 0
     end
@@ -245,7 +245,7 @@
         quiet() do
             @test CameraInterface.getlastframe(cam) === nothing
         end
-        @test FK.first_index("dcambuf_getframe_err") === nothing
+        @test FK.first_index("dcambuf_copyframe") === nothing
         @test cam.last_error == DC.DCAMERR_SUCCESS
         @test isempty(cam.waits)
     end
@@ -256,7 +256,7 @@
         cam = fake_camera(DC.LIVE)
         FK.after_wait[] = () -> (cam.capture_generation += 1)
         @test_logs (:warn, r"capture found its capture stopped or replaced") @test CameraInterface.capture(cam) === nothing
-        @test FK.first_index("dcambuf_getframe_err") === nothing
+        @test FK.first_index("dcambuf_copyframe") === nothing
         @test count(==("dcambuf_release"), FK.calls) == 1        # the leftover cleanup before the start, and no more
         @test FK.first_index("dcamcap_stop") === nothing
         @test cam.last_error == DC.DCAMERR_SUCCESS
@@ -518,7 +518,7 @@
             DC.shutdown(c)
             @test finished(cap) && fetch(cap) === nothing
             @test FK.first_index("dcamwait_abort") < FK.first_index("dcamdev_close") < FK.first_index("dcamapi_uninit")
-            @test FK.last_index("dcambuf_getframe_err") === nothing && isempty(FK.violations)
+            @test FK.last_index("dcambuf_copyframe") === nothing && isempty(FK.violations)
             @test c.camera_handle == C_NULL && !c.is_running
             n = length(FK.calls)
             @test CameraInterface.getlastframe(c) === nothing
@@ -538,7 +538,7 @@
         quiet() do
             @test DC.read_live_frame(cam, () -> false) === nothing
         end
-        @test FK.first_index("dcambuf_getframe_err") === nothing
+        @test FK.first_index("dcambuf_copyframe") === nothing
         @test DC.read_live_frame(cam, () -> true) == zeros(UInt16, 2, 2)
     end
 

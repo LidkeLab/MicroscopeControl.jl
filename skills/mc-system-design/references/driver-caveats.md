@@ -158,9 +158,12 @@ on open **[guarantee]**.
   the synchronous form.
 - The file is opened with `"w"`, so each save overwrites.
 - `data` goes to a dataset named `data` in the node's group. For 2-D and 3-D
-  arrays it gets attributes `dimension_order` (`"HW"` or `"HWN"`),
+  arrays it gets attributes `dimension_order` (`"y,x"` or `"y,x,frame"`),
+  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`,
   `dimension_labels` and `memory_layout = "column_major_julia"`. Save
-  `(H, W, N)` arrays directly.
+  `(H, W, N)` arrays directly, `[y, x]` with `[1, 1]` top left (lab decision 0040,
+  `docs/src/conventions.md`). Files written from 2026-01-29 until that change carry `"HW"` /
+  `"HWN"`; a reader keeps accepting both.
 - `Bool` attributes are written as `Float64` (`is_on` reads back as `0.0`); executed.
 - `Tuple` attributes fail in HDF5; the Sim stages `collect` their range tuples.
   Do the same in your own `attributes`.
