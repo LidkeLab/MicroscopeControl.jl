@@ -27,23 +27,6 @@ the next version with `-DEV`).
   `ThorcamDCXCamera` and `ThorCamCSCCamera` all call it. Tested on non-square images with known content, with and
   without padding, and through the DCAM4 fake SDK, replaced ThorCam DCx and CSC SDK calls, and `SimCamera`.
 
-### Known issues
-
-- `ThorCamCSCCamera` copies `camera_format.x_pixels * camera_format.y_pixels` pixels from the SDK's buffer on every
-  frame, and does not check that against the SDK. `camera_format` must state the sensor the camera delivers (the default,
-  1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
-  image. The fix is to ask the SDK for the image size (`tl_camera_get_image_width` and `_height`), which needs the
-  Thorlabs camera SDK header; none is archived yet.
-
-### Changed
-
-- `save_h5` and `save_attributes_and_data` write `dimension_order = "y,x"` (two dimensions) or `"y,x,frame"` (more) on
-  a dataset, where they wrote `"HW"` and `"HWN"` from 2026-01-29, and add
-  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`. `dimension_labels` and
-  `memory_layout` are kept and the array is written unpermuted, as before, so only the attribute value changes. This
-  package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
-  layout.
-
 ### Fixed
 
 - `DCAM4Camera` frames from a camera that pads its rows (`rowbytes` larger than `width` pixels) are read by the row
@@ -137,6 +120,12 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   the package.
 - `DCAM4Camera` `getlastframe` returns `nothing` at once, with one warning per session, while a stop is under way or
   after `shutdown`, where it used to wait out its timeout. With no live view running it still waits and reads, as before.
+- `save_h5` and `save_attributes_and_data` write `dimension_order = "y,x"` (two dimensions) or `"y,x,frame"` (more) on
+  a dataset, where they wrote `"HW"` and `"HWN"` from 2026-01-29, and add
+  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`. `dimension_labels` and
+  `memory_layout` are kept and the array is written unpermuted, as before, so only the attribute value changes. This
+  package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
+  layout.
 
 ### Known issues
 
@@ -147,6 +136,11 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 - `PIStage`: `targ_x` and `targ_y` start at 12.5 and `initialize` does not read the position after the reference
   move, so the stage panel's first X step can move Y to 12.5 instead of leaving it. (`MCLStage` had the same gap, fixed
   above; `MCS2Stage` reads its position at `initialize`.)
+- `ThorCamCSCCamera` copies `camera_format.x_pixels * camera_format.y_pixels` pixels from the SDK's buffer on every
+  frame, and does not check that against the SDK. `camera_format` must state the sensor the camera delivers (the default,
+  1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
+  image. The fix is to ask the SDK for the image size (`tl_camera_get_image_width` and `_height`), which needs the
+  Thorlabs camera SDK header; none is archived yet.
 
 ## [0.2.6] - 2026-10-01
 
