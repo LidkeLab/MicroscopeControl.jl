@@ -14,6 +14,7 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Image layout" => "conventions.md",
     ],
     # Not every docstring is in the manual yet; report that as a warning
     # instead of aborting the build.

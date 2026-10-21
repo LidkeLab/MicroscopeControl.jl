@@ -75,7 +75,7 @@ gives the assembled instrument its meaning. Neither can do the other's job.
 | **Background tasks** | **[limitation]** a driver may start a task the caller never receives: `sequence(::DCAM4Camera)` spawns a poller on the camera handle and discards it with an explicit `return` (traced); `sequence(::SimCamera)` and `sequence(::ThorcamDCXCamera)` return theirs only because the `@async` is the last expression, and the interface promises `nothing`. Those tasks read mutable device state as they run: the Sim's timer rereads `camera.exposure_time` every iteration and writes `is_running`; DCAM4's and DCx's pollers reread `camera.camera_handle` through the SDK every iteration (DCAM4 writes `is_running = 0` once at the end; neither reads it). | **[policy]** treat the camera as single-owner and single-acquisition: one blocking acquisition at a time on one task, no cancellation, no configuration change in flight, and a process restart rather than recovery when an abort fails. This is a restriction the drivers impose, not a design preference (worked example, Decision 3). |
 | **State** | the device's own fields (`exposure_time`, `roi`, `targ_x`, `properties.power`) are the configuration the driver pushes to hardware; **[guarantee]** shared code reads those fields by name (see Principle 2). | the instrument-level configuration (`AbstractSystemState`), when it is captured, and which fields are requested values versus measured ones (see "Three kinds of state"). |
 | **Failure recovery** | **[guarantee]** since v0.1.0 the stubs of the five `AbstractInstrument` interfaces (`Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator`) and the `AbstractInstrument` lifecycle stubs throw `ErrorException("... not implemented for T")` instead of returning `nothing`. **[limitation]** `SLM`'s `displayimage(::SLM)` has an empty body and returns `nothing`, and `SLM`/`TRIG` devices get `MethodError`, not the stub, for lifecycle calls (`references/driver-caveats.md`). Drivers mostly `@warn`/`@error` and return on hardware errors. **[limitation]** the `AbstractSystem` fallbacks still `@error` and return `nothing`. | **[policy]** rollback on partial initialization, a shutdown that reports what it could not close, and a saved record that says what is missing. All three are in the worked example below; none is provided by MC. |
-| **Units, axes, conventions** | its own: PI in millimetres, MCL in micrometres, Sim stages unitless (0..100); cameras return `(H, W)` / `(H, W, N)` arrays **[guarantee]** for Sim and DCAM4 (executed / traced). | **[policy]** one normalisation layer in the system (a function per device, not a conversion at every call site). |
+| **Units, axes, conventions** | its own: PI in millimetres, MCL in micrometres, Sim stages unitless (0..100); cameras return `(H, W)` / `(H, W, N)` arrays, `[y, x]` with `[1, 1]` top left (lab decision 0040, `docs/src/conventions.md`) **[guarantee]** for Sim, DCAM4, DCx and CSC (executed, through fakes for the drivers). | **[policy]** one normalisation layer in the system (a function per device, not a conversion at every call site). |
 | **Optical power at the sample** | **[guarantee]** (0.2.5, traced) a `DiodeLaser` in `ConstantPhotocurrent` mode commands and reports mW **at the laser output**, the plane its `wa_calibration` was measured at (`setoutputpower!`, `indicated_output_power`); no driver holds a field describing splitters, attenuators, fibres or objectives. In `ConstantCurrent` mode the driver has no optical number at all. | **[policy]** the path transmission from laser output to sample, its measurement and its drift belong to the system; convert in one place, and label saved values with the plane they refer to (the TCube export already writes `power_reference = "laser output"`). |
 | **Persistence** | a one-argument `export_state` returning `(attributes, data, children)` **[guarantee]** for every device except those in the caveats file **[limitation]**. | assembling the tree, choosing the child names, deciding when to snapshot, and recording incomplete exports (see Principle 5 and the worked example). |
 
@@ -274,13 +274,15 @@ everything else. **Fixed in 0.2.1:** `DCAM4Camera()` used to return a
 the DCAM SDK initialized, so you had to call
 `MC.HardwareImplementations.DCAM4.dcamapi_uninit()` yourself before the next
 open); it now throws on both failure paths, and each of those two paths
-calls `dcamapi_uninit()` before it throws. That is not a general guarantee:
-an exception raised after `dcamdev_open` succeeds (e.g. reading sensor size
-or exposure) has no cleanup guard, and on the two paths that do clean up the
-cleanup is only *attempted* -- `dcamapi_uninit()` checks its own SDK result
-and logs an `@error` when it fails, but the constructor ignores that return
-and throws either way, so a failed uninitialize shows up in the log and
-nowhere else. If you're on an installed copy older
+calls `dcamapi_uninit()` before it throws. **[existing guarantee, 0.2.7]**
+The API is reference-counted per process: the first camera initializes it,
+the last `shutdown` uninitializes it, a constructor that fails gives back only
+its own count, and an exception after `dcamdev_open` succeeds closes the
+device and gives the count back before it propagates (tested against a fake
+SDK, not on a rig). **[current limitation]** A failed uninitialize is
+*attempted* and logged -- `dcamapi_uninit()` checks its own SDK result and
+logs an `@error` when it fails -- and `shutdown` returns its code, but the
+constructor throws its own error either way. If you're on an installed copy older
 than 0.2.1, guard the return value yourself --
 `cam isa DCAM4Camera || error("DCAM4 open failed: $(repr(cam))")` -- and on
 a `nothing` return call

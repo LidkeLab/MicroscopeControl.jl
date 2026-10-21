@@ -50,7 +50,7 @@ end
 function dcamwait_open(hdcam::Ptr{Cvoid})
     dwo = DCAMWAIT_OPEN(hdcam)
     param = Ref(dwo)
-    err = @ccall libdcam.dcamwait_open(param::Ref{DCAMWAIT_OPEN})::DCAMERR
+    err = @dcamcall libdcam.dcamwait_open(param::Ref{DCAMWAIT_OPEN})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Open Wait:  $(err)))"
     end
@@ -58,7 +58,7 @@ function dcamwait_open(hdcam::Ptr{Cvoid})
 end
 
 function dcamwait_close(hwait::Ptr{Cvoid})
-    err = @ccall libdcam.dcamwait_close(hwait::Ptr{Cvoid})::DCAMERR
+    err = @dcamcall libdcam.dcamwait_close(hwait::Ptr{Cvoid})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Close Wait:  $(err)))"
     end
@@ -66,7 +66,9 @@ function dcamwait_close(hwait::Ptr{Cvoid})
 end
 
 function dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})
-    err = @ccall libdcam.dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})::DCAMERR
+    # The one DCAM call that blocks for long (up to the frame timeout) and touches no Julia object but its two
+    # arguments, which the caller keeps alive: gc_safe, so a collection on another thread does not wait for it.
+    err = @dcamcall gc_safe = true libdcam.dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Start Wait: $(err))"
     end
@@ -74,7 +76,7 @@ function dcamwait_start(hwait::Ptr{Cvoid}, param::Ref{DCAMWAIT_START})
 end
 
 function dcamwait_abort(hwait::Ptr{Cvoid})
-    err = @ccall libdcam.dcamwait_abort(hwait::Ptr{Cvoid})::DCAMERR
+    err = @dcamcall libdcam.dcamwait_abort(hwait::Ptr{Cvoid})::DCAMERR
     if is_failed(err)
         @error "DCAM Failed to Abort Wait:  $(err)))"
     end

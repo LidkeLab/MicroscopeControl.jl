@@ -34,6 +34,9 @@ end
 
 """
     export_state(camera::SimCamera)
+
+Settings only: `data` is `nothing`, so the state holds no image. A driver that puts frames there follows the image
+layout, `(height, width[, N])` indexed `[y, x]`, unpermuted (lab decision 0040; see `docs/src/conventions.md`).
 """
 function export_state(camera::SimCamera)
     attributes = Dict{String, Any}(

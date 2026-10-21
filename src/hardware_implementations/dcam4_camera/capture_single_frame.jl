@@ -57,7 +57,7 @@ function capture_single_frame(; timeout_milisec::Int32=Int32(1000))
         return err
     end
 
-    err, data = dcambuf_getlastframe(hdcam)
+    data = dcambuf_getlastframe(hdcam)   # (H, W)
 
     dcambuf_release(hdcam)
     err = dcamdev_close(hdcam)
@@ -73,10 +73,10 @@ window2 = GLMakie.Screen()
 data_fig = Figure()
 
 # Create an Axis in the data window
-ax = Axis(data_fig[1, 1], aspect = DataAspect())
+ax = Axis(data_fig[1, 1], aspect = DataAspect(), yreversed = true)
 
-# Generate initial heatmap data
-heatmap_data = Float32.(data)
+# Generate initial heatmap data: permutedims of the (H, W) frame, on the yreversed axis
+heatmap_data = permutedims(Float32.(data))
 
 # Create an Observable for the heatmap data
 heatmap_data_observable = Observable(heatmap_data)
