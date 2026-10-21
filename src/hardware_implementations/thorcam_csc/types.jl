@@ -17,6 +17,9 @@ mutable struct ThorCamCSCCamera <: Camera
     poll_timeout::Cint
     unique_id::Vector{UInt8}
     max_id_length::Cint
+    # The sensor the camera delivers, in pixels. The driver does not ask the SDK for the image size: it copies
+    # `x_pixels * y_pixels` pixels from the SDK's buffer on every frame, so a value larger than the sensor reads past
+    # that buffer, and a smaller one returns a sheared image.
     camera_format::CameraFormat
     number_of_frames_to_buffer::Cint
     operation_mode::Cint

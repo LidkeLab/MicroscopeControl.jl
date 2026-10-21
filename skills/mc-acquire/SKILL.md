@@ -168,7 +168,7 @@ is per driver**:
 | `SimCamera` | `(roi.height, roi.width)` (executed) |
 | `DCAM4Camera` | the SDK's current sub-array, `(height, width)` from `dcamprop_getsize`, which is the ROI as the SDK accepted it (the driver `@warn`s if the SDK rounded your offsets) |
 | `ThorcamDCXCamera` | `(roi.height, roi.width)`; `capture` allocates image memory of exactly that size |
-| `ThorCamCSCCamera` | `(roi.height, roi.width)` (tested through a replaced `getlastframeornothing`). **[limitation]** The driver never forwards `roi` to the SDK, which always delivers the full sensor (`camera_format`, default 1440 x 1080): the driver converts the full frame and crops it to `roi` in software (`x_start`, `y_start` 1-based), so a small `roi` is no faster, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. |
+| `ThorCamCSCCamera` | `(roi.height, roi.width)` (tested through a replaced `getlastframeornothing`). **[limitation]** The driver never forwards `roi` to the SDK, which always delivers the full sensor (`camera_format`, default 1440 x 1080): the driver converts the full frame and crops it to `roi` in software (`x_start`, `y_start` 1-based), so a small `roi` is no faster, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `camera_format` must state the sensor the camera delivers: the driver does not ask the SDK, so a larger value reads past the SDK's buffer. |
 
 Preallocate from the first returned frame (`similar(frame, size(frame)..., N)`)
 rather than from `roi` where the driver is not known to honour it. Whether `x_start = 1` means the

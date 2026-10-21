@@ -8,6 +8,10 @@ sends `roi` to it: the SDK's row-major buffer is converted once with `CameraInte
 (`x_start`, `y_start`, 1-based) is then applied in software, so a small `roi` gives no readout speedup. Throws an
 `ArgumentError`, before anything is copied, if `roi` is not inside the sensor. A zero frame of the `roi`'s shape if no
 frame has been collected.
+
+`camera_format` must state the sensor the camera delivers: the driver does not ask the SDK for the image size, so a
+`camera_format` larger than the sensor makes the copy read past the SDK's buffer, and a smaller one returns a sheared
+image.
 """
 function CameraInterface.getlastframe(camera::ThorCamCSCCamera)
     validate_roi(camera)
@@ -28,7 +32,8 @@ end
     CameraInterface.capture(camera::ThorCamCSCCamera)
 
 Capture one frame and return it, `(roi.height, roi.width)` indexed `[y, x]`, the full sensor cropped to `roi` in
-software (see `getlastframe`; lab decision 0040, `docs/src/conventions.md`).
+software (see `getlastframe`, including its requirement that `camera_format` state the sensor the camera delivers;
+lab decision 0040, `docs/src/conventions.md`).
 """
 function CameraInterface.capture(camera::ThorCamCSCCamera)
     camera.capture_mode = SINGLE_FRAME
@@ -119,7 +124,7 @@ end
 
 `(roi.height, roi.width, sequence_length)` in `SEQUENCE` mode and `(roi.height, roi.width)` otherwise, indexed
 `[y, x[, frame]]` (lab decision 0040; see `docs/src/conventions.md`). Each frame is the full sensor cropped to `roi`
-in software; see `getlastframe`.
+in software; see `getlastframe`, including its requirement that `camera_format` state the sensor the camera delivers.
 """
 function CameraInterface.getdata(camera::ThorCamCSCCamera)
     if camera.capture_mode == SEQUENCE

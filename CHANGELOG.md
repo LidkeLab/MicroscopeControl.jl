@@ -27,6 +27,14 @@ the next version with `-DEV`).
   `ThorcamDCXCamera` and `ThorCamCSCCamera` all call it. Tested on non-square images with known content, with and
   without padding, and through the DCAM4 fake SDK, replaced ThorCam DCx and CSC SDK calls, and `SimCamera`.
 
+### Known issues
+
+- `ThorCamCSCCamera` copies `camera_format.x_pixels * camera_format.y_pixels` pixels from the SDK's buffer on every
+  frame, and does not check that against the SDK. `camera_format` must state the sensor the camera delivers (the default,
+  1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
+  image. The fix is to ask the SDK for the image size (`tl_camera_get_image_width` and `_height`), which needs the
+  Thorlabs camera SDK header; none is archived yet.
+
 ### Changed
 
 - `save_h5` and `save_attributes_and_data` write `dimension_order = "y,x"` (two dimensions) or `"y,x,frame"` (more) on

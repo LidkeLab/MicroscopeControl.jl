@@ -48,9 +48,8 @@ function capturesingleframe(exposure_time, operation_mode, frames_per_trigger)
     #Display Image
 
     fig = Figure()
-    # The SDK's row-major buffer to (H, W), then permutedims on a yreversed axis for display
-    image_single_frame = ThorCamCSC.CameraInterface.rowmajor_to_yx(single_image, 1440, 1080)
-    reinterpret(N0f16, image_single_frame)
-    GLMakie.image(fig[1,1], permutedims(image_single_frame), interpolate=false, axis=(yreversed=true,))
+    # `single_image` is the (H, W) frame `getlastframe` returns; display it with permutedims on a yreversed axis
+    reinterpret(N0f16, single_image)
+    GLMakie.image(fig[1,1], permutedims(single_image), interpolate=false, axis=(yreversed=true,))
     fig
 end
