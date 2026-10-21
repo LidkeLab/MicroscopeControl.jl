@@ -168,10 +168,10 @@ is per driver**:
 | `SimCamera` | `(roi.height, roi.width)` (executed) |
 | `DCAM4Camera` | the SDK's current sub-array, `(height, width)` from `dcamprop_getsize`, which is the ROI as the SDK accepted it (the driver `@warn`s if the SDK rounded your offsets) |
 | `ThorcamDCXCamera` | `(roi.height, roi.width)`; `capture` allocates image memory of exactly that size |
-| `ThorCamCSCCamera` | **always `(1080, 1440)`**. The driver never forwards `roi` to the SDK and hard-codes the full sensor in `getlastframe`, so `cam.roi = CameraROI(1, 1, 512, 256)` changes nothing and preallocation sized from `roi` fails on assignment. |
+| `ThorCamCSCCamera` | `(roi.height, roi.width)`, from `frame_size(camera)` (the size logic is tested through a replaced `getlastframeornothing`). **[limitation]** The driver never forwards `roi` to the SDK, which delivers the full sensor, 1440 x 1080, so `roi` must keep that size (the default does); changing `cam.roi = CameraROI(1, 1, 512, 256)` makes the driver read the full-sensor buffer as 512 x 256 and return a sheared image. Querying the SDK for the image size is the open fix. |
 
 Preallocate from the first returned frame (`similar(frame, size(frame)..., N)`)
-rather than from `roi`, or the CSC path breaks. Whether `x_start = 1` means the
+rather than from `roi` where the driver is not known to honour it. Whether `x_start = 1` means the
 first column or the second depends on the SDK the driver forwards it to; the
 interface does not define a 1-based origin. Keep the `(H, W[, N])` storage convention (below) separate
 from SDK coordinate conventions: the first is enforced by the drivers at the DLL
@@ -261,17 +261,23 @@ tolerance before exposing.
 
 ## Array conventions
 
-Restated from the upstream `CLAUDE.md`. **[guarantee]** for `SimCamera` (executed) and `DCAM4Camera` (`permutedims` in `dcambuf.jl`, traced); **[policy]** for any driver you write. These are storage
+Restated from the upstream `CLAUDE.md` and `docs/src/conventions.md`; the lab rule is decision 0040
+(`conventions/image-layout.md` in the admiral repo). **[guarantee]** for `SimCamera` (executed), and for `DCAM4Camera`,
+`ThorcamDCXCamera` and `ThorCamCSCCamera` (the conversion `CameraInterface.rowmajor_to_yx`, executed through fakes
+for all three); **[policy]** for any driver you write. These are storage
 conventions enforced by the drivers at the DLL boundary; they say nothing about SDK
 coordinate origins or exposure units (see above).
 
-- **Storage:** frames are column-major `(H, W)`; stacks are `(H, W, N)`.
-  `data[row, col] == data[y, x]`. `save_h5` writes `(H, W, N)` directly and tags
-  the dataset `dimension_order = "HWN"`.
-- **DLL boundary:** C SDKs hand back row-major buffers. The driver reshapes to
-  `(W, H)` and permutes: `permutedims(reshape(buffer, (W, H)), (2, 1))` gives
-  `(H, W)`. `reshape(buffer, (W, H))` alone is transposed. If you read raw buffers
-  in your own code, apply the same rule.
+- **Storage:** an image is column-major `[y, x]`, `(H, W)`; stacks are `(H, W, N)`; `[1, 1]` is the top-left pixel.
+  `data[row, col] == data[y, x]`. `save_h5` writes `(H, W, N)` directly, unpermuted, and tags
+  the dataset `dimension_order = "y,x,frame"` (`"y,x"` for a frame) and
+  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`. Files from
+  2026-01-29 until this change carry `"HW"` / `"HWN"`; a reader elsewhere keeps accepting both.
+- **DLL boundary:** C SDKs hand back row-major buffers, with padded rows on some cameras. The driver converts once,
+  with `CameraInterface.rowmajor_to_yx(buffer, W, H; stride)`, which returns `(H, W)` and drops the padding;
+  `stride` is the row length in elements (`rowbytes` over the bytes per pixel). `reshape(buffer, (W, H))` alone is
+  transposed, and with padding it does not even fit. If you read raw buffers in your own code, apply the same rule.
+  These are the only transposes: nothing downstream permutes the frame.
 - **Display:** Makie `image` and `heatmap` map dim 1 to x and dim 2 to y, so pass
   the transpose and flip y for a top-left origin:
 

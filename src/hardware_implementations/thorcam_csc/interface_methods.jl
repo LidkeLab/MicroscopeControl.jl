@@ -1,15 +1,32 @@
 
+# The frame's (H, W): the camera's ROI. The driver does not forward `roi` to the SDK, so it must match the size the
+# camera delivers, which is the full sensor, 1440 x 1080, unless it was changed in the SDK.
+frame_size(camera::ThorCamCSCCamera) = (camera.roi.height, camera.roi.width)
+
+"""
+    CameraInterface.getlastframe(camera::ThorCamCSCCamera)
+
+The last frame, `(roi.height, roi.width)` indexed `[y, x]`: the SDK's row-major buffer is converted once with
+`CameraInterface.rowmajor_to_yx` (lab decision 0040; see `docs/src/conventions.md`). A zero frame of that shape if no
+frame has been collected.
+"""
 function CameraInterface.getlastframe(camera::ThorCamCSCCamera)
     last_frame = ThorCamCSC.getlastframeornothing(camera)    #Gets last frame, loop insures that frame is collected
+    height, width = frame_size(camera)
     if last_frame == Nothing
-        return zeros(UInt16, 1080, 1440)   # (H, W) convention
+        return zeros(UInt16, height, width)   # (H, W) convention
     else
-        # Reshape from row-major C buffer and permute to column-major Julia (H, W)
-        last_frame = permutedims(reshape(last_frame, 1440, 1080), (2, 1))
-        return last_frame
+        # The SDK delivers a row-major buffer; convert it once to (H, W)
+        return CameraInterface.rowmajor_to_yx(last_frame, width, height)
     end
 end
 
+"""
+    CameraInterface.capture(camera::ThorCamCSCCamera)
+
+Capture one frame and return it, `(roi.height, roi.width)` indexed `[y, x]` (see `getlastframe`; lab decision 0040,
+`docs/src/conventions.md`).
+"""
 function CameraInterface.capture(camera::ThorCamCSCCamera)
     camera.capture_mode = SINGLE_FRAME
     #Set Camera Properties
@@ -94,10 +111,17 @@ function CameraInterface.abort(camera::ThorCamCSCCamera)
     shutdown(camera)
 end
 
+"""
+    CameraInterface.getdata(camera::ThorCamCSCCamera)
+
+`(roi.height, roi.width, sequence_length)` in `SEQUENCE` mode and `(roi.height, roi.width)` otherwise, indexed
+`[y, x[, frame]]` (lab decision 0040; see `docs/src/conventions.md`).
+"""
 function CameraInterface.getdata(camera::ThorCamCSCCamera)
     if camera.capture_mode == SEQUENCE
-        sequence_array = zeros(UInt16, 1080, 1440, camera.sequence_length)  # (H, W, N) convention
-        for i in 1:sequence_frames
+        height, width = frame_size(camera)
+        sequence_array = zeros(UInt16, height, width, camera.sequence_length)  # (H, W, N) convention
+        for i in 1:camera.sequence_length
             single_image = CameraInterface.getlastframe(camera)
             sequence_array[:,:, i] = single_image
         end

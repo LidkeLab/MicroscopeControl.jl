@@ -9,6 +9,15 @@ Saves hierarchical data to an HDF5 file.
 - `attributes::Dict`: Dictionary of attributes to save
 - `data::Any`: Data to save in the group
 - `children::Dict{String,Any}`: Dictionary of child groups
+
+`data` is written as it is, without permuting. An image is `(y, x)` or a stack `(y, x, frame)` (lab decision 0040;
+see `docs/src/conventions.md`), and any `data` of two or more dimensions gets the attributes
+`dimension_order = "y,x"` or `"y,x,frame"` and
+`dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`, with the older
+`dimension_labels` and `memory_layout`. C-order tools (h5py, h5dump) list the same dimensions reversed.
+
+Files written from 2026-01-29 until this change carry `dimension_order = "HW"` or `"HWN"` for the same layout; a
+reader should keep accepting both spellings.
 """
 function save_attributes_and_data(filename::String, group::String, attributes::Dict, data, children)
     try
@@ -39,10 +48,11 @@ function save_group_recursive(h5parent, group_name::String, attributes::Dict, da
     # Save data
     if !isnothing(data)
         write(h5group, "data", data)
-        # Add dimension convention metadata for image data
+        # Add dimension convention metadata for image data (lab image layout, decision 0040)
         if ndims(data) >= 2
             dset = h5group["data"]
-            attrs(dset)["dimension_order"] = ndims(data) == 2 ? "HW" : "HWN"
+            attrs(dset)["dimension_order"] = ndims(data) == 2 ? "y,x" : "y,x,frame"
+            attrs(dset)["dimension_order_convention"] = "column-major (Julia/MATLAB); C-order tools list it reversed"
             attrs(dset)["dimension_labels"] = ndims(data) == 2 ? ["height", "width"] : ["height", "width", "frames"]
             attrs(dset)["memory_layout"] = "column_major_julia"
         end
@@ -69,6 +79,11 @@ Save the state data to an HDF5 file.
 # Arguments
 - `filename::String`: Path to the HDF5 file
 - `state_data`: Tuple of dictionaries containing the attributes, data, and children of the instrument.
+
+Returns the `Task` that writes the file; `wait` it before reading. An image in `data` is stored as it is, `(y, x)` or
+`(y, x, frame)`, with `dimension_order` and `dimension_order_convention` attributes (see
+`save_attributes_and_data`; lab decision 0040, `docs/src/conventions.md`). Files from 2026-01-29 until this change
+carry `dimension_order = "HW"` or `"HWN"`; a reader should keep accepting both.
 """
 function save_h5(filename::String, state_data)
     @async begin

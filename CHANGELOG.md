@@ -17,8 +17,37 @@ the next version with `-DEV`).
   the elapsed time, the return value or the error, and the GC pause and time-to-safepoint counters. While tracing is
   on a once-a-second heartbeat line is written, and the file is marked `trace on` and `trace off`. A failed write
   turns tracing off with one warning. Off by default; one `Ref{Bool}` check per call.
+- The lab image layout (decision 0040), stated where readers look: a new docs page, `docs/src/conventions.md`; the
+  docstrings of the functions that take or return an image (`getlastframe`, `getdata`, `capture`, `sequence`, `live`,
+  `save_h5`, `save_attributes_and_data`, camera `export_state`); `CLAUDE.md`; and the skills that describe images.
+  An image is `[y, x]`, a stack `(ny, nx, nframes)`, `[1, 1]` at the top left; the only transposes are at a device
+  boundary.
+- `CameraInterface.rowmajor_to_yx(buf, width, height; stride = width)`, one documented conversion of an SDK's
+  row-major buffer to a `(height, width)` `[y, x]` array, dropping row padding. Not exported. `DCAM4Camera`,
+  `ThorcamDCXCamera` and `ThorCamCSCCamera` all call it. Tested on non-square images with known content, with and
+  without padding, and through the DCAM4 fake SDK, replaced ThorCam DCx and CSC SDK calls, and `SimCamera`.
+
+### Changed
+
+- `save_h5` and `save_attributes_and_data` write `dimension_order = "y,x"` (two dimensions) or `"y,x,frame"` (more) on
+  a dataset, where they wrote `"HW"` and `"HWN"` from 2026-01-29, and add
+  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`. `dimension_labels` and
+  `memory_layout` are kept and the array is written unpermuted, as before, so only the attribute value changes. This
+  package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
+  layout.
 
 ### Fixed
+
+- `DCAM4Camera` frames from a camera that pads its rows (`rowbytes` larger than `width` pixels) are read by the row
+  stride and the padding dropped; the buffer was allocated for `rowbytes` but reshaped to `(width, height)`, which
+  threw on a length mismatch.
+- `ThorCamCSCCamera` sizes its zero frame, its reshape, its sequence array and its read buffer from `roi` instead of a
+  hard-coded 1440 x 1080. The driver still does not forward `roi` to the SDK, so `roi` must keep the size the camera
+  delivers, which the default does. `getdata` in `SEQUENCE` mode looped to an undefined `sequence_frames`; it now
+  loops to `sequence_length`.
+- Dev scripts that showed a frame without `permutedims` on a `yreversed` axis (`dcam4_camera/capture_single_frame.jl`,
+  `thorcam_csc/capture_single_frame.jl`, `dev/laser_tracking.jl`) follow the display rule; the DCAM4 one also took
+  `dcambuf_getlastframe`'s frame as an `(err, data)` pair.
 
 Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answers". The camera entries are for
 `DCAM4Camera`.

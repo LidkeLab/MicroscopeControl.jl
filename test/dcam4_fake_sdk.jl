@@ -7,8 +7,10 @@
 # `dcamapi.dll`. Defining a method with the identical signature into that module
 # replaces it, so the driver's own code runs unmodified against a recorder.
 # Only the wrappers the capture tests reach are replaced: the capture, buffer
-# and property calls below. `dcamprop_getsize` is replaced too, to return a fixed
-# 2 x 2 sensor.
+# and property calls below. `dcambuf_getframe_err` is replaced whole, to return a fixed 2 x 2 frame; the frame
+# conversion itself (`dcambuf_readframe`) runs against the replaced `dcambuf_copyframe`, which fills the driver's
+# buffer from `FakeDCAM.frame`, the row-major buffer a camera would write, padding included.
+# `dcamprop_getsize` is replaced too, to return a fixed 2 x 2 sensor.
 #
 # Each replaced wrapper records its name in `FakeDCAM.calls` and returns
 # `DCAMERR_SUCCESS` unless the test set a code for it in `FakeDCAM.codes`.
@@ -65,6 +67,9 @@ const on_status = Ref{Function}(() -> nothing)
 
 "The frame count `dcamcap_transferinfo` reports."
 const frames_transferred = Ref(0)
+
+"The row-major SDK buffer `dcambuf_copyframe` writes into the driver's buffer, padding included; `nothing` writes none."
+const frame = Ref{Any}(nothing)
 
 "Property values written by `dcamprop_setvalue`, read back by `dcamprop_getvalue` (default 0)."
 const values = Dict{Int32,Float64}()
@@ -133,6 +138,7 @@ function reset!()
     empty!(calls)
     empty!(codes)
     empty!(values)
+    frame[] = nothing
     status[] = nothing
     on_status[] = () -> nothing
     frames_transferred[] = 0
@@ -194,6 +200,20 @@ end
     function dcambuf_release(hdcam::Ptr{Cvoid})
         Main.FakeDCAM.in_wait[] > 0 && push!(Main.FakeDCAM.violations, "dcambuf_release")
         return Main.FakeDCAM.record!("dcambuf_release", DCAMERR_SUCCESS)
+    end
+    function dcambuf_copyframe(hdcam::Ptr{Cvoid}, pFrame::Ref{DCAMBUF_FRAME})
+        FK = Main.FakeDCAM
+        err = FK.record!("dcambuf_copyframe", DCAMERR_SUCCESS)
+        src = FK.frame[]
+        if !is_failed(err) && src !== nothing
+            dcf = pFrame[]
+            if sizeof(src) > Int(dcf.rowbytes) * Int(dcf.height)
+                push!(FK.violations, "dcambuf_copyframe: the driver's buffer is smaller than the camera's frame")
+            else
+                unsafe_copyto!(Ptr{eltype(src)}(dcf.buf), pointer(src), length(src))
+            end
+        end
+        return err
     end
     function dcambuf_getframe_err(hdcam::Ptr{Cvoid}, iFrame::Int32)
         err = Main.FakeDCAM.record!("dcambuf_getframe_err", DCAMERR_SUCCESS)

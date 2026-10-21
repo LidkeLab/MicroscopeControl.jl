@@ -29,7 +29,7 @@ function getlastframeornothing(camera::ThorCamCSCCamera)    #Calls tl_camera_get
     frame_count = Ref{Cint}(Cint(0))
     metadata_ref = Ref{Ptr{Cchar}}()
     metadate_size_bytes = Ref{Cint}(Cint(0))
-    image = Vector{UInt16}(undef, 1440 * 1080)
+    image = Vector{UInt16}(undef, camera.roi.width * camera.roi.height)
 
     is_frame_collected = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_pending_frame_or_null(camera.camera_handle::Ptr{Cvoid}, image_buffer_ref::Ref{Ptr{UInt16}}, frame_count::Ref{Cint}, metadata_ref::Ref{Ptr{Cchar}}, metadate_size_bytes::Ref{Cint})::Cint
 
