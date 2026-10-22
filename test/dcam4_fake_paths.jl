@@ -754,5 +754,28 @@
         end
         @test length(FK.closed) == 1 && FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0
     end
+
+    @testset "property setters and getters make no DCAM call after shutdown" begin
+        FK.reset!()
+        DC.DCAM_API_USERS[] = 0
+        c = DC.DCAM4Camera(0)
+        DC.shutdown(c)
+        n = length(FK.calls)
+        refusal(f) = begin
+            c.last_error = DC.DCAMERR_SUCCESS
+            @test_logs (:error, r"refused: the camera has been shut down") match_mode = :any f()
+            @test c.last_error == DC.DCAMERR_INVALIDHANDLE
+        end
+        refusal(() -> DC.setexposuretime!(c))
+        refusal(() -> DC.setexposuretime!(c, 0.02))
+        refusal(() -> DC.setroi!(c))
+        refusal(() -> DC.setroi!(c, DC.CameraROI(0, 0, 4, 4)))
+        refusal(() -> DC.setvalue(c, DC.DCAM_IDPROP_EXPOSURETIME, 0.01))
+        refusal(() -> DC.settriggermode!(c))
+        refusal(() -> DC.showproperties(c))
+        refusal(() -> @test DC.readout_time(c) == DC.READOUT_FALLBACK_S)
+        @test isnan(c.readout_s)
+        @test length(FK.calls) == n
+    end
 end
 

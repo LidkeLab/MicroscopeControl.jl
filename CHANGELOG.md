@@ -110,10 +110,19 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 - The two `TCubeLaser` known issues in 0.2.6 (a zero sent after a failed enable counting as landed, and the
   `CALIBRATION.md` example's `light_off` not running) were already fixed in the 0.2.6 code, as its Fixed list
   says; the "Known issues" list was not updated.
+- `PIStage.initialize` reads the position after the reference move, the travel range and the velocity, and starts
+  `real_x`/`real_y` and the targets `targ_x`/`targ_y` there, so the stage panel's first X step no longer moves Y to
+  the 12.5 default. A failed position read fails `initialize` like the other checked steps (the connection is closed
+  and it throws). (`MCLStage` had the same gap, fixed above; `MCS2Stage` reads its position at `initialize`.)
+- `DCAM4Camera` property setters and getters (`setvalue`, `settriggermode!`, `setexposuretime!`, `setroi!`,
+  `readout_time`, `showproperties`) make no library call after `shutdown`, where they passed the nulled handle. They
+  log an error and set `last_error` to `DCAMERR_INVALIDHANDLE`, as `live` and `sequence` do; the setters return
+  `(DCAMERR_INVALIDHANDLE, value)` (`setroi!` returns `nothing`) and `readout_time` returns `READOUT_FALLBACK_S`
+  without caching it.
 
 ### Changed
 
-- Compat entries for the two dependencies that had none: `LibSerialPort = "0.5"` (#82) and
+- Compat entries for the dependencies that had none: `TOML = "1"` (#86; TOML is 1.0.3 on Julia 1.13), `LibSerialPort = "0.5"` (#82) and
   `SHA = "0.7, 1"` (#77; SHA is a standard library, 0.7.0 on Julia 1.11 and 1.0.0 on 1.13, so a
   bound of `"0.7"` alone was ignored with a warning on 1.13).
 - CI: `actions/checkout` v7 (#79) and `codecov/codecov-action` v7 (#78). Not shipped; no effect on
@@ -133,9 +142,6 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   - One hang inside a camera library call, on several cores after GPU code had loaded (0.2.6's summary), and the
     NOTREADY, TIMEOUT and NOTSTABLE errors the rig logs during GUI use, are not fixed here. `DCAM4.dcam_trace!` records
     the library calls to find them.
-- `PIStage`: `targ_x` and `targ_y` start at 12.5 and `initialize` does not read the position after the reference
-  move, so the stage panel's first X step can move Y to 12.5 instead of leaving it. (`MCLStage` had the same gap, fixed
-  above; `MCS2Stage` reads its position at `initialize`.)
 - `ThorCamCSCCamera` copies `camera_format.x_pixels * camera_format.y_pixels` pixels from the SDK's buffer on every
   frame, and does not check that against the SDK. `camera_format` must state the sensor the camera delivers (the default,
   1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared

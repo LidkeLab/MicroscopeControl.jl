@@ -34,6 +34,34 @@
             @test stage.range_x == (0.0, 25.0)
             @test stage.range_y == (0.0, 25.0)
             @test ncalls("PI_IsControllerReady") == 3
+            # The position is read last, after the velocity is set.
+            @test findlast(==("PI_qVEL"), F.calls) < findfirst(==("PI_qPOS"), F.calls)
+            @test ncalls("PI_qPOS") == 1 && F.calls[end] == "PI_qPOS"
+        end
+
+        @testset "initialize starts the targets at the stage's position" begin
+            F.reset!()
+            push!(F.connect_ids, 5)
+            F.position .= (3.0, 20.0)
+            stage = PIStage()
+            initialize(stage)
+            @test (stage.real_x, stage.real_y) == (3.0, 20.0)
+            @test (stage.targ_x, stage.targ_y) == (3.0, 20.0)
+            # The stage panel's X step moves to (targ_x, targ_y): Y must stay where it was.
+            stage.targ_x += 1.0
+            move(stage, stage.targ_x, stage.targ_y)
+            @test F.moves == [("1 2", [4.0, 20.0])]
+        end
+
+        @testset "position read fails" begin
+            F.reset!()
+            push!(F.connect_ids, 5)
+            F.fail!("PI_qPOS")
+            stage = PIStage()
+            @test_throws "position unknown" initialize(stage)
+            @test ncalls("PI_CloseConnection") == 1
+            @test !stage.connectionstatus
+            @test stage.id == -1
         end
 
         @testset "refused PI_FRF" begin

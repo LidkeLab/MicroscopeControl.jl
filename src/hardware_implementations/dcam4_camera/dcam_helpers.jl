@@ -42,7 +42,18 @@ function showdevicelist()
     return uninit_err
 end
 
+# The property setters and getters below make a DCAM call with `camera.camera_handle`, which `shutdown` nulls. After
+# `shutdown` they refuse, as `begin_start!` does: log an error, set `last_error` to `DCAMERR_INVALIDHANDLE`, and make no
+# DCAM call. True when the caller must stop.
+function refused_closed!(camera::DCAM4Camera, what::AbstractString)
+    camera.closing == 0 && return false
+    camera.last_error = DCAMERR_INVALIDHANDLE
+    @error "DCAM4Camera $(camera.unique_id): $(what) refused: the camera has been shut down"
+    return true
+end
+
 function showproperties(camera::DCAM4Camera)
+    refused_closed!(camera, "showproperties") && return nothing
     hdcam = camera.camera_handle
 
     err, idprop = dcamprop_getnextid(hdcam, Int32(0), DCAMPROP_OPTION_SUPPORT)
@@ -67,6 +78,7 @@ function showproperties(camera::DCAM4Camera)
 end
 
 function setvalue(camera::DCAM4Camera, iProp::Int32, value::Float64)
+    refused_closed!(camera, "setvalue") && return DCAMERR_INVALIDHANDLE, value
     hdcam = camera.camera_handle
     err, dca = dcamprop_getattr(hdcam::Ptr{Cvoid},iProp)
 
@@ -100,6 +112,7 @@ function setvalue(camera::DCAM4Camera, idprop::DCAM_IDPROP, value)
 end
 
 function setexposuretime!(camera::DCAM4Camera)
+    refused_closed!(camera, "setexposuretime!") && return DCAMERR_INVALIDHANDLE, camera.exposure_time
     hdcam = camera.camera_handle
     exposure_time = camera.exposure_time
     err = dcamprop_setvalue(hdcam, DCAM_IDPROP_EXPOSURETIME, Float64(exposure_time))
@@ -122,6 +135,7 @@ function setexposuretime!(camera::DCAM4Camera, exposure_time::Real)
 end
 
 function setroi!(camera::DCAM4Camera)
+    refused_closed!(camera, "setroi!") && return nothing
     setvalue(camera, DCAM_IDPROP_SUBARRAYMODE, 1) # set subarray mode to off so that the order of setting the ROI would not matter.
     setvalue(camera, DCAM_IDPROP_SUBARRAYHPOS, camera.roi.x_start)
     err, hpos = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_SUBARRAYHPOS)
@@ -247,11 +261,13 @@ const READOUT_FALLBACK_S = 1.0
     readout_time(camera::DCAM4Camera) -> Float64
 
 The sensor readout time in seconds, read from the camera's `DCAM_IDPROP_TIMING_READOUTTIME`, which depends on the
-current ROI and readout speed, so read it after `setroi!`. It reads the camera and caches the value in
+current ROI and readout speed, so read it after `setroi!`. After `shutdown` it refuses (see `refused_closed!`) and returns
+`READOUT_FALLBACK_S` without caching it. It reads the camera and caches the value in
 `camera.readout_s`. If the read fails or the value is not a finite, non-negative number, it warns and returns (and
 caches) `READOUT_FALLBACK_S`.
 """
 function readout_time(camera::DCAM4Camera)
+    refused_closed!(camera, "readout_time") && return READOUT_FALLBACK_S
     err, t = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_TIMING_READOUTTIME)
     if is_failed(err) || !isfinite(t) || t < 0
         @warn "DCAM4Camera $(camera.unique_id): the camera did not report its readout time ($(err), $(t)); assuming $(READOUT_FALLBACK_S) s for the frame-wait timeout" maxlog = 1
