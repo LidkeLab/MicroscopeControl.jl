@@ -1,0 +1,89 @@
+"""
+    NIDAQModulator(; channel, v_range, per_volt, daq = NIdaq())
+
+An [`AbstractModulationControl`](@ref) that drives a light's analogue input from one NI-DAQmx analogue
+output `channel` (`"Dev1/ao1"`). `v_range = (v_min, v_max)` is the range the output is created with, passed to
+DAQmx through `createtask(daq, "AO", channel; min_val, max_val)` so DAQmx refuses a range the card lacks (a
+USB-6008 has no 0-10 V output range: error -200077); it is also the reach of `setpower`. `per_volt` is required
+and positive, in the light's unit per volt (mW/V in closed loop, mA/V in open loop): measure it as in the TCube
+`CALIBRATION.md`, "MOD IN scale".
+
+Construction is pure. `initialize` makes ONE analogue-output task and writes 0 V; `shutdown` writes 0 V, then
+deletes the task; a failed `initialize` deletes the task it made. Pass it to a light as `modulator = ...`; the
+light opens and closes it.
+
+`setpower(mc, p)` writes `p / per_volt` volts, and throws `ArgumentError`, before any write, when that is not
+finite or lies outside `v_range`.
+"""
+mutable struct NIDAQModulator <: AbstractModulationControl
+    daq::DAQ
+    channel::String
+    v_min::Float64
+    v_max::Float64
+    per_volt::Float64
+    task::Any   # nothing until initialize; the DAQ's own task object after
+end
+
+function NIDAQModulator(; channel::AbstractString, v_range::Tuple{<:Real,<:Real}, per_volt::Real, daq::DAQ=NIdaq())
+    v_min, v_max = Float64(v_range[1]), Float64(v_range[2])
+    (isfinite(v_min) && isfinite(v_max) && v_min <= 0.0 <= v_max && v_min < v_max) || throw(ArgumentError(
+        "NIDAQModulator: v_range = $(v_range) must be finite with v_min < v_max and contain 0 V (level 0 is 0 V)"))
+    (isfinite(per_volt) && per_volt > 0) || throw(ArgumentError(
+        "NIDAQModulator: per_volt is the light's unit per volt and must be finite and positive, got $(per_volt)"))
+    isempty(channel) && throw(ArgumentError("NIDAQModulator: channel names the analogue output, e.g. \"Dev1/ao1\""))
+    return NIDAQModulator(daq, String(channel), v_min, v_max, Float64(per_volt), nothing)
+end
+
+output_id(m::NIDAQModulator) = "NIDAQ $(m.channel)"
+
+"The voltage `setpower(m, p)` writes; `ArgumentError` when `p` has none the output can make."
+function volts(m::NIDAQModulator, p::Float64)
+    v = p / m.per_volt
+    (isfinite(v) && m.v_min <= v <= m.v_max) || throw(ArgumentError(
+        "NIDAQModulator $(m.channel): level $p needs $v V ($(m.per_volt) per V), outside the output's range [$(m.v_min), $(m.v_max)] V"))
+    return v
+end
+
+function setpower(m::NIDAQModulator, p::Float64)
+    m.task === nothing && error("NIDAQModulator $(m.channel): setpower before initialize (or after shutdown)")
+    v = volts(m, p)
+    setvoltage(m.daq, m.task, v)
+    return nothing
+end
+
+function initialize(m::NIDAQModulator)
+    if m.task !== nothing   # opened already: one task for life, so only the level is put back to 0 V
+        setvoltage(m.daq, m.task, 0.0)
+        return nothing
+    end
+    task = createtask(m.daq, "AO", m.channel; min_val=m.v_min, max_val=m.v_max)
+    try
+        setvoltage(m.daq, task, 0.0)
+    catch
+        try
+            deletetask(m.daq, task)
+        catch derr
+            @error "NIDAQModulator $(m.channel): deleting the task failed while cleaning up a failed initialize" exception = derr
+        end
+        rethrow()
+    end
+    m.task = task
+    return nothing
+end
+
+function shutdown(m::NIDAQModulator)
+    m.task === nothing && return nothing
+    try
+        setvoltage(m.daq, m.task, 0.0)
+    finally
+        deletetask(m.daq, m.task)   # a throw here keeps the task, so the next shutdown retries it
+        m.task = nothing
+    end
+    return nothing
+end
+
+function export_state(m::NIDAQModulator)
+    attributes = Dict{String,Any}("modulator_type" => "NIDAQModulator", "output_id" => output_id(m),
+        "channel" => m.channel, "v_min" => m.v_min, "v_max" => m.v_max, "per_volt" => m.per_volt)
+    return attributes, nothing, Dict{String,Any}("daq" => export_state(m.daq))
+end

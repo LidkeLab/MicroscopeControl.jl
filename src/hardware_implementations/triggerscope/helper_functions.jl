@@ -14,8 +14,14 @@ function volttooutput(scope::Triggerscope4,  dacchannel::Int,voltage::Float64)
     end
 end
 
+# LibSerialPort timeouts are a CUMULATIVE budget: every read call uses at least 1 ms of it, and once it is spent the
+# next read throws `Timeout` (and the budget then reads 0 = wait forever). Set once at `openport`, the 10 s budget ran
+# out after a few thousand commands, so one command in a few thousand failed and reset the port (rig, 2026-10-15,
+# 1 in 2500-5000 at 400 Hz). It is re-armed here for every command, so `rwtimeout` is the limit of ONE command.
 function writecommand(scope::Triggerscope4, commandstring::String)
     try
+        set_write_timeout(scope.sp, scope.rwtimeout)
+        set_read_timeout(scope.sp, scope.rwtimeout)   # the reply read that follows gets the full limit
         sp_flush(scope.sp, SP_BUF_BOTH)
         write(scope.sp, commandstring)
         sleep(scope.compause)

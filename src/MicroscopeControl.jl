@@ -27,6 +27,11 @@ include("hardware_interfaces/HardwareInterfaces.jl")
 include("hardware_implementations/HardwareImplementations.jl")
 @reexport using .HardwareImplementations
 
+# The light-source modulator lifecycle: public (documented, qualified access as `MicroscopeControl.<name>`), not
+# exported. For driver authors and for downstream tests of a light that takes a `modulator`.
+using .HardwareInterfaces.LightSourceInterface: output_id, open_modulator!, close_modulator!, RecordingModulator, modulation_violations
+public output_id, open_modulator!, close_modulator!, RecordingModulator, modulation_violations
+
 # HDF5 file saving utilities
 include("h5_file_saving.jl")
 export save_h5, save_attributes_and_data

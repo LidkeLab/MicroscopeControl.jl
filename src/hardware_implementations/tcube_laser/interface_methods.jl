@@ -861,6 +861,13 @@ caller's ceiling for this diode, and overwriting it with the controller's
 (typically 160-220 mA) limit silently widened the range `setcurrent!` validates
 against, so a rig that asked for an 80 mA ceiling got the controller's instead.
 
+With a `modulator` the sequence ends, the output still off, with
+[`begin_modulation!`](@ref): the modulator is opened (its output claimed, 0 V), the control
+source is recorded (once per open/close cycle: a second `initialize` keeps the first) and set
+to 3, software + external (never 5 or 7: the front knob adds an offset). A failure there
+releases the modulator, closes the handle as for any other failed step and is the error
+raised.
+
 Hardware-verified on the 642 nm rig's TLD001 (64849775, 2026-09-28), output
 off: polling refreshes the setpoint cache; a plain potentiometer set is ignored
 and adjust mode is required, with a pause before leaving it; the limit the
@@ -879,6 +886,8 @@ function initialize(light::TCubeLaser)
         # A success FLAG, not a status code: `false` is the failure.
         check_flag(LD_StartPolling(serialNo, POLL_INTERVAL_MS), "LD_StartPolling", serialNo)
         sleep(REQUEST_WAIT_S[])
+        # A modulator still open from an earlier initialize may hold a level: 0 V before the zero.
+        modulator_open(light) && zero_modulator!(light)
         # Whatever else left the output on, it is off before the mode command
         # is sent, and `is_on` is false afterwards.
         try
@@ -900,11 +909,14 @@ function initialize(light::TCubeLaser)
         out = LD_GetLaserDiodeMaxCurrentLimit(serialNo)
         record_controller_limit!(light, out)
         lower_open_loop_clamp!(light)
+        # With the output off: open the modulator (0 V), record the control source, set source 3.
+        begin_modulation!(light)
     catch
         # The open succeeded, so this handle is ours to close; a controller
         # left open refuses the next `LD_Open` and so blocks the retry. The
         # close is reported but never rethrown: the failure that stopped
         # initialization is the one the caller needs.
+        end_modulation!(light)   # a modulator opened by this or an earlier initialize: restore the source, release the output
         try
             LD_StopPolling(serialNo)
             LD_Close(serialNo)
@@ -1045,8 +1057,19 @@ controller power cycle can restore the pot).
 `[limitation]` those checks add two fresh reads (about 4 x `REQUEST_WAIT_S`), and
 `check_lock` adds `lock_check_s` plus about 4 x `REQUEST_WAIT_S`, to every closed-loop
 `light_on` and `setoutputpower!`; unvalidated on hardware.
+
+# With a modulator
+
+`require_clamp`, `check_scale!` and the request's code are as above. Then: write level 0 to
+the modulator (a throw enables nothing); enable; send USB setpoint 0 and read it back; wait
+[`MOD_SETTLE_S`](@ref) (1.3 s); put the request on the modulator; confirm that the setpoint
+register shows the request ([`confirm_modulated_setpoint`](@ref)); then `check_lock` in closed
+loop. A throw after the enable writes 0 (tried), zeroes the setpoint, disables and rethrows.
+`[limitation]` One `light_on` costs 1.3 s more and a read-back; a second `light_on` while on
+reruns all of it, dark meanwhile. See [`light_on_modulated`](@ref).
 """
 function LightSourceInterface.light_on(light::TCubeLaser)
+    light.modulator === nothing || return light_on_modulated(light)
     require_clamp(regulation_mode(light), light, "light_on")
     try
         check_scale!(light)
@@ -1173,10 +1196,23 @@ in 0.2.4.
 `[limitation]` With the output on, a setpoint the controller does not confirm
 throws and leaves the output on, at a setpoint that may be the new or the old
 one. There is no cleanup: 0.2.4's `setpower` never disabled on a failed write.
+
+With a `modulator`, the same checks run, and then, with the output on (the driver's
+record), the level is written to the modulator: one write, no USB call, no read-back, no
+wait. With the output off nothing is written. An `ArgumentError` from the modulator changes
+nothing (the old level stays recorded); any other throw writes 0 (tried), disables the
+output and rethrows.
 """
 function LightSourceInterface.setcurrent!(light::TCubeLaser{ConstantCurrent}, current::Float64)
     check_current(light, current)
     code = setpoint_code(light, current)
+    if light.modulator !== nothing
+        written = set_level_modulated!(light, current)   # on: one modulator write, no USB call; off: nothing
+        light.drive_current = current
+        light.properties.power = legacy_power(light, current)
+        println("Laser current set to $current mA", written ? "" : " (output off: applied at light_on)")
+        return nothing
+    end
     # Fresh when the driver recorded the output off: the polled word can still
     # say on just after a light_off, and a send then would wait out its confirm.
     on = light.properties.is_on || read_status_fresh(light.serialNo) & STATUS_BITS.output_enabled != 0
@@ -1229,8 +1265,31 @@ A safety check that refuses while the output may be on zeroes and disables it fi
 It never touches `drive_current`: the loop owns the current. Whether the light
 at the output matches is a question for a power meter; see
 [`indicated_output_power`](@ref) and [`loop_status`](@ref).
+
+# With a modulator
+
+Steps 2 and 4 run (the clamp must have been programmed; the request is checked against
+`properties` and the amplifier's full scale), and then, with the output on (the driver's
+record), the level is written to the modulator: one write, with no USB call, no fresh
+read, no `check_lock` and no ramp (a MOD IN jump from 0 V never locked the loop, 15 of 15).
+With the output off nothing is written. An `ArgumentError` from the modulator changes
+nothing; any other throw writes 0 (tried), disables the output and rethrows.
+`[limitation]` Between `light_on`s nothing watches the level; poll [`loop_status`](@ref).
 """
 function LightSourceInterface.setoutputpower!(light::TCubeLaser{ConstantPhotocurrent}, power_mW::Float64)
+    if light.modulator !== nothing
+        isnan(light.pd.max_current_clamp) && error(
+            "TCubeLaser $(light.serialNo): setoutputpower! refused: the max-current clamp has not been programmed and verified. " *
+            "Call initialize first; it is the only real protection in closed loop.")
+        check_power(light, power_mW)
+        code = photocurrent_code(light, power_mW / 1000 / light.pd.wa_calibration)   # refuses above full scale; nothing is sent
+        written = set_level_modulated!(light, power_mW)   # on: one modulator write, no USB call; off: nothing
+        light.pd.output_power_requested = power_mW
+        light.pd.photocurrent_requested = photocurrent_from_code(light, code, light.pd.tia_range)
+        println("Laser output power set to $power_mW mW (photocurrent setpoint $(light.pd.photocurrent_requested) A)",
+                written ? "" : " (output off: applied at light_on)")
+        return nothing
+    end
     bits = require_clamp(ConstantPhotocurrent(), light, "setoutputpower!")
     check_power(light, power_mW)
     pd, serialNo = light.pd, light.serialNo
@@ -1364,9 +1423,11 @@ Zero the setpoint while the output is still on, then disable the output, then
 record it ([`zero_then_disable`](@ref)). A failed zero is logged and does not
 throw, since the output is still turned off; a failed disable throws and leaves
 `properties.is_on` unchanged. The recorded request (`drive_current`, or
-`pd.output_power_requested`) is kept, so `light_on` returns to it.
+`pd.output_power_requested`) is kept, so `light_on` returns to it. With a `modulator`
+its level 0 is written first (a failure is logged and does not stop the switch-off).
 """
 function LightSourceInterface.light_off(light::TCubeLaser)
+    zero_modulator!(light)   # level 0 first (a failure is logged, never prevents the switch-off)
     zero_then_disable(light)
     println("$(light.laser_color)" * "_laser is off")
     return nothing
@@ -1379,12 +1440,21 @@ Zero the setpoint and disable the output ([`zero_then_disable`](@ref)), stop
 polling and close the connection. A failed zero is logged; a failed disable
 throws, but the connection is closed either way: leaving the Kinesis handle open
 would also block the reconnection a caller needs in order to retry the disable.
+
+With a `modulator`: level 0 is written first, and after the disable the control source
+recorded by `initialize` is restored and the modulator closed (0 V, then its output is
+released); a failure there is thrown after the connection is closed, and the output stays
+claimed until the next `shutdown` retries it.
 """
 function shutdown(light::TCubeLaser)
     serialNo = light.serialNo
+    modulator_err = nothing
     try
+        zero_modulator!(light)
         zero_then_disable(light)
     finally
+        # With a modulator: restore the control source and close it (0 V, release) while the handle is open.
+        modulator_err = end_modulation!(light)
         try
             LD_StopPolling(serialNo) # returns Cvoid: no status to check
         catch stoperr
@@ -1392,6 +1462,7 @@ function shutdown(light::TCubeLaser)
         end
         LD_Close(serialNo) # returns Cvoid: no status to check
     end
+    modulator_err === nothing || throw(modulator_err)   # after the handle is closed; the claim is kept for a retry
     println("$(light.laser_color)" * "_laser is shutdown")
     return nothing
 end
@@ -1511,6 +1582,8 @@ where it used to raise a bare `BoundsError` on a single-device rig, it says
 what it found and what to pass instead.
 """
 function setupIO(light::TCubeLaser)
+    Base.depwarn("setupIO(light) is deprecated; construct the laser with modulator = NIDAQModulator(channel = \"<device>/ao<n>\", v_range = (0.0, 5.0), per_volt = ...) " *
+                 "and the driver opens and closes the output, and sets the level through setoutputpower!/setcurrent!", :setupIO)
     devs = NIDAQcard.showdevices(light.daq)
     device = if light.daq_device === nothing
         length(devs) >= 2 || error("TCubeLaser $(light.serialNo): setupIO defaults to the 2nd DAQ device, but discovery found $(length(devs)): $(join(devs, ", ")). Pass `daq_device=` to TCubeLaser to name one.")
@@ -1534,6 +1607,8 @@ function setupIO(light::TCubeLaser)
 end
 
 function set_modvoltage(light::TCubeLaser, voltage::Float64)
+    Base.depwarn("set_modvoltage(light, volts) is deprecated; construct the laser with modulator = NIDAQModulator(channel = \"<device>/ao<n>\", v_range = (0.0, 5.0), per_volt = ...) " *
+                 "and set the level through setoutputpower!/setcurrent!. A raw voltage is absorbed by the next USB setpoint (the controller has one setpoint register).", :set_modvoltage)
     NIDAQcard.setvoltage(light.daq, light.task_mod, voltage)
     return nothing
 end
@@ -1601,6 +1676,7 @@ function export_state(light::TCubeLaser)
     children = Dict{String,Any}(
         "daq" => export_state(light.daq) # export_state function from NIDAQcard module
     )
+    light.modulator === nothing || (children["modulator"] = export_state(light.modulator))
 
     return attributes, data, children
 end

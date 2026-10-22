@@ -6,8 +6,10 @@ Runs the acknowledgement test on the Triggerscope
 """
 function acknowledgetest(scope::Triggerscope4)
     commandstring = "*\n"
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 """
@@ -21,24 +23,30 @@ function setdac(scope::Triggerscope4, dacnum::Int, voltvalue::Float64)
     commandstring = "DAC" * string(dacnum) * "," * string(dacoutput) * "\n"
 
     #write the command to the serial port
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function focus(scope::Triggerscope4, focusval::Int)
     #create the command string
     #Sets "dac assigned" to focus
     commandstring = "FOCUS," * string(focusval) * "\n"
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function setttl(scope::Triggerscope4, channel::Int, ttlval::Bool)
     #create the command string
     #Sets ttl output to 0 or 1 "True or false"
     commandstring = "TTL" *string(channel) * "," * string(Int(ttlval)) * "\n"
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function setrange(scope::Triggerscope4, dacchannel::Int, range::Range)
@@ -47,34 +55,44 @@ function setrange(scope::Triggerscope4, dacchannel::Int, range::Range)
     commandstring = "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
 
     #write the command to the serial port
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function getstatus(scope::Triggerscope4)
     #create the command string
     commandstring = "STAT?\n"
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function runtest(scope::Triggerscope4)
     #create the command string
     commandstring = "TEST?\n"
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function Base.reset(scope::Triggerscope4)
     #create the command string
     commandstring = "RESET\n"
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function savesettings(scope::Triggerscope4)
     #create the command string
     commandstring = "SAVESETTINGS\n"
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end

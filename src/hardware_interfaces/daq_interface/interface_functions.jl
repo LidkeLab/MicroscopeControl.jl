@@ -25,7 +25,7 @@ function showchannels(daq::DAQ,channeltype::String,device::String)
 end
 
 """
-    createtask(daq::DAQ,tasktype::String,channel::String)
+    createtask(daq::DAQ,tasktype::String,channel::String; min_val=nothing, max_val=nothing)
 
 Create a task of a given task type and channel.
 
@@ -33,11 +33,14 @@ Create a task of a given task type and channel.
 - `daq::DAQ`: A DAQ type.
 - `tasktype::String`: A task type. Options are "AI","AO","DI","DO".
 - `channel::String`: A channel name, obtained from `showchannels`.
+- `min_val`, `max_val`: for "AI" and "AO", the voltage range the channel is created with, both or neither. With
+  neither, the driver picks the device's own range. With both, the device refuses a range it lacks (a USB-6008
+  has no 0-10 V output range) instead of the driver silently using another.
 
 # Returns
 - `t::Any`: A Any type.
 """
-function createtask(daq::DAQ,tasktype::String,channel::String)
+function createtask(daq::DAQ,tasktype::String,channel::String; min_val=nothing, max_val=nothing)
     error("createtask not implemented for $(typeof(daq))")
 end
 
