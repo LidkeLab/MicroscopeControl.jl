@@ -1,53 +1,39 @@
 
+# One writable property the panel shows: its id, its info, and its value (`nothing` for a type with no control).
+const GuiParamEntry = NamedTuple{(:idprop, :prop, :val), Tuple{Int32, Prop_Info, Union{Nothing, Float64}}}
+
+# The camera is read under its acquisition lock (as the other property calls are, so `shutdown` cannot null the handle
+# mid-read); the panel is built and displayed after the lock is released, so building it never blocks a frame read, an
+# abort or `shutdown`. Its callbacks go through `setvalue`, which takes the lock for each write.
 function gui_param(camera::DCAM4Camera)
-    @lock camera.acquisition_lock begin
-        refused_closed!(camera, "gui_param") && return nothing
-        _gui_param(camera)
-    end
+    return _gui_param(camera, _gui_param_build)
 end
 
-function _gui_param(camera::DCAM4Camera)
-    prop_fig = GLMakie.Figure(size=(900, 1800), title="Camera Properties")
-    wd = 200
-    wd1 = 300
-    wd2 = 130
-    hd = 30
+function _gui_param(camera::DCAM4Camera, build::Function)
+    entries = @lock camera.acquisition_lock begin
+        refused_closed!(camera, "gui_param") && return nothing
+        _gui_param_collect(camera)
+    end
+    return build(camera, entries)
+end
+
+function _gui_param_collect(camera::DCAM4Camera)
+    entries = GuiParamEntry[]
     err, idprop = dcamprop_getnextid(camera.camera_handle, Int32(0), DCAMPROP_OPTION_SUPPORT)
-    prop_control = Any[]
-    prop_control_labels = Any[]
-    prop_control_idprop = Any[]
-    range_labels = Any[]
-    units_labels = Any[]
     while (idprop != 0)
         prop = Prop_Info()
         try
             prop = dcam_get_propinfo(camera.camera_handle, idprop)
         catch
-            output *= " : Unknown ID"
+            @warn "Failed to get property info for ID: $idprop"
         end
 
         if prop.writable == 1
-            if prop.type == "Mode"
-                #DCAM4.dcam_get_prop_options!(cam.camera_handle, prop, idprop)
-                push!(prop_control, Menu(prop_fig, options=prop.options, width=wd, height=hd))
+            val = nothing
+            if prop.type == "Mode" || prop.type == "Long" || prop.type == "Real"
                 err, val = dcamprop_getvalue(camera.camera_handle, idprop)
-                prop_control[end].i_selected[] = Int64(val)
-                push!(prop_control_labels, Label(prop_fig, prop.name, width=wd1, height=hd))
-                push!(prop_control_idprop, idprop)
             end
-            if (prop.type == "Long") || (prop.type == "Real")
-                err, val = dcamprop_getvalue(camera.camera_handle, idprop)
-                push!(prop_control, Textbox(prop_fig, placeholder=string(val), width=wd, height=hd))
-                push!(prop_control_labels, Label(prop_fig, prop.name, width=wd1, height=hd))
-                push!(prop_control_idprop, idprop)
-            end
-            push!(range_labels, Label(prop_fig, string(round.(prop.range; digits=2)), width=wd2, height=hd))
-            if prop.unit == "None"
-                push!(units_labels, Label(prop_fig, "", width=wd2, height=hd))
-            else
-                push!(units_labels, Label(prop_fig, prop.unit, width=wd2, height=hd))
-            end
-
+            push!(entries, GuiParamEntry((idprop, prop, val)))
         end
 
         err, idprop = dcamprop_getnextid(camera.camera_handle, idprop, DCAMPROP_OPTION_SUPPORT)
@@ -55,7 +41,39 @@ function _gui_param(camera::DCAM4Camera)
             display(err)
             println(idprop)
         end
+    end
+    return entries
+end
 
+function _gui_param_build(camera::DCAM4Camera, entries)
+    prop_fig = GLMakie.Figure(size=(900, 1800), title="Camera Properties")
+    wd = 200
+    wd1 = 300
+    wd2 = 130
+    hd = 30
+    prop_control = Any[]
+    prop_control_labels = Any[]
+    prop_control_idprop = Any[]
+    range_labels = Any[]
+    units_labels = Any[]
+    for (idprop, prop, val) in entries
+        if prop.type == "Mode"
+            push!(prop_control, Menu(prop_fig, options=prop.options, width=wd, height=hd))
+            prop_control[end].i_selected[] = Int64(val)
+            push!(prop_control_labels, Label(prop_fig, prop.name, width=wd1, height=hd))
+            push!(prop_control_idprop, idprop)
+        end
+        if (prop.type == "Long") || (prop.type == "Real")
+            push!(prop_control, Textbox(prop_fig, placeholder=string(val), width=wd, height=hd))
+            push!(prop_control_labels, Label(prop_fig, prop.name, width=wd1, height=hd))
+            push!(prop_control_idprop, idprop)
+        end
+        push!(range_labels, Label(prop_fig, string(round.(prop.range; digits=2)), width=wd2, height=hd))
+        if prop.unit == "None"
+            push!(units_labels, Label(prop_fig, "", width=wd2, height=hd))
+        else
+            push!(units_labels, Label(prop_fig, prop.unit, width=wd2, height=hd))
+        end
     end
 
     for j in eachindex(prop_control)

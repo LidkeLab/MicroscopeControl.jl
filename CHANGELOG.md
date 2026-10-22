@@ -116,7 +116,7 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   and it throws). (`MCLStage` had the same gap, fixed above; `MCS2Stage` reads its position at `initialize`.)
 - `DCAM4Camera` property setters and getters (`setvalue`, `settriggermode!`, `setexposuretime!`, `setroi!`,
   `readout_time`, `showproperties`, `extract_properties`, `gui_param`) make no library call after `shutdown`, where they
-  passed the nulled handle. Each runs its check and its library calls under the camera's acquisition lock, so a
+  passed the nulled handle. Each runs its check and its library calls (`gui_param`: its reads, not building the panel) under the camera's acquisition lock, so a
   concurrent `shutdown` waits for it. They log an error and set `last_error` to `DCAMERR_INVALIDHANDLE`, as `live` and `sequence` do; the setters return
   `(DCAMERR_INVALIDHANDLE, value)` (`setroi!`, `showproperties` and `gui_param` return `nothing`),
   `extract_properties` returns an empty `Dict`, and `readout_time` returns `READOUT_FALLBACK_S` without caching it.
@@ -143,6 +143,9 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   - One hang inside a camera library call, on several cores after GPU code had loaded (0.2.6's summary), and the
     NOTREADY, TIMEOUT and NOTSTABLE errors the rig logs during GUI use, are not fixed here. `DCAM4.dcam_trace!` records
     the library calls to find them.
+- `DCAM4Camera`: a property call (`setvalue`, `setexposuretime!`, `setroi!`, `readout_time`, `showproperties`,
+  `extract_properties`, and the read in `gui_param`) holds the acquisition lock, so a slow or hung camera property call
+  delays a frame read, a stop and `shutdown` until it returns. The guard fixes the handle's lifetime, not stop latency.
 - `ThorCamCSCCamera` copies `camera_format.x_pixels * camera_format.y_pixels` pixels from the SDK's buffer on every
   frame, and does not check that against the SDK. `camera_format` must state the sensor the camera delivers (the default,
   1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
