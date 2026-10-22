@@ -66,10 +66,78 @@ so that an 80 mA call can never become an 80 mW one.
 - `pd::Union{Nothing,PhotodiodeLoop}`: The photodiode loop's calibration and
   state; a [`PhotodiodeLoop`](@ref) exactly when `M === ConstantPhotocurrent`,
   `nothing` otherwise.
+- `modulator::Union{Nothing,AbstractModulationControl}`: What puts the level on the
+  controller's rear MOD IN, or `nothing` (the default: every method then runs as it
+  always did). Fixed at construction, because its claim, its output and the control
+  source it needs belong to one modulator for life. See "With a modulator" below.
+- `source_before::Union{Nothing,Int}`: State. The control source `initialize` found,
+  to restore at `shutdown`; `nothing` outside an open/close cycle of a modulator.
+- `connected::Bool`: State. Whether `initialize` has opened the Kinesis handle and `shutdown` has not closed it.
+  With a modulator, a `shutdown` retried after the handle closed touches no closed-handle call.
+- `generation::Threads.Atomic{Int}`, `lock::ReentrantLock`, `arming::Bool`: State of a light with a modulator, see
+  "Locking" below; `closing::Bool`: a `shutdown` has begun (no activation may arm or enable) until the next `initialize`.
+  `disable_pending::Bool`: State. A `LD_DisableOutput` failed and has not been retried; a `shutdown`
+  retried after the handle closed reopens it to retry the disable.
 
 The first fourteen fields are in the order they have always been in, and the
-two added in 0.2.5 are at the end, so the pre-0.2.5 positional forms still
-construct: they build a `TCubeLaser{ConstantCurrent}` with both defaulted.
+two added in 0.2.5 and the two added since are at the end, so the pre-0.2.5
+positional forms still construct: they build a `TCubeLaser{ConstantCurrent}` with
+all of them defaulted.
+
+# Locking (with a modulator)
+
+`[guarantee]` Two locks. `lock` serializes the writes and state changes of `initialize`, a second `light_on`, the level
+setters and the MOD IN writes. `usb_lock` serializes only the Kinesis enable and disable commands, each a single call.
+`light_on` arms under `lock` (a generation bump, 0 V, the preflight, then the enable under `usb_lock` after a
+generation check, then USB 0), releases `lock` to sleep `MOD_SETTLE_S`, applies the CURRENT request under it, and polls
+the read-back and the lock check WITHOUT it, re-checking the generation before each write. A `light_off` or `shutdown`
+bumps `generation`, then disables under `usb_lock` right away, with no wait for `lock` and so none for a MOD IN write
+that is blocked on its transport; the MOD IN zero follows. No enable can follow a disable that superseded it. An activation
+that finds `generation` moved throws "superseded" and writes nothing more. `[guarantee]` `shutdown` is final: it sets
+`closing` before it disables, an activation that reaches the lock or the enable gate afterwards is refused, and `shutdown`
+disables again as its last hardware step before it closes; `initialize` clears `closing`. `light_off` is not final: a
+`light_on` that is linearized after it (it takes the lock later) may legitimately turn the light on again, and `light_off`'s
+own disable is prompt either way.
+`[limitation]` With ONE Julia thread, a vendor call that blocks (a DAQmx scalar write stalled on its transport) blocks the
+thread that would run `light_off` too, up to the write's timeout ([`NIDAQModulator`](@ref): 0.5 s by default). Issue
+`light_off` from another thread (`julia -t 2`, `Threads.@spawn`) to be independent of it. While arming, level setters record only
+(the activation applies the latest request); while on, they write MOD IN under `lock`. A USB setpoint is written only
+when the MOD IN zero succeeded in the same critical section, and never when the modulator is not open: then it is
+skipped and the output disabled. A light without a modulator takes no lock and runs as it always did.
+
+# With a modulator
+
+`TCubeLaser(serialNo; modulator = NIDAQModulator(...))` drives the setpoint through MOD IN instead of
+USB: a level change is one analogue write, not a USB setpoint and a lock check.
+`[guarantee]` With `modulator = nothing` none of this applies. With one:
+
+- `initialize` is as always (never enables; zeroes and disables first), then, with the
+  output off, opens the modulator (0 V), records the control source (once per
+  open/close cycle, so a second `initialize` keeps the first) and sets source 3
+  (software + external). Never 5 or 7: the front knob adds an offset. `shutdown`
+  restores the recorded source.
+- `light_on` writes 0 V, enables, sends USB setpoint 0 and reads it back, waits
+  [`MOD_SETTLE_S`](@ref) (1.3 s), puts the request on MOD IN, then CONFIRMS that the
+  controller's setpoint register shows the request within `max(30 words, 3 %)`. It
+  refuses (output off, 0 V) otherwise: that catches a wrong `per_volt`, a dead
+  cable, an unarmed control source and a MOD IN change the controller lost.
+  `[limitation]` It costs 1.3 s more per `light_on`, plus a read-back.
+- `setcurrent!`, `setoutputpower!` (so `setlevel!` and the panels' sliders) check and
+  record as always, and, while the output is on, write the level to MOD IN: one write,
+  no USB call, no fresh read, no lock check, no ramp. While off they write nothing.
+  An `ArgumentError` from the modulator changes nothing; any other throw darkens the
+  light and is rethrown. `[limitation]` Between `light_on`s nothing watches the level;
+  poll [`loop_status`](@ref).
+- `light_off`, `shutdown` and every failure path DISABLE FIRST (at once, without waiting for
+  a MOD IN write) and then write 0 V (a failure is logged). No USB zero is sent after a
+  modulated off: the controller ignores one with the output off, and the next `light_on`
+  writes USB 0 at 0 V after its enable. (`initialize` and the calibration-reference check
+  still zero the USB setpoint before they disable, when the MOD IN level is known to be 0.)
+- `[limitation]` The controller has ONE setpoint register: a USB write sets it outright
+  (taking the MOD IN voltage then as reference) and MOD IN changes add their difference.
+  So no USB setpoint is sent while the modulator holds a level: only 0, and the
+  calibration reference, each at 0 V. A setpoint from other software (Kinesis) absorbs
+  the voltage until the next `light_on`.
 
 # The setpoint only takes while the output is on
 
@@ -78,11 +146,15 @@ and, on the next `LD_EnableOutput`, runs on whatever setpoint it had stored
 (observed on the 642 nm rig's TLD001 64849775, 2026-09-28). So a requested
 setpoint (`setcurrent!`, `setoutputpower!`) reaches the diode only because
 `light_on` sends it right after enabling, and `light_off` and `shutdown` zero
-the setpoint before disabling, so the next enable starts dark.
+the setpoint before disabling, so the next enable starts dark. (With a modulator they
+disable first and send no USB zero; see "With a modulator". The stored setpoint then
+stays at the 0 the last `light_on` wrote, and the register's MOD IN part is back at
+0 V before the next enable.)
 
 `[limitation]` Between the enable and the setpoint that follows it (one USB
 round trip) the controller runs on its stored setpoint: 0 after this driver's
-`light_off` or `shutdown`, but anything up to the controller's current limit if
+`light_off` or `shutdown` (with a modulator: 0 because every `light_on` wrote USB 0, after a
+failed disable-first cleanup possibly not), but anything up to the controller's current limit if
 other software left it there. In that window the current-limit potentiometer
 is the only hardware bound; set it at or below the diode's rating.
 """
@@ -103,11 +175,21 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     drive_current::Float64
     threshold_current::Float64
     pd::Union{Nothing,PhotodiodeLoop}
+    const modulator::Union{Nothing,AbstractModulationControl}
+    source_before::Union{Nothing,Int}
+    connected::Bool
+    const generation::Threads.Atomic{Int}
+    const lock::ReentrantLock
+    arming::Bool
+    disable_pending::Bool
+    const usb_lock::ReentrantLock
+    closing::Bool
+    const arm_gen::Threads.Atomic{Int}
 
     function TCubeLaser{M}(unique_id, properties, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
         controller_max_current, daq_device, ao_channel, drive_current,
-        threshold_current, pd) where {M<:RegulationMode}
+        threshold_current, pd, modulator=nothing) where {M<:RegulationMode}
         M in supported_modes(TCubeLaser) || throw(ArgumentError(
             "TCubeLaser $serialNo: mode $(M) is not one of $(supported_modes(TCubeLaser))"))
         name = "TCubeLaser $serialNo"
@@ -127,7 +209,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
             controller_max_current, daq_device, ao_channel, drive_current,
-            threshold_current, pd)
+            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0), ReentrantLock(), false, false, ReentrantLock(), false, Threads.Atomic{Int}(0))
     end
 end
 
@@ -201,6 +283,8 @@ only in this mode, nothing enforces them (see the `properties` field).
   setpoint steps and the loop-lock check.
 - `min_current` defaults to `0.0`. A non-zero default would reject safe small
   currents without protecting against large ones.
+- `modulator` defaults to `nothing`; see "With a modulator" on [`TCubeLaser`](@ref).
+  `initialize` opens it and `shutdown` closes it.
 """
 function TCubeLaser(serialNo::String;
     mode::RegulationMode=ConstantCurrent(),
@@ -228,6 +312,7 @@ function TCubeLaser(serialNo::String;
     ref_current_mA::Union{Nothing,Real}=nothing,
     ref_photocurrent_A::Union{Nothing,Real}=nothing,
     ref_ratio::Union{Nothing,Real}=nothing,
+    modulator::Union{Nothing,AbstractModulationControl}=nothing,
 )
     name = "TCubeLaser $serialNo"
     pd = LightSourceInterface.diode_loop_from_keywords(mode, name; wa_calibration, tia_range,
@@ -238,5 +323,5 @@ function TCubeLaser(serialNo::String;
     TCubeLaser{typeof(mode)}(unique_id, props, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
         controller_max_current, daq_device, ao_channel, drive_current,
-        threshold_current, pd)
+        threshold_current, pd, modulator)
 end

@@ -1856,6 +1856,7 @@ lab_summary("Core") do
     include("contract.jl")
     include("skills.jl")
     include("gui.jl")
+    include("lightsource_modulation.jl")
 
     # LAST, after every other testset: the fake DCAM SDK replaces the DCAM4 wrappers for the rest of the
     # process (same seam as tcube_fake_sdk.jl; see the file), so no other test runs against it.

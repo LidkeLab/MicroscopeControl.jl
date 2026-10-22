@@ -12,6 +12,49 @@ the next version with `-DEV`).
 
 ### Added
 
+- **Light-source modulators**: a light can put its level on an analogue input through an `AbstractModulationControl`,
+  which holds the scale. `TCubeLaser`, `SimDiodeLaser` and `SimLight` take `modulator::Union{Nothing,AbstractModulationControl}`
+  (keyword `modulator = nothing`; with `nothing` every method runs the code it always did). A modulator defines
+  `setpower(mc, p)` (`p` in the light's unit, 0 is 0 V; `ArgumentError` before any write when out of reach),
+  `initialize(mc)`, `shutdown(mc)` and `output_id(mc)`. New exported types: `AbstractModulationControl`,
+  `NIDAQModulator(; channel, v_range, per_volt, daq)` (one analogue-output task for life, created with the range, so
+  DAQmx refuses a range the card lacks); a Triggerscope DAC modulator follows in a later release. Public, not exported
+  (`MicroscopeControl.<name>`): `output_id`, `open_modulator!` and `close_modulator!` (one light object per output, a
+  failed `shutdown(mc)` keeps the claim for a retry), `RecordingModulator` and `modulation_violations(light; set!, expect)`,
+  a check of the convention for lights and their downstream fakes. The convention is in the `LightSource` docstring and
+  the `mc-extend` and `mc-acquire` skills: a light writes level 0 before it enables, writes the level only while on,
+  writes 0 first when it switches off, and darkens on a throw other than `ArgumentError`.
+  - `TCubeLaser` with a modulator drives the rear MOD IN: `initialize` sets control source 3 (software + external; the
+    source found is restored at `shutdown`); `light_on` writes 0 V, enables, sends USB setpoint 0, waits `MOD_SETTLE_S`
+    (1.3 s), puts the request on MOD IN and confirms that the setpoint register shows it within `max(30 words, 3 %)`,
+    refusing with the light off at 0 V otherwise (a wrong `per_volt`, a dead cable, an unarmed source); level changes are
+    one analogue write while on and nothing while off. **Costs 1.3 s more per `light_on`.** [guarantee] A
+    `TCubeLaser` with a modulator keeps two locks: a per-light lock for the writes and state changes of `initialize`, a
+    second `light_on`, the level setters and the MOD IN writes, held for short critical sections and never across a wait,
+    and a short `usb_lock` for the Kinesis enable and disable commands alone. `light_on` arms under the lock (0 V,
+    preflight, the enable after a generation check, USB 0), sleeps unlocked, applies the current request under the lock,
+    and polls the read-back and the lock check unlocked. While it waits a level setter only records (the activation
+    applies the latest request). `light_off` and `shutdown` bump a generation and disable right away, without waiting for
+    the lock or for a stalled MOD IN write (measured in the tests: under 0.03 s, bound 0.1 s); `initialize` and another
+    `light_on` also supersede an activation, which then throws and writes nothing more. A USB setpoint is written only
+    when the MOD IN zero succeeded in the same critical section, never while the modulator is not yet open; otherwise it
+    is skipped and the output disabled. A disable that fails stays pending: the control source is not restored and the
+    output not released until a `shutdown` (which reopens the handle for it) disables the output. A modulated light's
+    `light_off` no longer sends a USB zero (the controller ignores one with the output off). A Triggerscope DAC modulator
+    follows in a later release. `shutdown` is final: an activation queued behind it is refused and the output is disabled
+    again as its last hardware step; `initialize` re-enables activation. A `light_on` linearized after a `light_off` may
+    legitimately turn the light on again. `NIDAQModulator` writes with a 0.5 s DAQmx timeout (`write_timeout`) instead of
+    10 s. **[limitation]** With one Julia thread a stalled DAQmx write blocks the thread, so `light_off` waits up to that
+    timeout; issue `light_off` from another thread (`julia -t 2`, `Threads.@spawn`). The controller keeps one
+    setpoint register, so no USB setpoint but 0 (and the calibration reference) is sent while a level is held. The scale
+    is measured per laser, range and loop (`CALIBRATION.md`, "MOD IN scale"); the controller facts behind the design are
+    recorded there. `control_source` and `set_control_source!` (flag sums such as 3 and 5, which the
+    `LD_InputSourceFlags` enum cannot hold) are unexported.
+  - `createtask(daq, "AO", channel; min_val, max_val)`: new keywords for the voltage range of an analogue input or output
+    task (both or neither); `NIdaq` hands them to DAQmx as given.
+  - `SimLight(id, properties)` keeps converting its arguments.
+  - `TCubeLaser.setupIO` and `set_modvoltage` warn that they are deprecated and name `modulator = NIDAQModulator(...)`.
+    Nothing else about them changed.
 - Opt-in per-call trace of the DCAM library calls, turned on only by `DCAM4.dcam_trace!(path)` (a local-disk
   path): a flushed BEGIN line before each call and an END or THROW line after it, with a per-call id, the arguments,
   the elapsed time, the return value or the error, and the GC pause and time-to-safepoint counters. While tracing is

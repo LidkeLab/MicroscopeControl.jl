@@ -255,6 +255,50 @@ with a helper (`enter_mode!(regulation_mode(l), l)`), as `TCubeLaser` does.
 **[policy]** carry the fields rather than writing your own panel: the fields are
 what make the Sim-for-hardware swap in `mc-testing` work.
 
+### A light that takes a modulator
+
+A light whose level can go out as a voltage on an analogue input (a TLD001's rear MOD IN, driven by a DAQ output; a
+Triggerscope DAC modulator follows in a later release) carries `modulator::Union{Nothing,AbstractModulationControl}`, keyword `modulator = nothing`.
+**[guarantee]** `TCubeLaser`, `SimDiodeLaser` and `SimLight` do; with `nothing` every method runs the code it always
+did. **[limitation]** `CrystaLaser`, `VortranLaser` and `DaqTrLight` take none: their native level path is already a DAQ
+voltage. The modulator holds the scale: `NIDAQModulator(; channel, v_range, per_volt, daq)` converts `setpower(modulator, p)`, with `p` in the light's own unit
+(`per_volt` is that unit per volt), to a voltage; `p = 0` is 0 V; an `ArgumentError` means out of reach and nothing was
+written. A modulator is not an `AbstractInstrument` (no panel). It defines `setpower(mc, ::Float64)`,
+`initialize(mc)`, `shutdown(mc)` and `output_id(mc)`; the contract test checks all four on its own type, and
+`output_id` is in the shadowed-generics list, so `import` it to extend it.
+
+**[policy]** A driver that takes one keeps this convention (the `LightSource` docstring has it in full):
+
+1. a `const modulator` field, default `nothing`; `initialize` ends with `LightSourceInterface.open_modulator!(light)`,
+   the output off (it claims `output_id`, so a second light object cannot drive the same output, then opens at 0 V);
+   `shutdown` calls `close_modulator!(light)` after switching off (a failed `shutdown(mc)` keeps the claim for a retry);
+2. `light_on` writes level 0 before the enable (a throw enables nothing), runs its own steps, then
+   `setpower(modulator, request)`; any throw after the enable, an `ArgumentError` included, switches the light off;
+3. `light_off` writes 0 first, logging a failure, and always switches off, even when the write is interrupted
+   (`LightSourceInterface.propagate_interrupt` passes the interrupt on after the switch-off);
+4. a level setter validates as it did, then writes `setpower(modulator, p)` only while the light is on, so the output
+   holds 0 V while off; an `ArgumentError` changes nothing, any other throw tries level 0, switches off and rethrows
+   (`LightSourceInterface.apply_level!` does that);
+5. never use the native level path while there is a modulator;
+6. **[guarantee]** for `TCubeLaser`: a per-light lock serializes the writes and state changes, a short `usb_lock` only the
+   Kinesis enable and disable calls; `light_on` arms under the first, sleeps and polls unlocked, and applies the current
+   request under it, so a setter, `light_off`, `initialize`, `shutdown` or a second `light_on` landing anywhere in between
+   ends consistent (a setter while arming only records). `light_off` and `shutdown` disable at once, never waiting for
+   a stalled modulator write. A new driver that sleeps inside `light_on` should follow the same split.
+
+**[guarantee]** `MicroscopeControl.modulation_violations(light; set!, expect)` checks 1 to 5 on an initialized light
+whose `modulator` is a `MicroscopeControl.RecordingModulator` (it writes nothing, records everything, and can be made to
+fail or to refuse a level), and returns the list of violations. A downstream package, with its native side faked, adds
+
+```julia
+@test isempty(MicroscopeControl.modulation_violations(light; set! = l -> setpower(l, 2.0), expect = 2.0))
+```
+
+`set!` sets a level in the light's unit and `expect` is what the modulator should then be asked for; pass
+`RecordingModulator(sink = p -> ...)` to drive the faked device from each accepted level. The TCube's own part of the
+convention (control source 3, the 1.3 s settle wait, the confirm at each `light_on`) is in its docstring and
+`CALIBRATION.md`.
+
 ### Behavioural obligations beyond method names
 
 **[policy]** for a new driver; the third column names the upstream driver that
@@ -382,6 +426,10 @@ assertions, executed):
    `initialize`, closed link is an error, failed open leaves nothing to clean);
 6. `export_state` serialises: write it with `save_attributes_and_data` and read
    the attributes back.
+
+A light with a `modulator` field also runs `modulation_violations` on its fake (see "A light that takes a modulator"
+above): **[guarantee]** it is the only check of the five-part modulator convention, and `test/contract.jl` checks the
+field (`Nothing` in its type, keyword default `nothing`) on `TCubeLaser`, `SimDiodeLaser` and `SimLight` only.
 
 | Simulation or fake transport establishes | Only hardware acceptance establishes |
 |---|---|

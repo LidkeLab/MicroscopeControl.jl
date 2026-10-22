@@ -9,6 +9,7 @@ module SimulatedDiodeLaser
 
 using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface
 import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: effective_max_current, STATUS_BITS
+import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: open_modulator!, close_modulator!, zero_modulator!, apply_level!, propagate_interrupt
 
 import ...MicroscopeControl: export_state, initialize, shutdown
 
@@ -49,6 +50,14 @@ generic.
   straight to the clamp.
 - `tia_over_fault`, `tia_under_fault`: force the amplifier flags.
 - `settle_s`: real `sleep` after each command.
+- `modulator::Union{Nothing,AbstractModulationControl}`: as on [`TCubeLaser`](@ref), keyword
+  default `nothing`. With one, `initialize` opens it, `light_on` writes level 0, enables, then puts
+  the request on it, `light_off` and `shutdown` write 0 first, and the level setters check and
+  record as always but write only while the light is on (an `ArgumentError` from the modulator
+  changes nothing; any other throw darkens the light and is rethrown). The model's setpoint then
+  follows the level the modulator was given, so the physics (`true_output_power`) shows what the
+  output would; nothing else about the twin's model changes. `[limitation]` The twin has no MOD IN
+  register, no settle window and no confirm.
 """
 mutable struct SimDiodeLaser{M<:RegulationMode} <: DiodeLaser
     unique_id::String
@@ -73,16 +82,18 @@ mutable struct SimDiodeLaser{M<:RegulationMode} <: DiodeLaser
     setpoint::Float64
     clamp_mA::Float64
     log::Vector{Tuple{Symbol,Any}}
+    const modulator::Union{Nothing,AbstractModulationControl}
+    const generation::Threads.Atomic{Int}   # counts light_off, shutdown, initialize and light_on: a delayed activation checks it
 
     function SimDiodeLaser{M}(unique_id, properties, min_current, max_current, threshold_current,
         drive_current, pd, efficiency, responsivity, responsivity_drift, tia_range_A, key, interlock,
-        pd_blocked, tia_over_fault, tia_under_fault, settle_s) where {M<:RegulationMode}
+        pd_blocked, tia_over_fault, tia_under_fault, settle_s, modulator=nothing) where {M<:RegulationMode}
         M in supported_modes(SimDiodeLaser) || throw(ArgumentError("SimDiodeLaser: mode $(M) is not supported"))
         LightSourceInterface.check_diode_config(M, pd, properties, Float64(max_current), "SimDiodeLaser $unique_id")
         new{M}(unique_id, properties, min_current, max_current, threshold_current, drive_current, pd,
             efficiency, responsivity, responsivity_drift, tia_range_A, key, interlock,
             pd_blocked, tia_over_fault, tia_under_fault, settle_s,
-            false, false, 0.0, max_current, Tuple{Symbol,Any}[])
+            false, false, 0.0, max_current, Tuple{Symbol,Any}[], modulator, Threads.Atomic{Int}(0))
     end
 end
 
@@ -134,6 +145,7 @@ function SimDiodeLaser(;
     interlock::Bool=true,
     pd_blocked::Bool=false,
     settle_s::Float64=0.0,
+    modulator::Union{Nothing,AbstractModulationControl}=nothing,
 )
     name = "SimDiodeLaser"
     pd = LightSourceInterface.diode_loop_from_keywords(mode, name; wa_calibration, tia_range,
@@ -145,7 +157,7 @@ function SimDiodeLaser(;
     range = something(tia_range_A, pd === nothing ? 1e-3 : pd.tia_range)
     SimDiodeLaser{typeof(mode)}(unique_id, props, min_current, max_current, threshold_current,
         NaN, pd, efficiency, resp, responsivity_drift, range, key, interlock,
-        pd_blocked, false, false, settle_s)
+        pd_blocked, false, false, settle_s, modulator)
 end
 
 # --- the model ------------------------------------------------------------
@@ -221,6 +233,7 @@ _settle(sim::SimDiodeLaser) = sim.settle_s > 0 && sleep(sim.settle_s)
 
 function initialize(sim::SimDiodeLaser)
     push!(sim.log, (:initialize, nothing))
+    Threads.atomic_add!(sim.generation, 1)   # supersedes a light_on that is waiting
     if regulation_mode(sim) isa ConstantPhotocurrent
         missing_bits = [label for (label, ok) in (("key switch", sim.key), ("interlock", sim.interlock)) if !ok]
         isempty(missing_bits) || error("SimDiodeLaser $(sim.unique_id): refusing closed loop: $(join(missing_bits, " and ")) not set")
@@ -232,15 +245,46 @@ function initialize(sim::SimDiodeLaser)
     sim.output_enabled = false
     sim.properties.is_on = false
     sim.setpoint = 0.0
+    open_modulator!(sim)   # the output is off; leaves 0 V (a no-op without a modulator)
     sim.is_open = true
     return nothing
 end
 
 function shutdown(sim::SimDiodeLaser)
     push!(sim.log, (:shutdown, nothing))
+    Threads.atomic_add!(sim.generation, 1)
+    zerr = zero_modulator!(sim)
     sim.output_enabled = false
     sim.properties.is_on = false
+    sim.modulator === nothing || (sim.setpoint = 0.0)
     sim.is_open = false
+    try
+        close_modulator!(sim)   # after the switch-off; a failure keeps the claim for the next shutdown
+    finally
+        propagate_interrupt(zerr)
+    end
+    return nothing
+end
+
+# The model's setpoint for a level given to the modulator, in the regulated quantity's own encoding.
+_level_setpoint(sim::SimDiodeLaser{ConstantCurrent}, level::Float64) = level
+function _level_setpoint(sim::SimDiodeLaser{ConstantPhotocurrent}, level::Float64)
+    pd = sim.pd
+    i_pd = level / 1000 / pd.wa_calibration
+    code = floor(i_pd / pd.tia_range * 32767)
+    while code > 0 && code / 32767 * pd.tia_range > i_pd
+        code -= 1
+    end
+    return code / 32767 * pd.tia_range
+end
+_request(sim::SimDiodeLaser{ConstantCurrent}) = isnan(sim.drive_current) ? 0.0 : sim.drive_current
+_request(sim::SimDiodeLaser{ConstantPhotocurrent}) = isnan(sim.pd.output_power_requested) ? 0.0 : sim.pd.output_power_requested
+
+# Switch the simulated output off after a modulator failure.
+function _darken!(sim::SimDiodeLaser)
+    sim.output_enabled = false
+    sim.properties.is_on = false
+    sim.setpoint = 0.0
     return nothing
 end
 
@@ -248,6 +292,33 @@ function LightSourceInterface.light_on(sim::SimDiodeLaser)
     push!(sim.log, (:light_on, nothing))
     _require_open(sim, "light_on")
     _require_clamp(sim, "light_on")
+    if sim.modulator !== nothing
+        gen = Threads.atomic_add!(sim.generation, 1) + 1   # before the first write: a light_off or shutdown during it supersedes this
+        try
+            setpower(sim.modulator, 0.0)   # level 0 before the enable: a throw enables nothing
+        catch
+            sim.properties.is_on && _darken!(sim)
+            rethrow()
+        end
+        sim.generation[] == gen || throw(ErrorException("SimDiodeLaser $(sim.unique_id): light_on was superseded; it enabled nothing"))
+        sim.setpoint = 0.0
+        sim.output_enabled = true
+        sim.properties.is_on = true
+        try
+            _settle(sim)   # the whole tail after the enable, the wait included: every throw (an interrupt too) darkens
+            # A light_off, shutdown, initialize or another light_on during the wait owns the output now: write nothing.
+            sim.generation[] == gen || throw(ErrorException("SimDiodeLaser $(sim.unique_id): light_on was superseded; it wrote nothing more"))
+            setpower(sim.modulator, _request(sim))
+            sim.setpoint = _level_setpoint(sim, _request(sim))
+        catch
+            if sim.generation[] == gen   # still the current activation: end dark; otherwise the superseder owns the output
+                zero_modulator!(sim)     # tried
+                _darken!(sim)
+            end
+            rethrow()
+        end
+        return nothing
+    end
     sim.output_enabled = true
     sim.properties.is_on = true
     _settle(sim)
@@ -257,8 +328,19 @@ end
 function LightSourceInterface.light_off(sim::SimDiodeLaser)
     push!(sim.log, (:light_off, nothing))
     _require_open(sim, "light_off")
+    Threads.atomic_add!(sim.generation, 1)
+    zerr = zero_modulator!(sim)
     sim.output_enabled = false
     sim.properties.is_on = false
+    sim.modulator === nothing || (sim.setpoint = 0.0)
+    propagate_interrupt(zerr)   # an interrupted 0 V write passes on only after the switch-off
+    return nothing
+end
+
+# A level setter's tail with a modulator: while on, one write (an ArgumentError changes nothing, any other throw
+# darkens); while off, nothing. The model's setpoint follows only what the modulator accepted.
+function _modulated_level!(sim::SimDiodeLaser, level::Float64)
+    sim.properties.is_on && apply_level!(sim, level, () -> _darken!(sim))
     return nothing
 end
 
@@ -268,6 +350,13 @@ function LightSourceInterface.setcurrent!(sim::SimDiodeLaser{ConstantCurrent}, c
     hi = effective_max_current(sim)
     (isfinite(current) && sim.min_current <= current <= hi) || throw(ArgumentError(
         "SimDiodeLaser $(sim.unique_id): requested current $(current) mA is outside the allowed range [$(sim.min_current), $(hi)] mA"))
+    if sim.modulator !== nothing
+        _modulated_level!(sim, current)
+        sim.drive_current = current
+        sim.properties.is_on && (sim.setpoint = current)
+        _settle(sim)
+        return nothing
+    end
     sim.setpoint = current
     sim.drive_current = current
     _settle(sim)
@@ -292,11 +381,16 @@ function LightSourceInterface.setoutputpower!(sim::SimDiodeLaser{ConstantPhotocu
         "SimDiodeLaser $(sim.unique_id): $(i_pd) A of photocurrent is above the amplifier's full scale of $(pd.tia_range) A"))
     # The same 15-bit, round-down encoding as the TLD001, so the decoded
     # setpoint differs from the request exactly as it does on hardware.
-    code = floor(i_pd / pd.tia_range * 32767)
-    while code > 0 && code / 32767 * pd.tia_range > i_pd
-        code -= 1
+    setpoint = _level_setpoint(sim, power_mW)
+    if sim.modulator !== nothing
+        _modulated_level!(sim, power_mW)
+        sim.properties.is_on && (sim.setpoint = setpoint)
+        pd.output_power_requested = power_mW
+        pd.photocurrent_requested = setpoint
+        _settle(sim)
+        return nothing
     end
-    sim.setpoint = code / 32767 * pd.tia_range
+    sim.setpoint = setpoint
     pd.output_power_requested = power_mW
     pd.photocurrent_requested = sim.setpoint
     _settle(sim)
@@ -361,7 +455,9 @@ function export_state(sim::SimDiodeLaser)
             "photocurrent_requested_A" => pd.photocurrent_requested,
         ))
     end
-    return attributes, nothing, Dict{String,Any}()
+    children = Dict{String,Any}()
+    sim.modulator === nothing || (children["modulator"] = export_state(sim.modulator))
+    return attributes, nothing, children
 end
 
 end

@@ -19,6 +19,9 @@ _ContractDummyStage() = _ContractDummyStage(1)
 # `stage.dimensions` before ever reaching the `AbstractInstrument` stub.
 struct _ContractDummyInstrument <: MicroscopeControl.AbstractInstrument end
 
+# Dummy modulator with no methods, for the interface stubs of `AbstractModulationControl`.
+struct _ContractDummyModulator <: MicroscopeControl.AbstractModulationControl end
+
 # Fixture demonstrating the bug the binding-identity guard below must catch:
 # a *bare* `using` (as opposed to `import ...: gui` or a fully-qualified
 # `function StageInterface.gui(...)`) brings `gui` into scope by name only.
@@ -149,7 +152,7 @@ end
                     :capture, :getdata, :getlastframe, :abort, :live, :sequence, :setexposuretime!, :setroi!, :settriggermode!,
                     :setpower, :light_on, :light_off, :setcurrent!, :setoutputpower!, :setlevel!,
                     :measured_current, :measured_photocurrent, :indicated_output_power, :loop_status,
-                    :regulation_mode, :supported_modes, :setdrivevoltage, :getdrivevoltage, :settransmission, :gettransmission)
+                    :regulation_mode, :supported_modes, :output_id, :setdrivevoltage, :getdrivevoltage, :settransmission, :gettransmission)
 
         # PI (pi_stage) deliberately names its low-level ccall wrappers
         # `move`, `getposition`, `getrange`, `stopmotion` and `servo` -- the
@@ -275,9 +278,51 @@ end
         @test hasmethod(MC.export_state, Tuple{MC.TCubeLaser,Any})
     end
 
+    # A light that takes a modulator carries `modulator::Union{Nothing,AbstractModulationControl}`, keyword default
+    # `nothing` (non-breaking, decision 0035). `CrystaLaser`, `VortranLaser` and `DaqTrLight` take none: their native
+    # level path is already a DAQ voltage.
+    @testset "Modulator field" begin
+        for T in (MC.TCubeLaser{MC.ConstantCurrent}, MC.TCubeLaser{MC.ConstantPhotocurrent}, MC.SimDiodeLaser{MC.ConstantCurrent},
+                  MC.SimDiodeLaser{MC.ConstantPhotocurrent}, MC.SimLight)
+            @test :modulator in fieldnames(T)
+            @test Nothing <: fieldtype(T, :modulator)
+            @test fieldtype(T, :modulator) <: Union{Nothing,MC.AbstractModulationControl}
+        end
+        @test MC.SimLight().modulator === nothing
+        @test MC.SimDiodeLaser().modulator === nothing
+        @test MC.TCubeLaser("00000000").modulator === nothing
+        rec = MC.RecordingModulator()
+        @test MC.SimLight(modulator=rec).modulator === rec
+        @test MC.SimDiodeLaser(modulator=rec).modulator === rec
+        @test MC.TCubeLaser("00000000"; modulator=rec).modulator === rec
+        for T in (MC.CrystaLaser, MC.VortranLaser, MC.DaqTrLight)
+            @test :modulator ∉ fieldnames(T)
+        end
+    end
+
+    # Every modulator defines the four methods, on its own type. `subtypes` is one level deep: walk to the leaves.
+    @testset "Modulator contract" begin
+        mods = device_types(MC.AbstractModulationControl)
+        @test :NIDAQModulator in nameof.(mods)
+        @test :RecordingModulator in nameof.(mods)
+        for T in mods
+            nameof(T) === :_ContractDummyModulator && continue # test fixture, not a modulator
+            @test has_specific_method(MC.setpower, T, Float64)
+            @test has_specific_method(MC.initialize, T)
+            @test has_specific_method(MC.shutdown, T)
+            @test has_specific_method(MC.output_id, T)
+        end
+        # Not an instrument: no panel, no shared lifecycle stubs.
+        @test !(MC.AbstractModulationControl <: MC.AbstractInstrument)
+    end
+
     @testset "Stub throws" begin
         @test_throws "not implemented" MC.getposition(_ContractDummyStage())
         @test_throws "not implemented" MC.gui(_ContractDummyInstrument())
         @test_throws "not implemented" MC.gui(_ContractDummyStage(4))
+        @test_throws "not implemented" MC.setpower(_ContractDummyModulator(), 1.0)
+        @test_throws "not implemented" MC.initialize(_ContractDummyModulator())
+        @test_throws "not implemented" MC.shutdown(_ContractDummyModulator())
+        @test_throws "not implemented" MC.output_id(_ContractDummyModulator())
     end
 end
