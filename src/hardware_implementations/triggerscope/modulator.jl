@@ -31,6 +31,9 @@ function TriggerscopeModulator(; scope::Triggerscope4, dac::Integer, range::Rang
     return TriggerscopeModulator(scope, Int(dac), range, Float64(per_volt), false)
 end
 
+# Open means the DAC is this modulator's to zero: a failed re-initialize keeps its claim.
+holds_resources(m::TriggerscopeModulator) = m.is_open
+
 output_id(m::TriggerscopeModulator) = dac_output_id(m.scope, m.dac)
 
 "The voltage `setpower(m, p)` writes; `ArgumentError` when `p` is not a finite level of at least 0 or has no voltage this DAC range can make."
@@ -73,7 +76,11 @@ end
 
 function shutdown(m::TriggerscopeModulator)
     m.is_open || return nothing
-    setdac(m.scope, m.dac, 0.0)
+    lock(m.scope.lock) do
+        # 0 V must be encoded for this modulator's range: put it back if it moved or became unknown.
+        (m.dac in m.scope.range_unknown || m.scope.dacranges[m.dac] != m.range) && setrange(m.scope, m.dac, m.range)
+        setdac(m.scope, m.dac, 0.0)
+    end
     m.is_open = false
     return nothing
 end

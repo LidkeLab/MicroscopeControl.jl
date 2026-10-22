@@ -26,8 +26,7 @@ function setdac(scope::Triggerscope4, dacnum::Int, voltvalue::Float64)
         commandstring = "DAC" * string(dacnum) * "," * string(dacoutput) * "\n"
 
         #write the command to the serial port
-        writecommand(scope, commandstring)
-        readresponse(scope)
+        transact(scope, commandstring)
     end
 end
 
@@ -54,12 +53,19 @@ end
 function setrange(scope::Triggerscope4, dacchannel::Int, range::Range)
     return lock(scope.lock) do   # the cached range, the write and its reply together: the LCAs and a MOD IN output may share this scope
         #create the command string
-        scope.dacranges[dacchannel] = range  # Update the range in the scope object
-        commandstring = "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
+        commandstring = "RANGE" * string(dacchannel) * "," * string(Int(range)) * "\n"
 
-        #write the command to the serial port
-        writecommand(scope, commandstring)
-        readresponse(scope)
+        # The cache changes only once the transaction has completed. A failure leaves the device's range ambiguous (the
+        # command may have been applied), so the DAC is marked unknown and refuses writes until a RANGE succeeds.
+        response = try
+            transact(scope, commandstring)
+        catch
+            push!(scope.range_unknown, dacchannel)
+            rethrow()
+        end
+        scope.dacranges[dacchannel] = range  # Update the range in the scope object
+        delete!(scope.range_unknown, dacchannel)
+        response
     end
 end
 

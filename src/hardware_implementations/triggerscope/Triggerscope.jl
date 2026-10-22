@@ -28,7 +28,7 @@ module Triggerscope
     using LibSerialPort
 
     import ...MicroscopeControl: export_state, initialize, shutdown
-    import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: AbstractModulationControl, setpower, output_id
+    import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: AbstractModulationControl, setpower, output_id, holds_resources
 
     export Triggerscope4
 

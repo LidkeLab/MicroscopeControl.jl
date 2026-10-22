@@ -22,6 +22,7 @@ mutable struct NIDAQModulator <: AbstractModulationControl
     v_max::Float64
     per_volt::Float64
     task::Any   # nothing until initialize; the DAQ's own task object after
+    configured::Bool   # whether `task` has its channel (a task that could not be set up or released has not)
 end
 
 function NIDAQModulator(; channel::AbstractString, v_range::Tuple{<:Real,<:Real}, per_volt::Real, daq::DAQ=NIdaq())
@@ -31,7 +32,7 @@ function NIDAQModulator(; channel::AbstractString, v_range::Tuple{<:Real,<:Real}
     (isfinite(per_volt) && per_volt > 0) || throw(ArgumentError(
         "NIDAQModulator: per_volt is the light's unit per volt and must be finite and positive, got $(per_volt)"))
     isempty(channel) && throw(ArgumentError("NIDAQModulator: channel names the analogue output, e.g. \"Dev1/ao1\""))
-    return NIDAQModulator(daq, String(channel), v_min, v_max, Float64(per_volt), nothing)
+    return NIDAQModulator(daq, String(channel), v_min, v_max, Float64(per_volt), nothing, false)
 end
 
 output_id(m::NIDAQModulator) = "NIDAQ $(m.channel)"
@@ -49,7 +50,7 @@ end
 holds_resources(m::NIDAQModulator) = m.task !== nothing
 
 function setpower(m::NIDAQModulator, p::Float64)
-    m.task === nothing && error("NIDAQModulator $(m.channel): setpower before initialize (or after shutdown)")
+    (m.task === nothing || !m.configured) && error("NIDAQModulator $(m.channel): setpower before initialize (or after shutdown, or with the task not set up)")
     v = volts(m, p)
     setvoltage(m.daq, m.task, v)
     return nothing
@@ -58,17 +59,35 @@ end
 # The task handle is kept (`m.task`) from the moment it exists until the DAQ has deleted it, so a cleanup that fails
 # leaves it for `shutdown` to retry and `holds_resources` true, which keeps the light's claim.
 function initialize(m::NIDAQModulator)
-    if m.task !== nothing   # opened already: one task for life, so only the level is put back to 0 V
+    if m.task !== nothing && m.configured   # opened already: one task for life, so only the level is put back to 0 V
         setvoltage(m.daq, m.task, 0.0)
         return nothing
     end
-    m.task = createtask(m.daq, "AO", m.channel; min_val=m.v_min, max_val=m.v_max)
+    if m.task === nothing
+        try
+            m.task = createtask(m.daq, "AO", m.channel; min_val=m.v_min, max_val=m.v_max)
+            m.configured = true
+        catch e
+            if e isa DAQInterface.UnreleasedTask   # the task exists, half set up, and could not be cleared: keep it for shutdown
+                m.task = e.task
+                m.configured = false
+                throw(e.cause)
+            end
+            rethrow()
+        end
+    else
+        # A task left over from an earlier failed setup: release it before making a new one.
+        deletetask(m.daq, m.task)
+        m.task = nothing
+        return initialize(m)
+    end
     try
         setvoltage(m.daq, m.task, 0.0)
     catch
         try
             deletetask(m.daq, m.task)
             m.task = nothing
+            m.configured = false
         catch derr
             @error "NIDAQModulator $(m.channel): deleting the task failed while cleaning up a failed initialize; shutdown retries it" exception = derr
         end
@@ -77,14 +96,14 @@ function initialize(m::NIDAQModulator)
     return nothing
 end
 
+# The zero write and the delete must both succeed before the task and the claim are given up; either failing keeps
+# them, and the next `shutdown` retries from the zero (a task that never had its channel has no level to zero).
 function shutdown(m::NIDAQModulator)
     m.task === nothing && return nothing
-    try
-        setvoltage(m.daq, m.task, 0.0)
-    finally
-        deletetask(m.daq, m.task)   # a throw here keeps the task, so the next shutdown retries it
-        m.task = nothing
-    end
+    m.configured && setvoltage(m.daq, m.task, 0.0)
+    deletetask(m.daq, m.task)
+    m.task = nothing
+    m.configured = false
     return nothing
 end
 

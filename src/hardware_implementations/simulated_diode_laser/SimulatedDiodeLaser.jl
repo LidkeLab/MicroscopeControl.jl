@@ -299,9 +299,15 @@ function LightSourceInterface.light_on(sim::SimDiodeLaser)
         sim.setpoint = 0.0
         sim.output_enabled = true
         sim.properties.is_on = true
-        _settle(sim)
-        apply_level!(sim, _request(sim), () -> _darken!(sim); darken_argument_errors=true)   # enabled already: every throw darkens
-        sim.setpoint = _level_setpoint(sim, _request(sim))
+        try
+            _settle(sim)   # the whole tail after the enable, the wait included: every throw (an interrupt too) darkens
+            setpower(sim.modulator, _request(sim))
+            sim.setpoint = _level_setpoint(sim, _request(sim))
+        catch
+            zero_modulator!(sim)   # tried
+            _darken!(sim)
+            rethrow()
+        end
         return nothing
     end
     sim.output_enabled = true

@@ -28,8 +28,14 @@ the next version with `-DEV`).
     source found is restored at `shutdown`); `light_on` writes 0 V, enables, sends USB setpoint 0, waits `MOD_SETTLE_S`
     (1.3 s), puts the request on MOD IN and confirms that the setpoint register shows it within `max(30 words, 3 %)`,
     refusing with the light off at 0 V otherwise (a wrong `per_volt`, a dead cable, an unarmed source); level changes are
-    one analogue write while on and nothing while off. A level change, `light_off`, `shutdown` or another `light_on`
-    during the wait supersedes an activation in progress, which ends dark and throws. **Costs 1.3 s more per `light_on`.** The controller keeps one
+    one analogue write while on and nothing while off. **Costs 1.3 s more per `light_on`.** [guarantee] A
+    `TCubeLaser` with a modulator serializes every hardware write and state change under one per-light lock, held for
+    short critical sections and never across the wait: `light_on` arms under the lock (0 V, preflight, enable, USB 0),
+    sleeps unlocked, then applies the current request under the lock. While it waits a level setter only records (the
+    activation applies the latest request), and `light_off`, `initialize`, `shutdown` or another `light_on` supersedes
+    it (it throws and writes nothing more). A USB setpoint is written only when the MOD IN zero succeeded in the same
+    critical section; otherwise it is skipped and the output disabled. A disable that fails stays pending and is retried
+    by the next `shutdown`. The controller keeps one
     setpoint register, so no USB setpoint but 0 (and the calibration reference) is sent while a level is held. The scale
     is measured per laser, range and loop (`CALIBRATION.md`, "MOD IN scale"); the controller facts behind the design are
     recorded there. `control_source` and `set_control_source!` (flag sums such as 3 and 5, which the

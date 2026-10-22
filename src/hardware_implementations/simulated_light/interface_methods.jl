@@ -15,7 +15,13 @@ function LightSourceInterface.light_on(light::SimLight)
             rethrow()
         end
         light.properties.is_on = true
-        apply_level!(light, light.properties.power, () -> (light.properties.is_on = false); darken_argument_errors=true)   # enabled already: every throw darkens
+        try
+            setpower(light.modulator, light.properties.power)   # enabled already: every throw darkens
+        catch
+            zero_modulator!(light)   # tried
+            light.properties.is_on = false
+            rethrow()
+        end
         return nothing
     end
     light.properties.is_on = true

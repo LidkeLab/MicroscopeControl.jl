@@ -41,8 +41,10 @@ mutable struct FakeDAQ <: MC.DAQ
     next_id::Int
     fail_write::Bool
     fail_delete::Bool
+    fail_setup::Bool    # the channel setup fails after the task is allocated
+    fail_clear::Bool    # ... and so does clearing it (then `UnreleasedTask`, as NIdaq throws)
 end
-FakeDAQ(; card_range=(0.0, 5.0)) = FakeDAQ(card_range, Dict{Int,NamedTuple{(:channel, :min, :max),Tuple{String,Float64,Float64}}}(), Tuple[], 0, false, false)
+FakeDAQ(; card_range=(0.0, 5.0)) = FakeDAQ(card_range, Dict{Int,NamedTuple{(:channel, :min, :max),Tuple{String,Float64,Float64}}}(), Tuple[], 0, false, false, false, false)
 
 MC.export_state(d::FakeDAQ) = (Dict{String,Any}("unique_id" => "FakeDAQ"), nothing, Dict{String,Any}())
 
@@ -52,8 +54,15 @@ function MC.createtask(d::FakeDAQ, tasktype::String, channel::String; min_val=no
     (d.card_range[1] <= min_val && max_val <= d.card_range[2]) || error(
         "FakeDAQ: DAQmx error -200077: the range [$min_val, $max_val] V is not supported by this device")
     d.next_id += 1
-    d.tasks[d.next_id] = (channel=channel, min=Float64(min_val), max=Float64(max_val))
+    d.tasks[d.next_id] = (channel=channel, min=Float64(min_val), max=Float64(max_val))   # allocated
     push!(d.log, (:create, d.next_id, Float64(min_val), Float64(max_val)))
+    if d.fail_setup
+        cause = ErrorException("FakeDAQ: channel setup failed")
+        d.fail_clear && throw(MC.HardwareInterfaces.DAQInterface.UnreleasedTask(d.next_id, cause))
+        delete!(d.tasks, d.next_id)
+        push!(d.log, (:delete, d.next_id))
+        throw(cause)
+    end
     return d.next_id
 end
 
@@ -151,6 +160,7 @@ requested(l, kind::Symbol) = kind === :cp ? l.pd.output_power_requested : l.driv
 function ready(kind::Symbol; modulator=modin(kind), settle=0.0, strict=true, kw...)
     FK.reset!()
     FK.strict_handle[] = strict   # a call on a closed handle raises, as the DLL does
+    FK.require_zero_mod[] = modulator !== nothing   # every USB setpoint at 0 V, or it is recorded in FK.violations
     empty!(LSI.MODULATOR_OUTPUTS)
     kind === :cp && (FK.limit_follows_pot[] = true)
     TCmod.MOD_SETTLE_S[] = settle
@@ -304,6 +314,34 @@ end
         shutdown(m)
         @test isempty(daq.tasks)
 
+        # A shutdown whose 0 V write fails keeps the task and the claim, and the next shutdown zeroes again before the delete.
+        empty!(LSI.MODULATOR_OUTPUTS)
+        daq = FakeDAQ(); m = mk(daq); light = SimLight(modulator=m)
+        initialize(light)
+        daq.fail_write = true
+        @test_throws "write refused" quiet(() -> shutdown(light))
+        @test length(daq.tasks) == 1 && m.task !== nothing && LSI.MODULATOR_OUTPUTS[MC.output_id(m)] === light
+        daq.fail_write = false
+        n = length(daq.log)
+        shutdown(light)
+        @test daq.log[end-1:end] == [(:write, 1, 0.0), (:delete, 1)] && isempty(daq.tasks) && isempty(LSI.MODULATOR_OUTPUTS)
+
+        # createtask that allocates a task and then fails its channel setup: nothing leaks ...
+        empty!(LSI.MODULATOR_OUTPUTS)
+        daq = FakeDAQ(); daq.fail_setup = true
+        m = mk(daq); light = SimLight(modulator=m)
+        @test_throws "channel setup failed" initialize(light)
+        @test isempty(daq.tasks) && m.task === nothing && isempty(LSI.MODULATOR_OUTPUTS)
+        # ... and when clearing it fails too, the allocated task is kept (and so is the claim) until shutdown deletes it.
+        daq = FakeDAQ(); daq.fail_setup = true; daq.fail_clear = true
+        m = mk(daq); light = SimLight(modulator=m)
+        @test_throws "channel setup failed" quiet(() -> initialize(light))
+        @test length(daq.tasks) == 1 && m.task !== nothing && !m.configured && LSI.MODULATOR_OUTPUTS[MC.output_id(m)] === light
+        @test_throws r"already driving" initialize(SimLight(modulator=mk(daq)))
+        daq.fail_setup = false; daq.fail_clear = false
+        quiet(() -> shutdown(light))                             # no channel was ever added: nothing to zero, only the delete
+        @test isempty(daq.tasks) && m.task === nothing && isempty(LSI.MODULATOR_OUTPUTS) && !any(e -> e[1] == :write, daq.log)
+
         # A failed re-initialize (the 0 V write fails) keeps the live task AND the claim; shutdown then releases both.
         empty!(LSI.MODULATOR_OUTPUTS)
         daq = FakeDAQ(); m = mk(daq); light = SimLight(modulator=m)
@@ -453,6 +491,45 @@ end
         schedule(waiter, InterruptException(); error=true)
         @test fetch(waiter) isa InterruptException
         unlock(scope.lock)
+        # The serial transaction replaced by a recorder (`COMMAND_SEAM`): no port is touched. A RANGE command that fails leaves the
+        # device's range ambiguous, so the cache is not changed and the DAC refuses writes (a requested 0 V would else be encoded
+        # for the wrong range) until a RANGE succeeds.
+        sc = a_scope(); sc.compause = 0.0
+        sent = String[]; failing = Ref(false)
+        Trig.COMMAND_SEAM[] = (scope_, cmd) -> (push!(sent, cmd); failing[] && startswith(cmd, "RANGE") ? error("serial gone") : "OK")
+        try
+            Trig.setrange(sc, 8, ZEROTOFIVE)
+            @test sc.dacranges[8] == ZEROTOFIVE && sent == ["RANGE8,1\n"] && !(8 in sc.range_unknown)
+            failing[] = true
+            @test_throws "serial gone" Trig.setrange(sc, 8, PLUSMINUS10)
+            @test sc.dacranges[8] == ZEROTOFIVE && 8 in sc.range_unknown            # not trusted, not changed
+            n = length(sent)
+            @test_throws "range is unknown" Trig.setdac(sc, 8, 0.0)
+            @test length(sent) == n                                                  # nothing was sent for it
+            failing[] = false
+            Trig.setrange(sc, 8, ZEROTOFIVE)
+            @test !(8 in sc.range_unknown)
+            Trig.setdac(sc, 8, 0.0)
+            @test sent[end] == "DAC8,0\n"
+            # A modulator through the same seam: its lifecycle, its writes, and its claim across a failed re-initialize.
+            empty!(LSI.MODULATOR_OUTPUTS)
+            tm = TriggerscopeModulator(; scope=sc, dac=9, range=ZEROTOFIVE, per_volt=22.42)
+            light = SimLight(modulator=tm)
+            empty!(sent)
+            initialize(light)
+            @test sent == ["RANGE9,1\n", "DAC9,0\n"] && tm.is_open && MC.HardwareInterfaces.LightSourceInterface.holds_resources(tm)
+            light_on(light); setpower(light, 22.42)
+            @test sent[end] == "DAC9,13107\n"
+            failing[] = true
+            @test_throws "serial gone" quiet(() -> initialize(light))                # a failed re-initialize ...
+            @test tm.is_open && LSI.MODULATOR_OUTPUTS[MC.output_id(tm)] === light     # ... keeps its claim
+            @test 9 in sc.range_unknown
+            failing[] = false
+            shutdown(light)                                                          # re-sets the range, then zeroes
+            @test sent[end-1:end] == ["RANGE9,1\n", "DAC9,0\n"] && !tm.is_open && isempty(LSI.MODULATOR_OUTPUTS)
+        finally
+            Trig.COMMAND_SEAM[] = nothing
+        end
         # The positional constructor from before the lock field (19 arguments) still builds a scope, with its own lock.
         fields = fieldnames(Triggerscope4)[1:19]
         scope2 = Triggerscope4(getfield.(Ref(scope), fields)...)
@@ -510,6 +587,21 @@ end
         setcurrent!(sim, 40.0)
         @test_throws ArgumentError light_on(sim)
         @test !sim.properties.is_on && !sim.output_enabled && sim.setpoint == 0.0
+
+        # An interrupted activation sleep darkens: the whole tail after the enable is protected.
+        empty!(LSI.MODULATOR_OUTPUTS)
+        rec = RecordingModulator(id="settle")
+        sim = SimDiodeLaser(modulator=rec, settle_s=0.4); initialize(sim)
+        quiet(() -> setcurrent!(sim, 40.0))
+        t = @async try light_on(sim) catch e; e end
+        sleep(0.1)                                         # inside _settle, after the enable
+        @test sim.properties.is_on && sim.output_enabled
+        schedule(t, InterruptException(); error=true)
+        @test fetch(t) isa InterruptException
+        @test !sim.properties.is_on && !sim.output_enabled && sim.setpoint == 0.0 && rec.attempts[end] == 0.0
+        n = length(rec.writes)
+        quiet(() -> setcurrent!(sim, 30.0))                 # a later setter does not drive the modulator
+        @test length(rec.writes) == n
 
         # An interrupted 0 V write still switches off first.
         for mk in (() -> SimLight(modulator=RecordingModulator(id="int1")), () -> SimDiodeLaser(modulator=RecordingModulator(id="int2")))
@@ -690,11 +782,7 @@ end
                 l = ready(kind; modulator=modin(kind; scale=1 / 3.2)); quiet(() -> setlvl!(l, kind, lv))
                 refused(l)
             end
-            # (c) a level change from another task during the wait is lost: the confirm finds the old level's code.
-            l = ready(kind; settle=0.4); quiet(() -> setlvl!(l, kind, lv))
-            FK.settle_s[] = 0.05
-            refused(l; during=() -> (sleep(0.15); setlvl!(l, kind, lv2)))
-            # (d) a light_off during the wait leaves a stale read-back.
+            # (d) a light_off during the wait supersedes the activation (it writes nothing more) and the light is off.
             l = ready(kind; settle=0.4); quiet(() -> setlvl!(l, kind, lv))
             refused(l; during=() -> (sleep(0.15); light_off(l)))
             TCmod.MOD_SETTLE_S[] = 0.0
@@ -763,37 +851,119 @@ end
             quiet(() -> shutdown(l2))
         end
 
-        @testset "a light_on superseded during its wait ends dark" begin
-            # Codex's case: no request when light_on starts (code 0). A level change inside the controller's loss
-            # window is absorbed, the record moves on, step 5 rewrites the same voltage and the register still shows
-            # 0: the confirm alone would pass on the obsolete request.
+        @testset "a level change during the wait is applied by the activation (Codex's case)" begin
+            # No request when light_on starts (code 0). A setter inside the controller's loss window used to write MOD IN
+            # (absorbed), and the confirm then passed on the old zero. Now an arming light only records; the
+            # activation applies the CURRENT request after the wait, outside the window.
             l = ready(kind; settle=0.4); m = l.modulator
             FK.settle_s[] = 0.3
-            task = @async (sleep(0.1); setlvl!(l, kind, lv))                 # lands INSIDE the loss window
-            quiet() do
-                @test_throws r"superseded" light_on(l)
-            end
+            task = @async (sleep(0.1); setlvl!(l, kind, lv))
+            quiet(() -> light_on(l))
             wait(task)
-            @test !l.properties.is_on && !FK.enabled() && FK.ext_words[] == 0 && m.volts[end] == 0.0
-            @test requested(l, kind) == lv
-            # The next activation delivers what was asked.
-            FK.settle_s[] = 0.0; TCmod.MOD_SETTLE_S[] = 0.0
-            quiet(() -> (light_on(l); setlvl!(l, kind, lv2)))
+            @test l.properties.is_on && !l.arming && FK.enabled()
+            @test abs(FK.held_total() - words_of(kind, lv)) <= 2 && requested(l, kind) == lv
+            quiet(() -> setlvl!(l, kind, lv2))                                  # and the next request lands right
             @test abs(FK.held_total() - words_of(kind, lv2)) <= 2
+            @test isempty(FK.violations)
             quiet(() -> light_off(l))
-            # A light_off, a shutdown or another light_on during the wait supersedes it too.
-            for (name, during) in (("light_off", () -> light_off(l)), ("shutdown", () -> shutdown(l)), ("light_on", () -> light_on(l)))
+            TCmod.MOD_SETTLE_S[] = 0.0
+        end
+
+        @testset "a superseded activation writes nothing more" begin
+            l = ready(kind; settle=0.3); m = l.modulator
+            quiet(() -> setlvl!(l, kind, lv))
+            err = Ref{Any}(nothing)
+            n_after_off = Ref(0)
+            off = @async (sleep(0.1); light_off(l))
+            act = @async try light_on(l) catch e; e end
+            quiet() do
+                wait(off)
+                n_after_off[] = length(FK.calls)
+                err[] = fetch(act)
+            end
+            @test occursin("superseded", sprint(showerror, err[]))
+            @test length(FK.calls) == n_after_off[]                            # it touched neither MOD IN nor the controller
+            @test !l.properties.is_on && !FK.enabled() && FK.ext_words[] == 0 && isempty(FK.violations)
+            TCmod.MOD_SETTLE_S[] = 0.0
+        end
+
+        @testset "concurrency: an intruder lands at each critical point" begin
+            # Another task's setter, light_off, initialize or light_on lands in the middle of an activation: in the
+            # preflight, between the enable and USB 0, during the sleep, and between the MOD write and its read-back.
+            # Joins are bounded, so a deadlock fails the test instead of hanging it.
+            intruders = ("setter" => l -> setlvl!(l, kind, lv2), "light_off" => l -> light_off(l),
+                         "initialize" => l -> initialize(l), "light_on" => l -> light_on(l))
+            preflight_op = kind === :cp ? "LD_RequestStatusBits" : "LD_RequestLaserDiodeMaxCurrentLimit"
+            points = ("preflight" => (preflight_op, 1), "enable to USB 0" => ("LD_SetLaserSetPoint", 1),
+                      "sleep" => (nothing, 0), "write to read-back" => ("LD_GetLaserSetPoint", 2))
+            function settled(l)
+                if l.properties.is_on
+                    tol = max(30, ceil(Int, 0.03 * words_of(kind, requested(l, kind))))
+                    return FK.enabled() && !l.arming && abs(FK.held_total() - words_of(kind, requested(l, kind))) <= tol
+                end
+                return !FK.enabled() && FK.ext_words[] == 0 && !l.arming
+            end
+            for (pname, (op, nth)) in points, (iname, intruder) in intruders
                 l = ready(kind; settle=0.3)
                 quiet(() -> setlvl!(l, kind, lv))
-                task = @async (sleep(0.1); during())
-                quiet() do
-                    @test_throws r"superseded|setpoint register" light_on(l)
+                tasks = Task[]
+                run_intruder() = (try intruder(l) catch e; e end)
+                if op === nothing
+                    push!(tasks, @async (sleep(0.1); run_intruder()))
+                else
+                    FK.hook!(op, get(FK.op_counts, op, 0) + nth, () -> (push!(tasks, @async run_intruder()); yield()))
                 end
-                try wait(task) catch end
-                @test !FK.enabled() && FK.ext_words[] == 0
-                @test !l.properties.is_on || name == "light_on"
+                actres = Ref{Any}(nothing)
+                quiet() do
+                    actres[] = try light_on(l) catch e; e end
+                    # bounded join: a deadlock fails here
+                    @test timedwait(() -> all(istaskdone, tasks), 20.0) === :ok
+                end
+                @test !isempty(tasks)
+                for t in tasks
+                    istaskdone(t) && @test !(fetch(t) isa Exception)
+                end
+                @test actres[] === nothing || occursin("superseded", sprint(showerror, actres[]))
+                @test isempty(FK.violations)
+                @test settled(l)
+                iname == "setter" && @test requested(l, kind) == lv2 && l.properties.is_on &&
+                                           abs(FK.held_total() - words_of(kind, lv2)) <= max(30, ceil(Int, 0.03 * words_of(kind, lv2)))
+                # Whatever happened, the next activation delivers the current request.
+                TCmod.MOD_SETTLE_S[] = 0.0
+                quiet(() -> light_on(l))
+                @test settled(l) && l.properties.is_on && isempty(FK.violations)
+                quiet(() -> light_off(l))
             end
             TCmod.MOD_SETTLE_S[] = 0.0
+        end
+
+        @testset "a failed disable stays pending and is retried by shutdown" begin
+            l = ready(kind)
+            quiet(() -> (setlvl!(l, kind, lv); light_on(l)))
+            FK.fail!("LD_DisableOutput")
+            @test_throws "LD_DisableOutput" quiet(() -> light_off(l))
+            @test l.properties.is_on && l.disable_pending && FK.enabled()      # recorded off only after a successful disable
+            @test_throws "LD_DisableOutput" quiet(() -> shutdown(l))
+            @test !FK.opened[] && l.disable_pending && l.properties.is_on && FK.enabled()
+            @test isempty(FK.violations)                                        # (the USB zero was skipped or at 0 V throughout)
+            delete!(FK.status, "LD_DisableOutput")
+            empty!(FK.calls)
+            quiet(() -> shutdown(l))                                            # reopens deliberately for the disable
+            @test FK.calls[1] == "LD_Open" && "LD_DisableOutput" in FK.calls && FK.calls[end] == "LD_Close"
+            @test !l.disable_pending && !l.properties.is_on && !FK.enabled() && !FK.opened[] && isempty(LSI.MODULATOR_OUTPUTS)
+        end
+
+        @testset "a failed 0 V write skips the USB setpoint and still disables" begin
+            l = ready(kind); m = l.modulator
+            quiet(() -> (setlvl!(l, kind, lv); light_on(l)))
+            m.failure = ErrorException("DAQ gone")
+            quiet(() -> light_off(l))
+            @test !FK.enabled() && !l.properties.is_on && isempty(FK.violations)
+            m.failure = nothing
+            quiet(() -> light_on(l))
+            m.failure = ErrorException("DAQ gone")
+            @test_throws "DAQ gone" quiet(() -> setlvl!(l, kind, lv2))
+            @test !FK.enabled() && isempty(FK.violations)
         end
 
         @testset "an interrupted write still switches off, then the interrupt passes on" begin

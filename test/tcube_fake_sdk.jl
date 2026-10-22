@@ -236,6 +236,20 @@ While `true`, every `LD_*` call other than `LD_Open` on a handle that is not ope
 handle. Off by default (`reset!`), so the older tests, which call methods on lights they never initialized, run as they did.
 """
 const strict_handle = Ref(false)
+"""
+While `true`, a `LD_SetLaserSetPoint` made while the external input holds a level (`ext_words != 0`) is recorded in
+`violations`: with a modulator every USB setpoint is written at 0 V, because a USB write at a level absorbs the level.
+Recorded, not raised, so a driver path that catches errors cannot hide it.
+"""
+const require_zero_mod = Ref(false)
+const violations = String[]
+"""
+`hook!(op, nth, f)` runs `f()` inside the `nth` call to `op` (counted from the last `reset!`), before the call takes
+effect: a test lands another task's action at that critical point. `f` typically starts a task and yields.
+"""
+const hooks = Tuple{String,Int,Any}[]
+const op_counts = Dict{String,Int}()
+hook!(op::AbstractString, nth::Integer, f) = (push!(hooks, (String(op), Int(nth), f)); nothing)
 "Every `LD_SetLaserSetPoint`: `(code, external input's words at that moment, output enabled)`. A light with a modulator may send only 0 (or the calibration reference) with the input at 0."
 const setpoint_log = Tuple{Int,Int,Bool}[]
 
@@ -250,6 +264,8 @@ function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     empty!(setpoint_log)
     opened[] = false
     strict_handle[] = false
+    require_zero_mod[] = false
+    empty!(violations); empty!(hooks); empty!(op_counts)
     empty!(calls)
     empty!(status)
     empty!(setpoints)
@@ -289,6 +305,10 @@ throws still happened, and the order assertions need to see it.
 """
 function record!(op::AbstractString)
     push!(calls, op)
+    n = op_counts[op] = get(op_counts, op, 0) + 1
+    for (hop, hn, f) in copy(hooks)
+        (hop == op && hn == n) && f()
+    end
     (strict_handle[] && startswith(op, "LD_") && op != "LD_Open" && !opened[]) && error(
         "fake Kinesis: $op called on a handle that is not open (never opened, or closed)")
     haskey(throws, op) && error(throws[op])
@@ -382,6 +402,8 @@ end
         s = Main.FakeKinesis.record!("LD_SetLaserSetPoint")
         on = Main.FakeKinesis.bits[] & Main.FakeKinesis.ENABLED != 0
         push!(Main.FakeKinesis.setpoint_log, (Int(laserDiodeCurrent), Main.FakeKinesis.ext_words[], on))
+        (Main.FakeKinesis.require_zero_mod[] && Main.FakeKinesis.ext_words[] != 0) && push!(Main.FakeKinesis.violations,
+            "LD_SetLaserSetPoint($(Int(laserDiodeCurrent))) with MOD IN at $(Main.FakeKinesis.ext_words[]) words")
         if s == 0 && on   # ignored with the output off
             Main.FakeKinesis.setpoint_held[] = laserDiodeCurrent
             Main.FakeKinesis.ext_at_write[] = Main.FakeKinesis.ext_words[]   # the write replaces the whole register

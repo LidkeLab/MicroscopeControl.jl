@@ -74,13 +74,26 @@ so that an 80 mA call can never become an 80 mW one.
   to restore at `shutdown`; `nothing` outside an open/close cycle of a modulator.
 - `connected::Bool`: State. Whether `initialize` has opened the Kinesis handle and `shutdown` has not closed it.
   With a modulator, a `shutdown` retried after the handle closed touches no closed-handle call.
-- `generation::Threads.Atomic{Int}`: State. Counts the events that supersede a `light_on` in progress with a
-  modulator: a level setter, `light_off`, `shutdown` or another `light_on`.
+- `generation::Threads.Atomic{Int}`, `lock::ReentrantLock`, `arming::Bool`: State of a light with a modulator, see
+  "Locking" below. `disable_pending::Bool`: State. A `LD_DisableOutput` failed and has not been retried; a `shutdown`
+  retried after the handle closed reopens it to retry the disable.
 
 The first fourteen fields are in the order they have always been in, and the
 two added in 0.2.5 and the two added since are at the end, so the pre-0.2.5
 positional forms still construct: they build a `TCubeLaser{ConstantCurrent}` with
 all of them defaulted.
+
+# Locking (with a modulator)
+
+`[guarantee]` One per-light lock (`lock`) serializes every hardware write and every state change of a light with a
+modulator: enable, disable, a USB setpoint, a MOD IN write, `is_on`, `arming` and `generation`. `initialize`,
+`light_off`, `shutdown` and `light_on` take it and bump `generation` first. It is held for short critical sections
+only, never across the settle wait: `light_on` arms under the lock (0 V, preflight, enable, USB 0), releases it to
+sleep `MOD_SETTLE_S`, retakes it, and either sees `generation` moved (it throws "superseded" and touches nothing: the
+superseder owns the hardware) or applies the CURRENT request, confirms it and is on. While arming, level setters
+record only. While on, they write MOD IN under the lock. A USB setpoint is written only when the MOD IN zero succeeded
+in the same critical section; when it did not, the USB write is skipped and the output is disabled. A light without a
+modulator takes no lock and runs as it always did.
 
 # With a modulator
 
@@ -150,6 +163,9 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     source_before::Union{Nothing,Int}
     connected::Bool
     const generation::Threads.Atomic{Int}
+    const lock::ReentrantLock
+    arming::Bool
+    disable_pending::Bool
 
     function TCubeLaser{M}(unique_id, properties, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
@@ -174,7 +190,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
             controller_max_current, daq_device, ao_channel, drive_current,
-            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0))
+            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0), ReentrantLock(), false, false)
     end
 end
 

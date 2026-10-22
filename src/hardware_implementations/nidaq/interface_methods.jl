@@ -83,8 +83,12 @@ function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String; 
             task = DAQmx.AITask()
             try
                 DAQmx.add_ai_voltage!(task, channel; min_val=Float64(min_val), max_val=Float64(max_val))
-            catch
-                DAQmx.clear!(task)   # the task exists even when the channel was refused
+            catch e
+                try
+                    DAQmx.clear!(task)   # the task exists even when the channel was refused
+                catch
+                    throw(DAQInterface.UnreleasedTask(task, e))   # still allocated: the caller keeps the handle
+                end
                 rethrow()
             end
             return task
@@ -105,8 +109,12 @@ function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String; 
             task = DAQmx.AOTask()
             try
                 DAQmx.add_ao_voltage!(task, channel; min_val=Float64(min_val), max_val=Float64(max_val))
-            catch
-                DAQmx.clear!(task)   # the task exists even when the channel was refused
+            catch e
+                try
+                    DAQmx.clear!(task)   # the task exists even when the channel was refused
+                catch
+                    throw(DAQInterface.UnreleasedTask(task, e))   # still allocated: the caller keeps the handle
+                end
                 rethrow()
             end
             return task

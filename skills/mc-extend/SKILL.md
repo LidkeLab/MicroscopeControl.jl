@@ -280,7 +280,11 @@ written. A modulator is not an `AbstractInstrument` (no panel). It defines `setp
 4. a level setter validates as it did, then writes `setpower(modulator, p)` only while the light is on, so the output
    holds 0 V while off; an `ArgumentError` changes nothing, any other throw tries level 0, switches off and rethrows
    (`LightSourceInterface.apply_level!` does that);
-5. never use the native level path while there is a modulator.
+5. never use the native level path while there is a modulator;
+6. **[guarantee]** for `TCubeLaser`: one per-light lock serializes every hardware write and state change; `light_on` arms
+   under it, sleeps unlocked, and applies the current request under it, so a setter, `light_off`, `initialize`,
+   `shutdown` or a second `light_on` landing anywhere in between ends consistent (a setter while arming only records).
+   A new driver that sleeps inside `light_on` should follow the same split.
 
 **[guarantee]** `MicroscopeControl.modulation_violations(light; set!, expect)` checks 1 to 5 on an initialized light
 whose `modulator` is a `MicroscopeControl.RecordingModulator` (it writes nothing, records everything, and can be made to
