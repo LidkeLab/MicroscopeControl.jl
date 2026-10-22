@@ -1,5 +1,12 @@
 
 function gui_param(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "gui_param") && return nothing
+        _gui_param(camera)
+    end
+end
+
+function _gui_param(camera::DCAM4Camera)
     prop_fig = GLMakie.Figure(size=(900, 1800), title="Camera Properties")
     wd = 200
     wd1 = 300

@@ -115,10 +115,11 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   the 12.5 default. A failed position read fails `initialize` like the other checked steps (the connection is closed
   and it throws). (`MCLStage` had the same gap, fixed above; `MCS2Stage` reads its position at `initialize`.)
 - `DCAM4Camera` property setters and getters (`setvalue`, `settriggermode!`, `setexposuretime!`, `setroi!`,
-  `readout_time`, `showproperties`) make no library call after `shutdown`, where they passed the nulled handle. They
-  log an error and set `last_error` to `DCAMERR_INVALIDHANDLE`, as `live` and `sequence` do; the setters return
-  `(DCAMERR_INVALIDHANDLE, value)` (`setroi!` returns `nothing`) and `readout_time` returns `READOUT_FALLBACK_S`
-  without caching it.
+  `readout_time`, `showproperties`, `extract_properties`, `gui_param`) make no library call after `shutdown`, where they
+  passed the nulled handle. Each runs its check and its library calls under the camera's acquisition lock, so a
+  concurrent `shutdown` waits for it. They log an error and set `last_error` to `DCAMERR_INVALIDHANDLE`, as `live` and `sequence` do; the setters return
+  `(DCAMERR_INVALIDHANDLE, value)` (`setroi!`, `showproperties` and `gui_param` return `nothing`),
+  `extract_properties` returns an empty `Dict`, and `readout_time` returns `READOUT_FALLBACK_S` without caching it.
 
 ### Changed
 

@@ -759,23 +759,54 @@
         FK.reset!()
         DC.DCAM_API_USERS[] = 0
         c = DC.DCAM4Camera(0)
+        c.exposure_time = 0.01
         DC.shutdown(c)
         n = length(FK.calls)
-        refusal(f) = begin
+        # Each refusal logs one error, sets last_error, and returns what a caller that destructures can still take.
+        function refusal(f, expected)
             c.last_error = DC.DCAMERR_SUCCESS
-            @test_logs (:error, r"refused: the camera has been shut down") match_mode = :any f()
+            r = @test_logs (:error, r"refused: the camera has been shut down") match_mode = :any f()
             @test c.last_error == DC.DCAMERR_INVALIDHANDLE
+            @test r == expected
         end
-        refusal(() -> DC.setexposuretime!(c))
-        refusal(() -> DC.setexposuretime!(c, 0.02))
-        refusal(() -> DC.setroi!(c))
-        refusal(() -> DC.setroi!(c, DC.CameraROI(0, 0, 4, 4)))
-        refusal(() -> DC.setvalue(c, DC.DCAM_IDPROP_EXPOSURETIME, 0.01))
-        refusal(() -> DC.settriggermode!(c))
-        refusal(() -> DC.showproperties(c))
-        refusal(() -> @test DC.readout_time(c) == DC.READOUT_FALLBACK_S)
+        refusal(() -> DC.setexposuretime!(c), (DC.DCAMERR_INVALIDHANDLE, 0.01))
+        refusal(() -> DC.setexposuretime!(c, 0.02), (DC.DCAMERR_INVALIDHANDLE, 0.01))
+        @test c.exposure_time == 0.01
+        refusal(() -> DC.setroi!(c), nothing)
+        refusal(() -> DC.setroi!(c, DC.CameraROI(0, 0, 4, 4)), nothing)
+        refusal(() -> DC.setroi!(c, Int32(0), Int32(4), Int32(0), Int32(4)), nothing)
+        refusal(() -> DC.setvalue(c, DC.DCAM_IDPROP_EXPOSURETIME, 0.01), (DC.DCAMERR_INVALIDHANDLE, 0.01))
+        refusal(() -> DC.settriggermode!(c), (DC.DCAMERR_INVALIDHANDLE, Float64(Int(c.trigger_mode))))
+        refusal(() -> DC.showproperties(c), nothing)
+        refusal(() -> DC.readout_time(c), DC.READOUT_FALLBACK_S)
+        refusal(() -> DC.extract_properties(c), Dict{String, Any}())
+        refusal(() -> DC.gui_param(c), nothing)
         @test isnan(c.readout_s)
         @test length(FK.calls) == n
+        @test FK.null_handle_calls[] == 0
+    end
+
+    @testset "a shutdown that lands inside a property call waits for it" begin
+        # `shutdown` takes the acquisition lock to null the handle, so one that arrives between the closed check and the
+        # DCAM calls of `setroi!` or `setexposuretime!` must wait until they are done: no property call sees a null handle.
+        for call in (c -> DC.setroi!(c, DC.CameraROI(0, 0, 4, 4)), c -> DC.setexposuretime!(c, 0.02))
+            FK.reset!()
+            DC.DCAM_API_USERS[] = 0
+            c = DC.DCAM4Camera(0)
+            sd = Ref{Any}(nothing)
+            FK.on_prop[] = () -> begin
+                FK.on_prop[] = () -> nothing
+                sd[] = @async DC.shutdown(c)
+                for _ in 1:20
+                    yield()
+                end
+            end
+            call(c)
+            @test sd[] !== nothing && (wait(sd[]); true)
+            @test FK.null_handle_calls[] == 0
+            @test c.camera_handle == C_NULL && c.closing == 2
+            @test FK.last_index("dcamprop_getvalue") < FK.first_index("dcamdev_close")
+        end
     end
 end
 

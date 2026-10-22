@@ -45,6 +45,7 @@
             F.position .= (3.0, 20.0)
             stage = PIStage()
             initialize(stage)
+            @test F.qpos_queries == [(5, "1 2")]   # this controller, X then Y
             @test (stage.real_x, stage.real_y) == (3.0, 20.0)
             @test (stage.targ_x, stage.targ_y) == (3.0, 20.0)
             # The stage panel's X step moves to (targ_x, targ_y): Y must stay where it was.
