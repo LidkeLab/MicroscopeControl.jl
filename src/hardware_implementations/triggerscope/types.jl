@@ -50,13 +50,6 @@ mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     #GUI Interface Fields
     outputs::Vector{Output}
     inputs::Vector{Input}
-
-    # One command and its reply at a time: the LCAs and a MOD IN output can share one scope from several tasks.
-    lock::ReentrantLock
-
-    # DACs whose range is unknown: a RANGE command failed ambiguously, so the cached range may differ from the device's.
-    # Writes to them are refused until `setrange` succeeds.
-    range_unknown::Set{Int}
 end
 
 #constructor for the Triggerscope4 object
@@ -95,14 +88,8 @@ function Triggerscope4(;
     inputs = Vector{Input}(undef, 1) #TTL inputs
     inputs[1] = Input("TTL", Bool, ttlinputs, [false, true], ttlreadings, false)
 
-    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs, ReentrantLock(), Set{Int}())
+    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs)
 end
-
-# The positional constructor before the lock field was added (19 arguments), kept: it supplies the lock.
-Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges,
-              ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs) =
-    Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges,
-                  ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs, ReentrantLock(), Set{Int}())
 
 mutable struct CommandSignal
     commandType::CommandType

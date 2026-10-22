@@ -52,6 +52,15 @@ function DAQInterface.showchannels(daq::NIdaq,channeltype::String,device::String
     channelfunctions[channeltype](device)
 end
 
+# The vendor (DAQmx) boundary of the ranged `createtask`: allocate a task, add a voltage channel with a range, clear a task.
+# Plain functions so a test can replace them (same seam practice as the Kinesis wrappers) and run the production
+# `createtask` body, its failed-setup cleanup included, without DAQmx.
+ai_alloc() = DAQmx.AITask()
+ao_alloc() = DAQmx.AOTask()
+ai_add!(task, channel, lo, hi) = DAQmx.add_ai_voltage!(task, channel; min_val=lo, max_val=hi)
+ao_add!(task, channel, lo, hi) = DAQmx.add_ao_voltage!(task, channel; min_val=lo, max_val=hi)
+task_clear!(task) = DAQmx.clear!(task)
+
 """
     createtask(daq::NIdaq,tasktype::String,channel::String; min_val=nothing, max_val=nothing)
 
@@ -80,12 +89,12 @@ function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String; 
 
     if tasktype == "AI"
         if ranged
-            task = DAQmx.AITask()
+            task = ai_alloc()
             try
-                DAQmx.add_ai_voltage!(task, channel; min_val=Float64(min_val), max_val=Float64(max_val))
+                ai_add!(task, channel, Float64(min_val), Float64(max_val))
             catch e
                 try
-                    DAQmx.clear!(task)   # the task exists even when the channel was refused
+                    task_clear!(task)   # the task exists even when the channel was refused
                 catch
                     throw(DAQInterface.UnreleasedTask(task, e))   # still allocated: the caller keeps the handle
                 end
@@ -106,12 +115,12 @@ function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String; 
         return task
     elseif tasktype == "AO"
         if ranged
-            task = DAQmx.AOTask()
+            task = ao_alloc()
             try
-                DAQmx.add_ao_voltage!(task, channel; min_val=Float64(min_val), max_val=Float64(max_val))
+                ao_add!(task, channel, Float64(min_val), Float64(max_val))
             catch e
                 try
-                    DAQmx.clear!(task)   # the task exists even when the channel was refused
+                    task_clear!(task)   # the task exists even when the channel was refused
                 catch
                     throw(DAQInterface.UnreleasedTask(task, e))   # still allocated: the caller keeps the handle
                 end

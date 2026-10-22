@@ -3,8 +3,8 @@
 
 Something that puts a LEVEL on a light's analogue input, in the light's own unit (mW in
 `ConstantPhotocurrent`, mA in `ConstantCurrent`, whatever a plain `setpower` takes), by driving a
-voltage: a DAQ analogue output ([`NIDAQModulator`](@ref)), a Triggerscope DAC
-([`TriggerscopeModulator`](@ref)), or a recorder ([`RecordingModulator`](@ref)). It holds the scale
+voltage: a DAQ analogue output ([`NIDAQModulator`](@ref)) or a recorder ([`RecordingModulator`](@ref)). (A Triggerscope
+DAC modulator follows in a later release.) It holds the scale
 (`per_volt`, the light's unit per volt), so `setpower(modulator, p)` is the whole conversation.
 
 It is not an `AbstractInstrument` and has no panel. A modulator is built for one pairing of an output
@@ -61,7 +61,7 @@ end
 """
     output_id(mc::AbstractModulationControl) -> String
 
-Names the physical output (`"Triggerscope COM3 DAC 3"`, `"NIDAQ Dev1/ao1"`), the key of the claim that
+Names the physical output (`"NIDAQ Dev1/ao1"`), the key of the claim that
 lets only one light object drive it. Public, not exported.
 """
 function output_id(mc::AbstractModulationControl)

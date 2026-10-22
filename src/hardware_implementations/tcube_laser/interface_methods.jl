@@ -744,7 +744,7 @@ function check_scale!(light::TCubeLaser{ConstantPhotocurrent})
         zero_then_disable(light)                  # the mode command is never sent while the diode is lit
         set_open_loop!(light)                     # LD_SetOpenLoopMode, output off, open loop confirmed before the enable
         light.properties.is_on = true
-        check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
+        enable_output!(light)                     # (without a modulator exactly `LD_EnableOutput`)
         send_setpoint(light, setpoint_code(light, pd.ref_current_mA))   # after the enable: a setpoint sent with the output off is ignored
         sleep(REFERENCE_DWELL_S)
         w = read_photocurrent_word(light)
@@ -893,6 +893,9 @@ function _initialize(light::TCubeLaser)
 
     check_err(LD_Open(serialNo), "LD_Open", serialNo)
     light.connected = true
+    # With a modulator the output is unconfirmed-off until a disable succeeds: whatever the controller was left in, an
+    # early failure below must still disable it, and a later shutdown retry must know.
+    light.modulator === nothing || (light.disable_pending = true)
     try
         # A success FLAG, not a status code: `false` is the failure.
         check_flag(LD_StartPolling(serialNo, POLL_INTERVAL_MS), "LD_StartPolling", serialNo)
@@ -926,7 +929,8 @@ function _initialize(light::TCubeLaser)
         # left open refuses the next `LD_Open` and so blocks the retry. The
         # close is reported but never rethrown: the failure that stopped
         # initialization is the one the caller needs.
-        end_modulation!(light)   # a modulator opened by this or an earlier initialize: restore the source, release the output
+        light.modulator !== nothing && light.disable_pending && disable_after_failure(light, "initialize")
+        end_modulation!(light)   # a modulator opened by this or an earlier initialize: restore the source, release the output (once the output is off)
         try
             LD_StopPolling(serialNo)
             LD_Close(serialNo)
@@ -1072,12 +1076,12 @@ controller power cycle can restore the pot).
 # With a modulator
 
 Under the light's lock: write level 0 to the modulator (a throw enables nothing); `require_clamp`
-and `check_scale!` as above; enable; send USB setpoint 0 and read it back; arm. Unlocked: wait
-[`MOD_SETTLE_S`](@ref) (1.3 s). Under the lock again: if `light_off`, `initialize`, `shutdown` or
-another `light_on` took over meanwhile, throw and write nothing; else put the CURRENT request on
-the modulator, confirm that the setpoint register shows it ([`confirm_modulated_setpoint`](@ref)),
-then `check_lock` in closed loop. A throw writes 0 (tried), sends the USB zero only if that
-succeeded, disables and rethrows. `[limitation]` One `light_on` costs 1.3 s more and a read-back;
+and `check_scale!` as above; enable (after a generation check); send USB setpoint 0 and read it back; arm.
+Unlocked: wait [`MOD_SETTLE_S`](@ref) (1.3 s). Under the lock again: if `light_off`, `initialize`,
+`shutdown` or another `light_on` took over meanwhile, throw and write nothing; else put the CURRENT request
+on the modulator. Then, unlocked, confirm that the setpoint register shows it
+([`confirm_modulated_setpoint`](@ref)) and run `check_lock` in closed loop, re-checking the generation. A
+throw disables first and then writes 0, sending no USB zero, and rethrows. `[limitation]` One `light_on` costs 1.3 s more and a read-back;
 a second `light_on` while on reruns all of it, dark meanwhile. See [`light_on_modulated`](@ref).
 """
 function LightSourceInterface.light_on(light::TCubeLaser)
@@ -1365,17 +1369,15 @@ function zero_then_disable(light::TCubeLaser)
     # With a modulator that is open, its level is zeroed first, and the USB zero is sent ONLY if that succeeded: a USB
     # write at a MOD IN level would absorb the level. If it failed, the USB write is skipped and the output disabled.
     zerr = mod_zero!(light)
-    zeroed = zerr === nothing ? zero_setpoint(light) : "skipped, the MOD IN level is unknown ($zerr)"
-    isnothing(zeroed) || @error "TCubeLaser $serialNo: zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
-    note_zero!(light, zeroed)
-    try
-        check_err(LD_DisableOutput(serialNo), "LD_DisableOutput", serialNo)
-    catch
-        light.disable_pending = true
-        rethrow()
+    if zerr === nothing
+        zeroed = zero_setpoint(light)
+        isnothing(zeroed) || @error "TCubeLaser $serialNo: zeroing the setpoint before disable failed ($zeroed); the controller's stored setpoint was not cleared"
+    else
+        zeroed = "skipped, the MOD IN level is unknown ($zerr)"
+        @warn "TCubeLaser $serialNo: not zeroing the setpoint before the disable: $zeroed. A USB write at a MOD IN level would absorb the level; the controller's stored setpoint is not cleared."
     end
-    light.disable_pending = false
-    light.properties.is_on = false
+    note_zero!(light, zeroed)
+    disable_now!(light)
     propagate_interrupt(zerr)   # an interrupted 0 V write passes on only after the disable
     return nothing
 end
@@ -1392,8 +1394,8 @@ the next enable must start dark, not on a stale setpoint.
 """
 function disable_after_failure(light::TCubeLaser, what::AbstractString)
     serialNo = light.serialNo
-    zerr = mod_zero!(light)   # 0 V before the USB zero, which would else absorb the level; skipped if it fails
-    zeroed = zerr === nothing ? zero_setpoint(light) : "skipped, the MOD IN level is unknown ($zerr)"
+    light.modulator === nothing || return disable_after_failure_modulated(light, what)
+    zeroed = zero_setpoint(light)
     note_zero!(light, zeroed)
     disabled, offerr = false, nothing
     try
@@ -1404,7 +1406,6 @@ function disable_after_failure(light::TCubeLaser, what::AbstractString)
         offerr = err
     end
     light.properties.is_on = !disabled
-    light.disable_pending = !disabled
     zeronote = isnothing(zeroed) ? "" : "; zeroing the setpoint failed ($zeroed)"
     if disabled
         @error "TCubeLaser $serialNo: $what failed; output disabled$zeronote"
@@ -1452,15 +1453,14 @@ record it ([`zero_then_disable`](@ref)). A failed zero is logged and does not
 throw, since the output is still turned off; a failed disable throws and leaves
 `properties.is_on` unchanged. The recorded request (`drive_current`, or
 `pd.output_power_requested`) is kept, so `light_on` returns to it. With a `modulator`
-its level 0 is written first (a failure is logged and does not stop the switch-off).
+the output is disabled first, at once, without waiting for the light's lock or a MOD IN write, and level 0 is written
+after (a failure is logged and does not stop the switch-off); no USB zero is sent.
 """
 function LightSourceInterface.light_off(light::TCubeLaser)
-    with_light_lock(light) do
-        if light.modulator !== nothing
-            bump_generation!(light)   # supersedes a light_on that is waiting
-            light.arming = false
-        end
-        zero_then_disable(light)      # a modulator's level 0 first (a failure is logged, never prevents the switch-off)
+    if light.modulator === nothing
+        zero_then_disable(light)
+    else
+        light_off_modulated(light)    # disables at once, then writes level 0 (a failure is logged, never prevents the switch-off)
     end
     println("$(light.laser_color)" * "_laser is off")
     return nothing
@@ -1474,21 +1474,15 @@ polling and close the connection. A failed zero is logged; a failed disable
 throws, but the connection is closed either way: leaving the Kinesis handle open
 would also block the reconnection a caller needs in order to retry the disable.
 
-With a `modulator`: level 0 is written first, and after the disable the control source
-recorded by `initialize` is restored and the modulator closed (0 V, then its output is
-released); a failure there is thrown after the connection is closed, and the output stays
-claimed until the next `shutdown` retries it.
+With a `modulator`: the output is disabled first, at once; then level 0 is written and, only if the
+disable succeeded, the control source recorded by `initialize` is restored and the modulator closed
+(0 V, then its output is released). A failure there is thrown after the connection is closed, and
+the output stays claimed until the next `shutdown` retries it. A disable that failed stays pending:
+the source and the claim are kept, and the next `shutdown` reopens the handle to retry it.
 """
 function shutdown(light::TCubeLaser)
-    with_light_lock(light) do
-        if light.modulator !== nothing
-            bump_generation!(light)   # supersedes a light_on that is waiting
-            light.arming = false
-            # A retry after the handle was closed (something could not be released): reopen only for what is pending.
-            light.connected || return shutdown_disconnected(light)
-        end
-        _shutdown(light)
-    end
+    light.modulator === nothing && return _shutdown(light)
+    return shutdown_modulated(light)
 end
 
 function _shutdown(light::TCubeLaser)

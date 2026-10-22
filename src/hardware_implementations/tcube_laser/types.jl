@@ -85,20 +85,21 @@ all of them defaulted.
 
 # Locking (with a modulator)
 
-`[guarantee]` One per-light lock (`lock`) serializes every hardware write and every state change of a light with a
-modulator: enable, disable, a USB setpoint, a MOD IN write, `is_on`, `arming` and `generation`. `initialize`,
-`light_off`, `shutdown` and `light_on` take it and bump `generation` first. It is held for short critical sections
-only, never across the settle wait: `light_on` arms under the lock (0 V, preflight, enable, USB 0), releases it to
-sleep `MOD_SETTLE_S`, retakes it, and either sees `generation` moved (it throws "superseded" and touches nothing: the
-superseder owns the hardware) or applies the CURRENT request, confirms it and is on. While arming, level setters
-record only. While on, they write MOD IN under the lock. A USB setpoint is written only when the MOD IN zero succeeded
-in the same critical section; when it did not, the USB write is skipped and the output is disabled. A light without a
-modulator takes no lock and runs as it always did.
+`[guarantee]` Two locks. `lock` serializes the writes and state changes of `initialize`, a second `light_on`, the level
+setters and the MOD IN writes. `usb_lock` serializes only the Kinesis enable and disable commands, each a single call.
+`light_on` arms under `lock` (a generation bump, 0 V, the preflight, then the enable under `usb_lock` after a
+generation check, then USB 0), releases `lock` to sleep `MOD_SETTLE_S`, applies the CURRENT request under it, and polls
+the read-back and the lock check WITHOUT it, re-checking the generation before each write. A `light_off` or `shutdown`
+bumps `generation`, then disables under `usb_lock` right away, with no wait for `lock` and so none for a MOD IN write
+that is blocked on its transport; the MOD IN zero follows. No enable can follow a disable that superseded it. An activation
+that finds `generation` moved throws "superseded" and writes nothing more. While arming, level setters record only
+(the activation applies the latest request); while on, they write MOD IN under `lock`. A USB setpoint is written only
+when the MOD IN zero succeeded in the same critical section, and never when the modulator is not open: then it is
+skipped and the output disabled. A light without a modulator takes no lock and runs as it always did.
 
 # With a modulator
 
-`TCubeLaser(serialNo; modulator = NIDAQModulator(...))` (or
-[`TriggerscopeModulator`](@ref)) drives the setpoint through MOD IN instead of
+`TCubeLaser(serialNo; modulator = NIDAQModulator(...))` drives the setpoint through MOD IN instead of
 USB: a level change is one analogue write, not a USB setpoint and a lock check.
 `[guarantee]` With `modulator = nothing` none of this applies. With one:
 
@@ -166,6 +167,8 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     const lock::ReentrantLock
     arming::Bool
     disable_pending::Bool
+    const usb_lock::ReentrantLock
+    const arm_gen::Threads.Atomic{Int}
 
     function TCubeLaser{M}(unique_id, properties, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
@@ -190,7 +193,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
             controller_max_current, daq_device, ao_channel, drive_current,
-            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0), ReentrantLock(), false, false)
+            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0), ReentrantLock(), false, false, ReentrantLock(), Threads.Atomic{Int}(0))
     end
 end
 

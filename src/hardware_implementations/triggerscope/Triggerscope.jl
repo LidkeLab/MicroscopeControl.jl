@@ -28,7 +28,6 @@ module Triggerscope
     using LibSerialPort
 
     import ...MicroscopeControl: export_state, initialize, shutdown
-    import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: AbstractModulationControl, setpower, output_id, holds_resources
 
     export Triggerscope4
 
@@ -39,8 +38,6 @@ module Triggerscope
     export TriggerMode, RISING, FALLING, CHANGE
     export Range, ZEROTOFIVE, ZEROTOTEN, PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5
     export openport, closeport
-    export dac_output, dac_range_volts
-    export TriggerscopeModulator
     export SignalArray, CommandType
     export gui
 
@@ -49,6 +46,4 @@ module Triggerscope
     include("direct_control.jl")
     include("sequence_control.jl")
     include("helper_functions.jl")
-    include("analog_output.jl")
-    include("modulator.jl")
 end

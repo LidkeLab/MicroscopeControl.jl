@@ -83,6 +83,7 @@ mutable struct SimDiodeLaser{M<:RegulationMode} <: DiodeLaser
     clamp_mA::Float64
     log::Vector{Tuple{Symbol,Any}}
     const modulator::Union{Nothing,AbstractModulationControl}
+    const generation::Threads.Atomic{Int}   # counts light_off, shutdown, initialize and light_on: a delayed activation checks it
 
     function SimDiodeLaser{M}(unique_id, properties, min_current, max_current, threshold_current,
         drive_current, pd, efficiency, responsivity, responsivity_drift, tia_range_A, key, interlock,
@@ -92,7 +93,7 @@ mutable struct SimDiodeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, min_current, max_current, threshold_current, drive_current, pd,
             efficiency, responsivity, responsivity_drift, tia_range_A, key, interlock,
             pd_blocked, tia_over_fault, tia_under_fault, settle_s,
-            false, false, 0.0, max_current, Tuple{Symbol,Any}[], modulator)
+            false, false, 0.0, max_current, Tuple{Symbol,Any}[], modulator, Threads.Atomic{Int}(0))
     end
 end
 
@@ -232,6 +233,7 @@ _settle(sim::SimDiodeLaser) = sim.settle_s > 0 && sleep(sim.settle_s)
 
 function initialize(sim::SimDiodeLaser)
     push!(sim.log, (:initialize, nothing))
+    Threads.atomic_add!(sim.generation, 1)   # supersedes a light_on that is waiting
     if regulation_mode(sim) isa ConstantPhotocurrent
         missing_bits = [label for (label, ok) in (("key switch", sim.key), ("interlock", sim.interlock)) if !ok]
         isempty(missing_bits) || error("SimDiodeLaser $(sim.unique_id): refusing closed loop: $(join(missing_bits, " and ")) not set")
@@ -250,6 +252,7 @@ end
 
 function shutdown(sim::SimDiodeLaser)
     push!(sim.log, (:shutdown, nothing))
+    Threads.atomic_add!(sim.generation, 1)
     zerr = zero_modulator!(sim)
     sim.output_enabled = false
     sim.properties.is_on = false
@@ -297,15 +300,20 @@ function LightSourceInterface.light_on(sim::SimDiodeLaser)
             rethrow()
         end
         sim.setpoint = 0.0
+        gen = Threads.atomic_add!(sim.generation, 1) + 1
         sim.output_enabled = true
         sim.properties.is_on = true
         try
             _settle(sim)   # the whole tail after the enable, the wait included: every throw (an interrupt too) darkens
+            # A light_off, shutdown, initialize or another light_on during the wait owns the output now: write nothing.
+            sim.generation[] == gen || throw(ErrorException("SimDiodeLaser $(sim.unique_id): light_on was superseded; it wrote nothing more"))
             setpower(sim.modulator, _request(sim))
             sim.setpoint = _level_setpoint(sim, _request(sim))
         catch
-            zero_modulator!(sim)   # tried
-            _darken!(sim)
+            if sim.generation[] == gen   # still the current activation: end dark; otherwise the superseder owns the output
+                zero_modulator!(sim)     # tried
+                _darken!(sim)
+            end
             rethrow()
         end
         return nothing
@@ -319,6 +327,7 @@ end
 function LightSourceInterface.light_off(sim::SimDiodeLaser)
     push!(sim.log, (:light_off, nothing))
     _require_open(sim, "light_off")
+    Threads.atomic_add!(sim.generation, 1)
     zerr = zero_modulator!(sim)
     sim.output_enabled = false
     sim.properties.is_on = false

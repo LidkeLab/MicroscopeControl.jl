@@ -304,7 +304,6 @@ end
     @testset "Modulator contract" begin
         mods = device_types(MC.AbstractModulationControl)
         @test :NIDAQModulator in nameof.(mods)
-        @test :TriggerscopeModulator in nameof.(mods)
         @test :RecordingModulator in nameof.(mods)
         for T in mods
             nameof(T) === :_ContractDummyModulator && continue # test fixture, not a modulator

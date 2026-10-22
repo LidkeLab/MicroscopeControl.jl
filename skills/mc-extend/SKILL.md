@@ -257,12 +257,11 @@ what make the Sim-for-hardware swap in `mc-testing` work.
 
 ### A light that takes a modulator
 
-A light whose level can go out as a voltage on an analogue input (a TLD001's rear MOD IN, driven by a DAQ output or a
-Triggerscope DAC) carries `modulator::Union{Nothing,AbstractModulationControl}`, keyword `modulator = nothing`.
+A light whose level can go out as a voltage on an analogue input (a TLD001's rear MOD IN, driven by a DAQ output; a
+Triggerscope DAC modulator follows in a later release) carries `modulator::Union{Nothing,AbstractModulationControl}`, keyword `modulator = nothing`.
 **[guarantee]** `TCubeLaser`, `SimDiodeLaser` and `SimLight` do; with `nothing` every method runs the code it always
 did. **[limitation]** `CrystaLaser`, `VortranLaser` and `DaqTrLight` take none: their native level path is already a DAQ
-voltage. The modulator holds the scale: `NIDAQModulator(; channel, v_range, per_volt, daq)` and
-`TriggerscopeModulator(; scope, dac, range, per_volt)` convert `setpower(modulator, p)`, with `p` in the light's own unit
+voltage. The modulator holds the scale: `NIDAQModulator(; channel, v_range, per_volt, daq)` converts `setpower(modulator, p)`, with `p` in the light's own unit
 (`per_volt` is that unit per volt), to a voltage; `p = 0` is 0 V; an `ArgumentError` means out of reach and nothing was
 written. A modulator is not an `AbstractInstrument` (no panel). It defines `setpower(mc, ::Float64)`,
 `initialize(mc)`, `shutdown(mc)` and `output_id(mc)`; the contract test checks all four on its own type, and
@@ -281,10 +280,11 @@ written. A modulator is not an `AbstractInstrument` (no panel). It defines `setp
    holds 0 V while off; an `ArgumentError` changes nothing, any other throw tries level 0, switches off and rethrows
    (`LightSourceInterface.apply_level!` does that);
 5. never use the native level path while there is a modulator;
-6. **[guarantee]** for `TCubeLaser`: one per-light lock serializes every hardware write and state change; `light_on` arms
-   under it, sleeps unlocked, and applies the current request under it, so a setter, `light_off`, `initialize`,
-   `shutdown` or a second `light_on` landing anywhere in between ends consistent (a setter while arming only records).
-   A new driver that sleeps inside `light_on` should follow the same split.
+6. **[guarantee]** for `TCubeLaser`: a per-light lock serializes the writes and state changes, a short `usb_lock` only the
+   Kinesis enable and disable calls; `light_on` arms under the first, sleeps and polls unlocked, and applies the current
+   request under it, so a setter, `light_off`, `initialize`, `shutdown` or a second `light_on` landing anywhere in between
+   ends consistent (a setter while arming only records). `light_off` and `shutdown` disable at once, never waiting for
+   a stalled modulator write. A new driver that sleeps inside `light_on` should follow the same split.
 
 **[guarantee]** `MicroscopeControl.modulation_violations(light; set!, expect)` checks 1 to 5 on an initialized light
 whose `modulator` is a `MicroscopeControl.RecordingModulator` (it writes nothing, records everything, and can be made to

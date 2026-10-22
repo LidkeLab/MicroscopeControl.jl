@@ -6,8 +6,7 @@
 # (a USB write sets it outright, a MOD IN change adds its difference and is lost inside the settle window) and the
 # control-source read-back. The MOD IN voltage comes from a test modulator, `FakeModIn`, that turns the level
 # into register words at a TRUE scale, which may differ from the `per_volt` it believes. `NIDAQModulator` runs on a
-# strict test-local `FakeDAQ <: DAQ`. The Triggerscope serial path has no seam: `TriggerscopeModulator` gets its
-# pure parts only. Nothing here commands hardware.
+# strict test-local `FakeDAQ <: DAQ`. Nothing here commands hardware.
 #
 # Everything lives in a module so the fixtures (a `FakeDAQ <: DAQ`, test lights) stay out of `Main`, where the
 # contract tests walk the interface subtypes.
@@ -19,16 +18,17 @@ using MicroscopeControl
 const MC = MicroscopeControl
 const LSI = MC.HardwareInterfaces.LightSourceInterface
 const TCmod = MC.HardwareImplementations.TCubeLaserControl
-const Trig = MC.HardwareImplementations.Triggerscope
 const FK = Main.FakeKinesis
 const RecordingModulator = MC.RecordingModulator
+const LATENCIES = Float64[]   # seconds from a light_off / shutdown call to the output being disabled, in the stop-latency tests
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 "Silence the driver's prints and logs."
-quiet(f) = redirect_stdout(() -> Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger()), devnull)
+quiet(f) = get(ENV, "LSM_VERBOSE", "") == "1" ? f() :   # LSM_VERBOSE=1 shows what a test failure inside a quiet block printed
+           redirect_stdout(() -> Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger()), devnull)
 
 """
 A DAQ that refuses everything the real one would: only "AO" tasks, only with a range named, only a range the card has
@@ -41,10 +41,8 @@ mutable struct FakeDAQ <: MC.DAQ
     next_id::Int
     fail_write::Bool
     fail_delete::Bool
-    fail_setup::Bool    # the channel setup fails after the task is allocated
-    fail_clear::Bool    # ... and so does clearing it (then `UnreleasedTask`, as NIdaq throws)
 end
-FakeDAQ(; card_range=(0.0, 5.0)) = FakeDAQ(card_range, Dict{Int,NamedTuple{(:channel, :min, :max),Tuple{String,Float64,Float64}}}(), Tuple[], 0, false, false, false, false)
+FakeDAQ(; card_range=(0.0, 5.0)) = FakeDAQ(card_range, Dict{Int,NamedTuple{(:channel, :min, :max),Tuple{String,Float64,Float64}}}(), Tuple[], 0, false, false)
 
 MC.export_state(d::FakeDAQ) = (Dict{String,Any}("unique_id" => "FakeDAQ"), nothing, Dict{String,Any}())
 
@@ -56,13 +54,6 @@ function MC.createtask(d::FakeDAQ, tasktype::String, channel::String; min_val=no
     d.next_id += 1
     d.tasks[d.next_id] = (channel=channel, min=Float64(min_val), max=Float64(max_val))   # allocated
     push!(d.log, (:create, d.next_id, Float64(min_val), Float64(max_val)))
-    if d.fail_setup
-        cause = ErrorException("FakeDAQ: channel setup failed")
-        d.fail_clear && throw(MC.HardwareInterfaces.DAQInterface.UnreleasedTask(d.next_id, cause))
-        delete!(d.tasks, d.next_id)
-        push!(d.log, (:delete, d.next_id))
-        throw(cause)
-    end
     return d.next_id
 end
 
@@ -102,15 +93,22 @@ mutable struct FakeModIn <: MC.AbstractModulationControl
     attempts::Vector{Float64}
     opened::Int
     closed::Int
+    gate::Union{Nothing,Base.Event}   # a nonzero write waits on it, as on a stalled transport
+    blocked::Bool
 end
 FakeModIn(; id="mod1", per_volt, words_per_volt, v_max=5.0) =
-    FakeModIn(id, per_volt, words_per_volt, v_max, nothing, nothing, nothing, Float64[], Float64[], Float64[], 0, 0)
+    FakeModIn(id, per_volt, words_per_volt, v_max, nothing, nothing, nothing, Float64[], Float64[], Float64[], 0, 0, nothing, false)
 
 LSI.output_id(m::FakeModIn) = m.id
 function MC.setpower(m::FakeModIn, p::Float64)
     push!(m.attempts, p)
     m.failure === nothing || throw(m.failure)
     (p != 0 && m.fail_nonzero !== nothing) && throw(m.fail_nonzero)
+    if p != 0 && m.gate !== nothing
+        m.blocked = true
+        wait(m.gate)
+        m.blocked = false
+    end
     v = p / m.per_volt
     (isfinite(v) && 0.0 <= v <= m.v_max) || throw(ArgumentError("FakeModIn: $v V is out of reach [0, $(m.v_max)]"))
     push!(m.volts, v)
@@ -157,13 +155,15 @@ setlvl!(l, kind::Symbol, p::Float64) = kind === :cp ? setoutputpower!(l, p) : se
 requested(l, kind::Symbol) = kind === :cp ? l.pd.output_power_requested : l.drive_current
 
 "A fresh controller and an initialized TCube of `kind` (`:cc` open loop, `:cp` closed loop); `calls` is left as initialize made it."
-function ready(kind::Symbol; modulator=modin(kind), settle=0.0, strict=true, kw...)
+function ready(kind::Symbol; modulator=modin(kind), settle=0.0, strict=true, ext0=0, prepare=nothing, kw...)
     FK.reset!()
+    FK.ext_words[] = ext0   # what a previous session left on MOD IN
     FK.strict_handle[] = strict   # a call on a closed handle raises, as the DLL does
     FK.require_zero_mod[] = modulator !== nothing   # every USB setpoint at 0 V, or it is recorded in FK.violations
     empty!(LSI.MODULATOR_OUTPUTS)
     kind === :cp && (FK.limit_follows_pot[] = true)
     TCmod.MOD_SETTLE_S[] = settle
+    prepare === nothing || prepare()
     l = tcube(kind; modulator, kw...)
     quiet(() -> initialize(l))
     return l
@@ -183,6 +183,38 @@ struct NoField <: MC.LightSource end
     DAQInterface.showdevices(daq::NIdaq) = ["FakeDev1"]
     DAQInterface.showchannels(daq::NIdaq, channeltype::String, device::String) = String[]
 end
+
+# The vendor (DAQmx) boundary of the ranged `NIdaq.createtask` (allocate, add a channel, clear), replaced so the PRODUCTION
+# createtask body, its failed-setup cleanup included, runs without DAQmx. Nothing real is reachable through it.
+mutable struct VendorTask
+    cleared::Bool
+    channel::Any
+    writes::Vector{Float64}
+end
+const VENDOR = (live=VendorTask[], fail_add=Ref(false), fail_clear=Ref(false))
+vendor_alloc() = (t = VendorTask(false, nothing, Float64[]); push!(VENDOR.live, t); t)
+function vendor_add!(t, channel, lo, hi)
+    VENDOR.fail_add[] && error("vendor: add refused")
+    t.channel = (channel, lo, hi)
+    return nothing
+end
+function vendor_clear!(t)
+    VENDOR.fail_clear[] && error("vendor: clear refused")
+    t.cleared = true
+    filter!(x -> x !== t, VENDOR.live)
+    return nothing
+end
+@eval MC.HardwareImplementations.NIDAQcard begin
+    ao_alloc() = $(@__MODULE__).vendor_alloc()
+    ao_add!(task, channel, lo, hi) = $(@__MODULE__).vendor_add!(task, channel, lo, hi)
+    task_clear!(task) = $(@__MODULE__).vendor_clear!(task)
+end
+function MC.setvoltage(d::NIdaq, t::VendorTask, v::Float64)
+    t.channel === nothing && error("vendor: write to a task with no channel")
+    push!(t.writes, v)
+    return 1
+end
+MC.deletetask(d::NIdaq, t::VendorTask) = vendor_clear!(t)
 
 # Lights that break the convention, one way each, for `modulation_violations` to find.
 mutable struct BadLight <: MC.LightSource
@@ -326,21 +358,30 @@ end
         shutdown(light)
         @test daq.log[end-1:end] == [(:write, 1, 0.0), (:delete, 1)] && isempty(daq.tasks) && isempty(LSI.MODULATOR_OUTPUTS)
 
-        # createtask that allocates a task and then fails its channel setup: nothing leaks ...
-        empty!(LSI.MODULATOR_OUTPUTS)
-        daq = FakeDAQ(); daq.fail_setup = true
-        m = mk(daq); light = SimLight(modulator=m)
-        @test_throws "channel setup failed" initialize(light)
-        @test isempty(daq.tasks) && m.task === nothing && isempty(LSI.MODULATOR_OUTPUTS)
-        # ... and when clearing it fails too, the allocated task is kept (and so is the claim) until shutdown deletes it.
-        daq = FakeDAQ(); daq.fail_setup = true; daq.fail_clear = true
-        m = mk(daq); light = SimLight(modulator=m)
-        @test_throws "channel setup failed" quiet(() -> initialize(light))
-        @test length(daq.tasks) == 1 && m.task !== nothing && !m.configured && LSI.MODULATOR_OUTPUTS[MC.output_id(m)] === light
-        @test_throws r"already driving" initialize(SimLight(modulator=mk(daq)))
-        daq.fail_setup = false; daq.fail_clear = false
+        # The production NIdaq.createtask on the vendor fake. The ranged channel is added ...
+        empty!(LSI.MODULATOR_OUTPUTS); empty!(VENDOR.live)
+        mn = NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=22.42, daq=NIdaq())
+        light = SimLight(modulator=mn)
+        initialize(light)
+        @test length(VENDOR.live) == 1 && VENDOR.live[1].channel == ("Dev1/ao1", 0.0, 5.0) && VENDOR.live[1].writes == [0.0]
+        shutdown(light)
+        @test isempty(VENDOR.live) && isempty(LSI.MODULATOR_OUTPUTS)
+        # ... a task allocated and then refused its channel is cleared: nothing leaks ...
+        VENDOR.fail_add[] = true
+        light = SimLight(modulator=NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=22.42, daq=NIdaq()))
+        @test_throws "add refused" initialize(light)
+        @test isempty(VENDOR.live) && isempty(LSI.MODULATOR_OUTPUTS)
+        # ... and when clearing it fails too, production createtask throws UnreleasedTask: the modulator keeps the task (and
+        # the light the claim) until shutdown deletes it. Removing that handling from createtask fails these.
+        VENDOR.fail_clear[] = true
+        m = NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=22.42, daq=NIdaq())
+        light = SimLight(modulator=m)
+        @test_throws "add refused" quiet(() -> initialize(light))
+        @test length(VENDOR.live) == 1 && m.task === VENDOR.live[1] && !m.configured && LSI.MODULATOR_OUTPUTS[MC.output_id(m)] === light
+        @test_throws r"already driving" initialize(SimLight(modulator=NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=22.42, daq=NIdaq())))
+        VENDOR.fail_add[] = false; VENDOR.fail_clear[] = false
         quiet(() -> shutdown(light))                             # no channel was ever added: nothing to zero, only the delete
-        @test isempty(daq.tasks) && m.task === nothing && isempty(LSI.MODULATOR_OUTPUTS) && !any(e -> e[1] == :write, daq.log)
+        @test isempty(VENDOR.live) && m.task === nothing && isempty(LSI.MODULATOR_OUTPUTS)
 
         # A failed re-initialize (the 0 V write fails) keeps the live task AND the claim; shutdown then releases both.
         empty!(LSI.MODULATOR_OUTPUTS)
@@ -413,132 +454,6 @@ end
         @test_throws ArgumentError MC.createtask(daq, "DO", "Dev1/port0/line0"; min_val=0.0, max_val=5.0)
     end
 
-    # A `Triggerscope4` holds an unopened `SerialPort`, which libserialport only builds for a port the machine has.
-    # `COM3` is the driver's default; the others are device nodes that exist on a Linux box without a Triggerscope.
-    function a_scope()
-        for port in ("COM3", "/dev/ttyS0", "/dev/tty")
-            try
-                return Triggerscope4(; portname=port)
-            catch
-            end
-        end
-        return nothing
-    end
-    scope = a_scope()
-    scope === nothing && @warn "no serial port name libserialport accepts on this machine; the TriggerscopeModulator tests are skipped"
-    scope === nothing || @testset "TriggerscopeModulator: pure parts" begin
-        @test scope.lock isa ReentrantLock
-        @test Trig.dac_range_volts(ZEROTOFIVE) == (0.0, 5.0)
-        @test Trig.dac_range_volts(ZEROTOTEN) == (0.0, 10.0)
-        @test Trig.dac_range_volts(PLUSMINUS5) == (-5.0, 5.0)
-        @test Trig.dac_range_volts(PLUSMINUS10) == (-10.0, 10.0)
-        @test Trig.dac_range_volts(PLUSMINUS2_5) == (-2.5, 2.5)
-        m = TriggerscopeModulator(; scope, dac=3, range=ZEROTOFIVE, per_volt=22.42)
-        @test MC.output_id(m) == "Triggerscope $(scope.portname) DAC 3" == quiet(() -> Trig.dac_output(scope, 3)).output_id
-        # Construction.
-        @test_throws UndefKeywordError TriggerscopeModulator(; scope, dac=3, per_volt=22.42)    # range is required
-        @test_throws UndefKeywordError TriggerscopeModulator(; scope, dac=3, range=ZEROTOFIVE)  # so is per_volt
-        @test_throws ArgumentError TriggerscopeModulator(; scope, dac=0, range=ZEROTOFIVE, per_volt=1.0)
-        @test_throws ArgumentError TriggerscopeModulator(; scope, dac=scope.dacoutputs + 1, range=ZEROTOFIVE, per_volt=1.0)
-        for bad in (0.0, -1.0, NaN)
-            @test_throws ArgumentError TriggerscopeModulator(; scope, dac=3, range=ZEROTOFIVE, per_volt=bad)
-        end
-        # The arithmetic and the reach, in the range's own span.
-        @test Trig.volts(m, 22.42) ≈ 1.0
-        @test Trig.volts(m, 0.0) == 0.0
-        @test Trig.volts(m, 5 * 22.42) ≈ 5.0
-        for p in (-1.0, 5 * 22.42 + 1, NaN, Inf)
-            @test_throws ArgumentError Trig.volts(m, p)
-        end
-        for rng in (PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5)                  # bipolar: a negative level is still refused
-            mbip = TriggerscopeModulator(; scope, dac=7, range=rng, per_volt=1.0)
-            @test_throws ArgumentError Trig.volts(mbip, -0.5)
-            @test_throws ArgumentError MC.setpower(mbip, -0.5)
-            @test Trig.volts(mbip, 0.5) == 0.5
-        end
-        m10 = TriggerscopeModulator(; scope, dac=4, range=ZEROTOTEN, per_volt=15.0)
-        @test Trig.volts(m10, 150.0) ≈ 10.0
-        @test_throws ArgumentError Trig.volts(m10, 151.0)
-        # ... and what the DAC would be sent for it.
-        scope.dacranges[3] = ZEROTOFIVE
-        @test Trig.volttooutput(scope, 3, 1.0) == round(Int, 65535 / 5)
-        # setpower refuses before touching the serial port: out of reach (ArgumentError), not opened, range moved.
-        @test_throws ArgumentError MC.setpower(m, 1e9)
-        @test_throws "before initialize" MC.setpower(m, 1.0)
-        m.is_open = true
-        scope.dacranges[3] = PLUSMINUS10
-        @test_throws r"not ZEROTOFIVE" MC.setpower(m, 1.0)
-        m.is_open = false
-        # The compause warning, from the pure check initialize runs first.
-        scope.compause = 0.1
-        @test_logs (:warn, r"compause = 0.1") Trig.check_compause(m)
-        scope.compause = 0.0
-        @test_logs Trig.check_compause(m)
-        # The range check, the encoding and the cache run under the scope's lock: with another task holding it,
-        # nothing changes and nothing is sent. (The waiting task is interrupted before it can reach the serial port.)
-        before = scope.dacranges[5]
-        lock(scope.lock)
-        waiter = @async try Trig.setrange(scope, 5, before == ZEROTOTEN ? ZEROTOFIVE : ZEROTOTEN) catch e; e end
-        sleep(0.1)
-        @test scope.dacranges[5] == before                    # the cache is updated under the lock, not before it
-        schedule(waiter, InterruptException(); error=true)
-        @test fetch(waiter) isa InterruptException
-        m6 = TriggerscopeModulator(; scope, dac=6, range=ZEROTOFIVE, per_volt=22.42)
-        m6.is_open = true                                      # the scope's range for DAC 6 is not ZEROTOFIVE: setpower would refuse
-        waiter = @async try MC.setpower(m6, 1.0) catch e; e end
-        sleep(0.1)
-        @test !istaskdone(waiter)                             # ... but only after it holds the lock
-        schedule(waiter, InterruptException(); error=true)
-        @test fetch(waiter) isa InterruptException
-        unlock(scope.lock)
-        # The serial transaction replaced by a recorder (`COMMAND_SEAM`): no port is touched. A RANGE command that fails leaves the
-        # device's range ambiguous, so the cache is not changed and the DAC refuses writes (a requested 0 V would else be encoded
-        # for the wrong range) until a RANGE succeeds.
-        sc = a_scope(); sc.compause = 0.0
-        sent = String[]; failing = Ref(false)
-        Trig.COMMAND_SEAM[] = (scope_, cmd) -> (push!(sent, cmd); failing[] && startswith(cmd, "RANGE") ? error("serial gone") : "OK")
-        try
-            Trig.setrange(sc, 8, ZEROTOFIVE)
-            @test sc.dacranges[8] == ZEROTOFIVE && sent == ["RANGE8,1\n"] && !(8 in sc.range_unknown)
-            failing[] = true
-            @test_throws "serial gone" Trig.setrange(sc, 8, PLUSMINUS10)
-            @test sc.dacranges[8] == ZEROTOFIVE && 8 in sc.range_unknown            # not trusted, not changed
-            n = length(sent)
-            @test_throws "range is unknown" Trig.setdac(sc, 8, 0.0)
-            @test length(sent) == n                                                  # nothing was sent for it
-            failing[] = false
-            Trig.setrange(sc, 8, ZEROTOFIVE)
-            @test !(8 in sc.range_unknown)
-            Trig.setdac(sc, 8, 0.0)
-            @test sent[end] == "DAC8,0\n"
-            # A modulator through the same seam: its lifecycle, its writes, and its claim across a failed re-initialize.
-            empty!(LSI.MODULATOR_OUTPUTS)
-            tm = TriggerscopeModulator(; scope=sc, dac=9, range=ZEROTOFIVE, per_volt=22.42)
-            light = SimLight(modulator=tm)
-            empty!(sent)
-            initialize(light)
-            @test sent == ["RANGE9,1\n", "DAC9,0\n"] && tm.is_open && MC.HardwareInterfaces.LightSourceInterface.holds_resources(tm)
-            light_on(light); setpower(light, 22.42)
-            @test sent[end] == "DAC9,13107\n"
-            failing[] = true
-            @test_throws "serial gone" quiet(() -> initialize(light))                # a failed re-initialize ...
-            @test tm.is_open && LSI.MODULATOR_OUTPUTS[MC.output_id(tm)] === light     # ... keeps its claim
-            @test 9 in sc.range_unknown
-            failing[] = false
-            shutdown(light)                                                          # re-sets the range, then zeroes
-            @test sent[end-1:end] == ["RANGE9,1\n", "DAC9,0\n"] && !tm.is_open && isempty(LSI.MODULATOR_OUTPUTS)
-        finally
-            Trig.COMMAND_SEAM[] = nothing
-        end
-        # The positional constructor from before the lock field (19 arguments) still builds a scope, with its own lock.
-        fields = fieldnames(Triggerscope4)[1:19]
-        scope2 = Triggerscope4(getfield.(Ref(scope), fields)...)
-        @test scope2.lock isa ReentrantLock && scope2.lock !== scope.lock && scope2.portname == scope.portname
-        a, d, c = MC.export_state(m)
-        @test a["output_id"] == MC.output_id(m) && a["dac"] == 3 && a["range"] == "ZEROTOFIVE" && a["per_volt"] == 22.42
-        @test shutdown(m) === nothing   # not open: no serial write
-    end
-
     @testset "SimLight and SimDiodeLaser with a modulator" begin
         # SimLight: the plain-setpower reference.
         empty!(LSI.MODULATOR_OUTPUTS)
@@ -602,6 +517,21 @@ end
         n = length(rec.writes)
         quiet(() -> setcurrent!(sim, 30.0))                 # a later setter does not drive the modulator
         @test length(rec.writes) == n
+
+        # A light_off or an initialize during the settle owns the output: the delayed activation writes nothing more.
+        for how in (:light_off, :initialize)
+            empty!(LSI.MODULATOR_OUTPUTS)
+            rec = RecordingModulator(id="sup-$how")
+            sim = SimDiodeLaser(modulator=rec, settle_s=0.4); initialize(sim)
+            quiet(() -> setcurrent!(sim, 40.0))
+            act = @async try light_on(sim) catch e; e end
+            sleep(0.1)
+            quiet(() -> how === :light_off ? light_off(sim) : initialize(sim))
+            n = length(rec.attempts)
+            @test timedwait(() -> istaskdone(act), 10.0) === :ok
+            @test occursin("superseded", sprint(showerror, fetch(act)))
+            @test length(rec.attempts) == n && !sim.properties.is_on && !sim.output_enabled
+        end
 
         # An interrupted 0 V write still switches off first.
         for mk in (() -> SimLight(modulator=RecordingModulator(id="int1")), () -> SimDiodeLaser(modulator=RecordingModulator(id="int2")))
@@ -717,7 +647,7 @@ end
             empty!(FK.calls)
             quiet(() -> light_off(l))
             @test !FK.enabled() && m.volts[end] == 0.0 && FK.ext_words[] == 0
-            @test idx("MOD 0.0") < idx("LD_SetLaserSetPoint") < idx("LD_DisableOutput")   # 0 V, then USB 0 and the disable
+            @test idx("LD_DisableOutput") < idx("MOD 0.0") && "LD_SetLaserSetPoint" ∉ FK.calls   # off at once, then 0 V; no USB write
             TCmod.MOD_SETTLE_S[] = 0.0
         end
 
@@ -829,7 +759,7 @@ end
             quiet(() -> (setlvl!(l, kind, lv); light_on(l)))
             empty!(FK.calls)
             quiet(() -> shutdown(l))
-            @test idx("MOD 0.0") < idx("LD_DisableOutput") < idx("LD_SetControlSource") < idx("LD_Close")
+            @test idx("LD_DisableOutput") < idx("MOD 0.0") < idx("LD_SetControlSource") < idx("LD_Close")
             @test FK.source[] == 5 && m.closed == 1 && isempty(LSI.MODULATOR_OUTPUTS) && !FK.enabled()
         end
 
@@ -904,6 +834,7 @@ end
                 return !FK.enabled() && FK.ext_words[] == 0 && !l.arming
             end
             for (pname, (op, nth)) in points, (iname, intruder) in intruders
+              @testset "$iname at $pname" begin
                 l = ready(kind; settle=0.3)
                 quiet(() -> setlvl!(l, kind, lv))
                 tasks = Task[]
@@ -914,11 +845,12 @@ end
                     FK.hook!(op, get(FK.op_counts, op, 0) + nth, () -> (push!(tasks, @async run_intruder()); yield()))
                 end
                 actres = Ref{Any}(nothing)
+                joined = Ref(:timed_out)
                 quiet() do
                     actres[] = try light_on(l) catch e; e end
-                    # bounded join: a deadlock fails here
-                    @test timedwait(() -> all(istaskdone, tasks), 20.0) === :ok
+                    joined[] = timedwait(() -> all(istaskdone, tasks), 20.0)   # bounded join: a deadlock fails below
                 end
+                @test joined[] === :ok
                 @test !isempty(tasks)
                 for t in tasks
                     istaskdone(t) && @test !(fetch(t) isa Exception)
@@ -933,6 +865,7 @@ end
                 quiet(() -> light_on(l))
                 @test settled(l) && l.properties.is_on && isempty(FK.violations)
                 quiet(() -> light_off(l))
+              end
             end
             TCmod.MOD_SETTLE_S[] = 0.0
         end
@@ -946,11 +879,110 @@ end
             @test_throws "LD_DisableOutput" quiet(() -> shutdown(l))
             @test !FK.opened[] && l.disable_pending && l.properties.is_on && FK.enabled()
             @test isempty(FK.violations)                                        # (the USB zero was skipped or at 0 V throughout)
+            # While the output is still enabled the front knob is NOT handed the controller back, and the output is not given up.
+            @test FK.source[] == 3 && l.source_before == 5 && l.modulator.closed == 0 && LSI.MODULATOR_OUTPUTS["mod1"] === l
             delete!(FK.status, "LD_DisableOutput")
             empty!(FK.calls)
             quiet(() -> shutdown(l))                                            # reopens deliberately for the disable
-            @test FK.calls[1] == "LD_Open" && "LD_DisableOutput" in FK.calls && FK.calls[end] == "LD_Close"
+            kcalls = filter(c -> startswith(c, "LD_"), FK.calls)
+            @test kcalls[1] == "LD_Open" && "LD_DisableOutput" in kcalls && kcalls[end] == "LD_Close"
             @test !l.disable_pending && !l.properties.is_on && !FK.enabled() && !FK.opened[] && isempty(LSI.MODULATOR_OUTPUTS)
+            @test FK.source[] == 5 && l.modulator.closed == 1                     # restored and released only now
+        end
+
+        @testset "an early initialize failure still disables the output" begin
+            # The controller was left enabled; LD_StartPolling fails, or the first wait is interrupted. The cleanup
+            # must disable it (unconfirmed-off until a disable succeeds) and keep the pending state across the close.
+            for how in (:polling, :interrupt)
+                FK.reset!(); empty!(LSI.MODULATOR_OUTPUTS)
+                FK.strict_handle[] = true; FK.require_zero_mod[] = true
+                FK.setbits!(FK.ENABLED)
+                how === :polling ? (FK.polling_ok[] = false) : FK.hook!("LD_StartPolling", 1, () -> throw(InterruptException()))
+                kind === :cp && (FK.limit_follows_pot[] = true)
+                l = tcube(kind; modulator=modin(kind))
+                how === :polling ? (@test_throws ErrorException quiet(() -> initialize(l))) :
+                                   (@test_throws InterruptException quiet(() -> initialize(l)))
+                @test !FK.enabled() && !l.properties.is_on && !l.disable_pending && !FK.opened[]
+                @test isempty(FK.violations) && isempty(LSI.MODULATOR_OUTPUTS)
+            end
+            # ... and when that disable fails too, a later shutdown still disables it.
+            FK.reset!(); empty!(LSI.MODULATOR_OUTPUTS)
+            FK.strict_handle[] = true; FK.require_zero_mod[] = true
+            FK.setbits!(FK.ENABLED); FK.polling_ok[] = false; FK.fail!("LD_DisableOutput")
+            kind === :cp && (FK.limit_follows_pot[] = true)
+            l = tcube(kind; modulator=modin(kind))
+            @test_throws ErrorException quiet(() -> initialize(l))
+            @test FK.enabled() && l.disable_pending && !FK.opened[]
+            delete!(FK.status, "LD_DisableOutput")
+            quiet(() -> shutdown(l))
+            @test !FK.enabled() && !l.disable_pending && !FK.opened[]
+        end
+
+        @testset "a modulator that is not open counts as an unknown level: no USB setpoint at the first initialize" begin
+            # A previous session left MOD IN at a level, and the controller enabled. The first initialize disables it
+            # without a USB write (the claim is not held yet, so the level is unknown) and then opens the modulator at 0 V.
+            l = ready(kind; ext0=1500, prepare=() -> FK.setbits!(FK.ENABLED))
+            @test isempty(FK.violations) && !FK.enabled() && FK.ext_words[] == 0 && l.modulator.volts == [0.0]
+            @test isempty(FK.setpoint_log)
+        end
+
+        @testset "light_off and shutdown disable promptly, whatever the activation is waiting on" begin
+            LAT = 0.1   # seconds from the call to the output being disabled
+            function latency(trigger)    # `trigger()` starts the off call in a task; returns seconds until the output is off
+                t0 = time()
+                task = trigger()
+                ok = timedwait(() -> !FK.enabled(), 5.0; pollint=0.001)
+                lat = time() - t0
+                @test ok === :ok
+                push!(LATENCIES, lat)
+                return lat, task
+            end
+            function joined(tasks...)
+                @test timedwait(() -> all(istaskdone, tasks), 20.0) === :ok
+            end
+            # (a) during the confirm poll (the read-back never matches, so the poll runs to its time-out)
+            l = ready(kind; settle=0.0)
+            quiet(() -> setlvl!(l, kind, lv))
+            TCmod.SETPOINT_CONFIRM_TIMEOUT_S[] = 1.5
+            FK.setpoint_readback[] = UInt16(1)
+            act = @async try quiet(() -> light_on(l)) catch e; e end
+            @test timedwait(() -> get(FK.op_counts, "LD_GetLaserSetPoint", 0) >= 5, 5.0; pollint=0.001) === :ok
+            lat, off = latency(() -> @async(quiet(() -> light_off(l))))
+            @test lat < LAT
+            joined(act, off)
+            @test !FK.enabled() && FK.ext_words[] == 0 && occursin("superseded", sprint(showerror, fetch(act)))
+            TCmod.SETPOINT_CONFIRM_TIMEOUT_S[] = 0.05
+            # (b) during the lock check's sleep (closed loop: lock_check_s is long)
+            if kind === :cp
+                l = ready(kind; lock_check_s=1.0)
+                quiet(() -> setlvl!(l, kind, lv))
+                act = @async try quiet(() -> light_on(l)) catch e; e end
+                base = get(FK.op_counts, "LD_GetLaserSetPoint", 0)
+                @test timedwait(() -> get(FK.op_counts, "LD_GetLaserSetPoint", 0) >= 2 && l.arming, 5.0; pollint=0.001) === :ok
+                sleep(0.2)                                   # inside check_lock's sleep
+                lat, off = latency(() -> @async(quiet(() -> light_off(l))))
+                @test lat < LAT
+                joined(act, off)
+                @test !FK.enabled() && FK.ext_words[] == 0
+            end
+            # (c) during a MOD IN write blocked on its transport; light_off and shutdown both
+            for which in (:light_off, :shutdown)
+                l = ready(kind); m = l.modulator
+                quiet(() -> setlvl!(l, kind, lv))
+                m.gate = Base.Event()
+                act = @async try quiet(() -> light_on(l)) catch e; e end
+                @test timedwait(() -> m.blocked, 5.0; pollint=0.001) === :ok
+                lat, off = latency(() -> @async(quiet(() -> (which === :light_off ? light_off(l) : shutdown(l)))))
+                @test lat < LAT
+                @test !istaskdone(off) || true
+                notify(m.gate)                               # the transport comes back
+                joined(act, off)
+                @test !FK.enabled() && FK.ext_words[] == 0 && isempty(FK.violations)
+                @test occursin("superseded", sprint(showerror, fetch(act)))
+                which === :light_off || @test m.closed == 1
+            end
+            TCmod.MOD_SETTLE_S[] = 0.0
+            @info "stop latency: light_off/shutdown call to output disabled (s)" worst=maximum(LATENCIES) bound=LAT n=length(LATENCIES)
         end
 
         @testset "a failed 0 V write skips the USB setpoint and still disables" begin
@@ -1000,7 +1032,7 @@ end
             @test_throws r"refused" quiet(() -> light_on(l))
             @test !FK.enabled() && !l.properties.is_on
             @test FK.ext_words[] == 0 && m.volts[end] == 0.0
-            @test !isempty(FK.setpoint_log) && all(e -> e[1] == 0 && e[2] == 0, FK.setpoint_log)   # every USB write at 0 V
+            @test all(e -> e[1] == 0 && e[2] == 0, FK.setpoint_log) && isempty(FK.violations)   # no USB write at a level (the cleanup disables first and sends none)
         end
 
         @testset "shutdown retried after the handle closed touches no closed handle" begin

@@ -85,6 +85,52 @@ modulated_request(light::TCubeLaser{ConstantCurrent}) = isnan(light.drive_curren
 modulated_request(light::TCubeLaser{ConstantPhotocurrent}) =
     isnan(light.pd.output_power_requested) ? 0.0 : light.pd.output_power_requested
 
+"""
+    usb_locked(f, light::TCubeLaser)
+
+Run `f()` (one Kinesis enable or disable call) holding `light.usb_lock` when the light has a modulator; without one `f()`
+runs as it always did. Nothing else is called under it, and it is never held while `light.lock` is taken.
+"""
+usb_locked(f, light::TCubeLaser) = light.modulator === nothing ? f() : lock(f, light.usb_lock)
+
+"""
+    enable_output!(light::TCubeLaser)
+
+`LD_EnableOutput`. With a modulator it runs under `usb_lock` after checking that the activation that calls it is still
+current (`arm_gen == generation`), so no enable follows a `light_off`, `shutdown`, `initialize` or newer `light_on`.
+"""
+function enable_output!(light::TCubeLaser)
+    serialNo = light.serialNo
+    usb_locked(light) do
+        light.modulator === nothing || light.arm_gen[] == light.generation[] || error(
+            "TCubeLaser $serialNo: enable refused: superseded by a light_off, initialize, shutdown or another light_on")
+        light.modulator === nothing || (light.properties.is_on = true)   # on (or unknown) from the moment the enable is sent, never after a supersession
+        check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
+    end
+    return nothing
+end
+
+"""
+    disable_now!(light::TCubeLaser)
+
+`LD_DisableOutput` under `usb_lock`, at once: it needs neither `lock` nor a MOD IN write. The output is recorded off
+only after it succeeds; a failure leaves `disable_pending` set and throws.
+"""
+function disable_now!(light::TCubeLaser)
+    serialNo = light.serialNo
+    usb_locked(light) do
+        try
+            check_err(LD_DisableOutput(serialNo), "LD_DisableOutput", serialNo)
+        catch
+            light.disable_pending = true
+            rethrow()
+        end
+        light.disable_pending = false
+        light.properties.is_on = false
+    end
+    return nothing
+end
+
 "Whether `light` holds its modulator's output, i.e. the modulator is open from an earlier `initialize`."
 modulator_open(light::TCubeLaser) = light.modulator !== nothing && holds_output(light, output_id(light.modulator))
 
@@ -153,6 +199,9 @@ closing the handle before it throws. A failed `close_modulator!` keeps the claim
 """
 function end_modulation!(light::TCubeLaser)
     light.modulator === nothing && return nothing
+    # The output is still (possibly) enabled: handing the controller back to the front knob, or giving up the output
+    # to another light, would be wrong. Both wait for a successful disable.
+    light.disable_pending && return nothing
     err = nothing
     if light.source_before !== nothing
         try
@@ -182,7 +231,7 @@ cable, an unarmed control source and a MOD IN change the controller lost all lea
 catches interleavings: a `light_off` during the wait leaves a stale read-back (65530), a level change from another
 task is lost and the register shows the old level.
 """
-function confirm_modulated_setpoint(light::TCubeLaser, code::UInt16)
+function confirm_modulated_setpoint(light::TCubeLaser, code::UInt16; superseded=() -> false)
     serialNo = light.serialNo
     tol = max(MOD_CONFIRM_WORDS, ceil(Int, MOD_CONFIRM_FRACTION * Int(code)))
     close_enough(r) = abs(Int(r) - Int(code)) <= tol
@@ -190,8 +239,10 @@ function confirm_modulated_setpoint(light::TCubeLaser, code::UInt16)
     readback = LD_GetLaserSetPoint(serialNo)
     while !close_enough(readback) && time() < deadline
         sleep(0.02)
+        superseded() && break
         readback = LD_GetLaserSetPoint(serialNo)
     end
+    superseded() && return nothing   # the caller reports it
     close_enough(readback) || error(
         "TCubeLaser $serialNo: the modulator's level was expected to put the setpoint register at $(code) (within $(tol) words) " *
         "but the controller reports $(readback) after $(SETPOINT_CONFIRM_TIMEOUT_S[]) s. Check the modulator's per_volt against " *
@@ -209,37 +260,58 @@ with_light_lock(f, light::TCubeLaser) = light.modulator === nothing ? f() : lock
 """
     mod_zero!(light::TCubeLaser) -> Nothing or the exception
 
-Write level 0 to the modulator if the light has one and holds its output (it is open); never throws (an
-`InterruptException` is returned). `nothing` means the MOD IN level is known to be 0 (or is not this light's: no modulator,
-or not opened). A caller sends a USB setpoint only when this returned `nothing`: a USB write at a MOD IN level would
-absorb the level.
+Write level 0 to the modulator if the light has one; never throws (an `InterruptException` is returned). `nothing` means
+the MOD IN level is known to be 0, or the light has no modulator. A modulator that is not open (the light holds no claim)
+is NOT known to be at 0: an error is returned. A caller sends a USB setpoint only when this returned `nothing`: a USB write
+at a MOD IN level would absorb the level.
 """
-mod_zero!(light::TCubeLaser) = modulator_open(light) ? zero_modulator!(light) : nothing
+function mod_zero!(light::TCubeLaser)
+    light.modulator === nothing && return nothing
+    # Not open: the output is not this light's yet (or any more), its level is unknown, so no USB setpoint is safe.
+    modulator_open(light) || return ErrorException("the modulator is not open, so its level is unknown")
+    return zero_modulator!(light)
+end
 
 """
     light_on_modulated(light::TCubeLaser)
 
-[`light_on`](@ref) for a light with a modulator, in two critical sections of the light's lock around a sleep:
+[`light_on`](@ref) for a light with a modulator, in three stages around two waits (see "Locking" on [`TCubeLaser`](@ref)):
 
-1. **Arm** (under the lock): bump `generation` (superseding anything in flight) and record it; write level 0 to the
-   modulator and require that write to succeed; `require_clamp` and `check_scale!` (now at 0 V, so their USB setpoints
-   act as plain USB); `LD_EnableOutput`; USB setpoint 0 and its read-back (a setpoint sent while off is ignored, so the
-   base is known only after a write made while on); set `arming`.
-2. Sleep [`MOD_SETTLE_S`](@ref), unlocked. A level setter meanwhile only records; `light_off`, `initialize`, `shutdown`
-   and another `light_on` can take the lock and bump `generation`.
-3. **Apply** (under the lock): if `generation` moved, throw "superseded" and touch nothing (whoever bumped it owns the
-   hardware). Otherwise read the CURRENT request, put it on the modulator, [`confirm_modulated_setpoint`](@ref) and
-   `check_lock` (closed loop), clear `arming`: the light is on.
+1. **Arm**, under `light.lock`: bump `generation` and record it (`arm_gen`); write level 0 to the modulator and require that
+   write to succeed; `require_clamp` and `check_scale!` (now at 0 V, so their USB setpoints act as plain USB); the enable
+   under `usb_lock` after a generation check ([`enable_output!`](@ref)); USB setpoint 0 and its read-back (a setpoint sent
+   while off is ignored, so the base is known only after a write made while on); set `arming`.
+2. Sleep [`MOD_SETTLE_S`](@ref), unlocked. A level setter meanwhile only records. `light_off` and `shutdown` disable at
+   once; `initialize` and another `light_on` take the lock; all of them bump `generation`.
+3. **Apply**, under `light.lock`: if `generation` moved, throw "superseded" and touch nothing (whoever bumped it owns the
+   hardware). Otherwise read the CURRENT request and put it on the modulator. Then, unlocked, poll the read-back
+   ([`confirm_modulated_setpoint`](@ref)) and run `check_lock` (closed loop), re-checking `generation` at each step. Last,
+   under the lock, apply a request a setter recorded meanwhile and clear `arming`: the light is on.
 
-A throw in either critical section, or an interrupt in the sleep, writes level 0, sends the USB zero only if that
-succeeded, disables and rethrows. `[limitation]` The arm section holds the lock through the preflight's fresh reads (and
-the reference check's emission when it runs), a fraction of a second to about a second, so a `light_off` waits that long.
+A throw while this activation is still current writes level 0, sends no USB zero (the output is disabled first), disables
+and rethrows; if `generation` moved, it throws "superseded" and touches nothing. An interrupt in the sleep ends dark the
+same way. `light_off` waits for neither lock before it disables.
 """
 function light_on_modulated(light::TCubeLaser)
     serialNo = light.serialNo
     gen = 0
+    current() = light.generation[] == gen
+    superseded_error() = ErrorException(
+        "TCubeLaser $serialNo: light_on was superseded by a light_off, initialize, shutdown or another light_on; it wrote nothing more")
+    check_current_activation() = current() || throw(superseded_error())
+    # Cleanup that runs only while this activation is still the current one: after a supersession the superseder owns the
+    # hardware, and a stale activation touching it would undo the superseder.
+    function end_dark(what)
+        lock(light.lock) do
+            if current()
+                light.arming = false
+                disable_after_failure(light, what)
+            end
+        end
+    end
     lock(light.lock) do
         gen = bump_generation!(light)   # supersedes any activation in flight and any earlier arming
+        light.arm_gen[] = gen
         light.arming = false
         # 0 V first, and it must succeed: every USB setpoint below then acts as plain USB.
         try
@@ -258,14 +330,15 @@ function light_on_modulated(light::TCubeLaser)
         light.pd isa PhotodiodeLoop && light.pd.zero_failed && @warn "TCubeLaser $serialNo: the last setpoint zero failed, so the controller's stored setpoint may be stale (after a failed re-check, the calibration-reference word read as a power target); the first moments after this enable may run toward it, bounded by the programmed clamp"
         has_request(light) || @warn "TCubeLaser $(serialNo): light_on before any setpoint was requested; sending setpoint 0, since the controller's stored setpoint cannot be trusted"
         intended_code(light)   # the current request against the ceiling, before anything is enabled
-        light.properties.is_on = true
         try
-            check_err(LD_EnableOutput(serialNo), "LD_EnableOutput", serialNo)
+            enable_output!(light)                       # gated: no enable after a light_off
+            check_current_activation()
             send_setpoint(light, UInt16(0))
+            light.pd isa PhotodiodeLoop && (light.pd.zero_failed = false)   # a zero landed with the output on
             light.arming = true
         catch
-            light.arming = false
-            disable_after_failure(light, "enable or setpoint 0 after enable")
+            current() && (light.arming = false; disable_after_failure(light, "enable or setpoint 0 after enable"))
+            current() || throw(superseded_error())
             rethrow()
         end
     end
@@ -273,26 +346,40 @@ function light_on_modulated(light::TCubeLaser)
         sleep(MOD_SETTLE_S[])
     catch
         # An interrupt in the wait: the light is enabled and arming; end it dark unless something else owns it now.
-        lock(light.lock) do
-            if light.generation[] == gen
-                light.arming = false
-                disable_after_failure(light, "the settle wait of light_on")
-            end
+        end_dark("the settle wait of light_on")
+        rethrow()
+    end
+    code = UInt16(0)
+    written = 0.0
+    lock(light.lock) do
+        check_current_activation()                      # superseded: nothing is written
+        try
+            code = intended_code(light)                 # the current request, checked against the ceiling now
+            written = modulated_request(light)
+            setpower(light.modulator, written)          # may block on its transport; light_off does not need this lock
+        catch
+            end_dark("modulator level after the settle wait")
+            rethrow()
         end
+    end
+    try
+        confirm_modulated_setpoint(light, code; superseded=() -> !current())
+        check_current_activation()
+        check_lock(light, code)                         # reads only, with sleeps: unlocked
+        check_current_activation()
+    catch e
+        current() || throw(superseded_error())
+        end_dark("the confirm or lock check of light_on")
         rethrow()
     end
     lock(light.lock) do
-        light.generation[] == gen || error(
-            "TCubeLaser $serialNo: light_on was superseded by a light_off, initialize, shutdown or another light_on while it waited; it wrote nothing more")
+        check_current_activation()
         try
-            code = intended_code(light)             # the current request, checked against the ceiling now
-            setpower(light.modulator, modulated_request(light))
-            confirm_modulated_setpoint(light, code)
-            check_lock(light, code)
-            light.arming = false                    # on
+            req = modulated_request(light)
+            req == written || setpower(light.modulator, req)   # a setter recorded a newer request while arming
+            light.arming = false                               # on
         catch
-            light.arming = false
-            disable_after_failure(light, "modulator level or its confirm after the settle wait")   # writes level 0 first
+            end_dark("applying a request recorded during arming")
             rethrow()
         end
     end
@@ -340,4 +427,100 @@ function set_level_modulated!(light::TCubeLaser, p::Float64)
     (light.properties.is_on && !light.arming) || return false
     apply_level!(light, p, () -> disable_after_failure(light, "setpoint change through the modulator"))
     return true
+end
+
+"""
+    disable_after_failure_modulated(light::TCubeLaser, what)
+
+[`disable_after_failure`](@ref) for a light with a modulator, never throwing: disable at once ([`disable_now!`](@ref); no
+wait for a MOD IN write), then write level 0. No USB zero is sent (the output is off, so the controller would ignore it, and
+one at a MOD IN level would absorb it). `properties.is_on` is false only after the disable succeeded.
+"""
+function disable_after_failure_modulated(light::TCubeLaser, what::AbstractString)
+    serialNo = light.serialNo
+    disabled, offerr = false, nothing
+    try
+        disable_now!(light)
+        disabled = true
+    catch err
+        offerr = err
+    end
+    zerr = modulator_open(light) ? zero_modulator!(light) : nothing
+    zeronote = zerr === nothing ? "" : "; writing level 0 to the modulator failed ($zerr)"
+    if disabled
+        @error "TCubeLaser $serialNo: $what failed; output disabled$zeronote"
+    else
+        @error "TCubeLaser $serialNo: $what failed and the disable failed ($offerr)$zeronote; the output may still be ON"
+    end
+    return disabled
+end
+
+"""
+    light_off_modulated(light::TCubeLaser)
+
+`light_off` for a light with a modulator: bump `generation` (so an activation in flight throws "superseded" and no enable
+can follow), disable at once under `usb_lock` ([`disable_now!`](@ref)) without waiting for `light.lock` or a MOD IN write,
+then take `lock` to clear `arming` and write level 0. No USB zero is sent: the controller ignores one with the output off,
+and the next `light_on` writes USB 0 at 0 V after its enable. A failed disable throws after the level-0 write, and stays
+pending; an interrupted 0 V write passes on after the disable.
+"""
+function light_off_modulated(light::TCubeLaser)
+    bump_generation!(light)
+    derr = try
+        disable_now!(light)
+        nothing
+    catch e
+        e
+    end
+    zerr = lock(light.lock) do
+        light.arming = false
+        modulator_open(light) ? zero_modulator!(light) : nothing
+    end
+    propagate_interrupt(zerr)
+    derr === nothing || throw(derr)
+    return nothing
+end
+
+"""
+    shutdown_modulated(light::TCubeLaser)
+
+`shutdown` for a light with a modulator: bump `generation`, disable at once, then (under `lock`) write level 0 and, only if
+the disable succeeded, restore the control source and release the modulator; stop polling and close the handle either way.
+A disable that failed stays pending with the claim and the source kept, and the next `shutdown` reopens the handle to
+retry it. With the handle already closed it retries only what is pending ([`shutdown_disconnected`](@ref)).
+"""
+function shutdown_modulated(light::TCubeLaser)
+    serialNo = light.serialNo
+    bump_generation!(light)
+    if !light.connected
+        return lock(light.lock) do
+            light.arming = false
+            shutdown_disconnected(light)
+        end
+    end
+    derr = try
+        disable_now!(light)
+        nothing
+    catch e
+        e
+    end
+    zerr = nothing
+    merr = nothing
+    lock(light.lock) do
+        light.arming = false
+        zerr = modulator_open(light) ? zero_modulator!(light) : nothing
+        merr = end_modulation!(light)   # defers itself while the disable is pending
+        try
+            LD_StopPolling(serialNo)
+        catch stoperr
+            @error "TCubeLaser $serialNo: LD_StopPolling failed during shutdown" exception = stoperr
+        end
+        LD_Close(serialNo)
+        light.connected = false
+    end
+    propagate_interrupt(zerr)
+    derr === nothing || throw(derr)
+    merr === nothing || throw(merr)
+    println("$(light.laser_color)" * "_laser is shutdown")
+    return nothing
 end

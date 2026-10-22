@@ -18,7 +18,7 @@ the next version with `-DEV`).
   `setpower(mc, p)` (`p` in the light's unit, 0 is 0 V; `ArgumentError` before any write when out of reach),
   `initialize(mc)`, `shutdown(mc)` and `output_id(mc)`. New exported types: `AbstractModulationControl`,
   `NIDAQModulator(; channel, v_range, per_volt, daq)` (one analogue-output task for life, created with the range, so
-  DAQmx refuses a range the card lacks) and `TriggerscopeModulator(; scope, dac, range, per_volt)`. Public, not exported
+  DAQmx refuses a range the card lacks); a Triggerscope DAC modulator follows in a later release. Public, not exported
   (`MicroscopeControl.<name>`): `output_id`, `open_modulator!` and `close_modulator!` (one light object per output, a
   failed `shutdown(mc)` keeps the claim for a retry), `RecordingModulator` and `modulation_violations(light; set!, expect)`,
   a check of the convention for lights and their downstream fakes. The convention is in the `LightSource` docstring and
@@ -29,24 +29,26 @@ the next version with `-DEV`).
     (1.3 s), puts the request on MOD IN and confirms that the setpoint register shows it within `max(30 words, 3 %)`,
     refusing with the light off at 0 V otherwise (a wrong `per_volt`, a dead cable, an unarmed source); level changes are
     one analogue write while on and nothing while off. **Costs 1.3 s more per `light_on`.** [guarantee] A
-    `TCubeLaser` with a modulator serializes every hardware write and state change under one per-light lock, held for
-    short critical sections and never across the wait: `light_on` arms under the lock (0 V, preflight, enable, USB 0),
-    sleeps unlocked, then applies the current request under the lock. While it waits a level setter only records (the
-    activation applies the latest request), and `light_off`, `initialize`, `shutdown` or another `light_on` supersedes
-    it (it throws and writes nothing more). A USB setpoint is written only when the MOD IN zero succeeded in the same
-    critical section; otherwise it is skipped and the output disabled. A disable that fails stays pending and is retried
-    by the next `shutdown`. The controller keeps one
+    `TCubeLaser` with a modulator keeps two locks: a per-light lock for the writes and state changes of `initialize`, a
+    second `light_on`, the level setters and the MOD IN writes, held for short critical sections and never across a wait,
+    and a short `usb_lock` for the Kinesis enable and disable commands alone. `light_on` arms under the lock (0 V,
+    preflight, the enable after a generation check, USB 0), sleeps unlocked, applies the current request under the lock,
+    and polls the read-back and the lock check unlocked. While it waits a level setter only records (the activation
+    applies the latest request). `light_off` and `shutdown` bump a generation and disable right away, without waiting for
+    the lock or for a stalled MOD IN write (measured in the tests: under 0.03 s, bound 0.1 s); `initialize` and another
+    `light_on` also supersede an activation, which then throws and writes nothing more. A USB setpoint is written only
+    when the MOD IN zero succeeded in the same critical section, never while the modulator is not yet open; otherwise it
+    is skipped and the output disabled. A disable that fails stays pending: the control source is not restored and the
+    output not released until a `shutdown` (which reopens the handle for it) disables the output. A modulated light's
+    `light_off` no longer sends a USB zero (the controller ignores one with the output off). A Triggerscope DAC modulator
+    follows in a later release. The controller keeps one
     setpoint register, so no USB setpoint but 0 (and the calibration reference) is sent while a level is held. The scale
     is measured per laser, range and loop (`CALIBRATION.md`, "MOD IN scale"); the controller facts behind the design are
     recorded there. `control_source` and `set_control_source!` (flag sums such as 3 and 5, which the
     `LD_InputSourceFlags` enum cannot hold) are unexported.
   - `createtask(daq, "AO", channel; min_val, max_val)`: new keywords for the voltage range of an analogue input or output
     task (both or neither); `NIdaq` hands them to DAQmx as given.
-  - Triggerscope: `dac_output(scope, dac; range)` and `dac_range_volts(range)`; every command and its reply run under
-    `scope.lock`, so a modulator and an attenuator can share one scope from several tasks; the read and write time-outs
-    are re-armed for every command (LibSerialPort's timeout is a cumulative budget: one command in a few thousand failed
-    and reset the port at 400 Hz).
-  - The positional `Triggerscope4` constructor keeps its 19 arguments (it supplies the lock); `SimLight(id, properties)` keeps converting its arguments.
+  - `SimLight(id, properties)` keeps converting its arguments.
   - `TCubeLaser.setupIO` and `set_modvoltage` warn that they are deprecated and name `modulator = NIDAQModulator(...)`.
     Nothing else about them changed.
 - Opt-in per-call trace of the DCAM library calls, turned on only by `DCAM4.dcam_trace!(path)` (a local-disk
