@@ -16,14 +16,16 @@ end
 Recieves a DAC number and a voltage value and sets the DAC to that value after converting the voltage to a 16 bit integer value
 """
 function setdac(scope::Triggerscope4, dacnum::Int, voltvalue::Float64)
-    #convert the voltage value to a 16 bit integer value depending on range
-    dacoutput = volttooutput(scope, dacnum, voltvalue)
+    # The conversion reads the DAC's range, so it is under the same lock as the command: another task's `setrange`
+    # cannot land between the encoding and the write (0 V encoded for +-10 V is not 0 V on a 0-10 V DAC).
+    return lock(scope.lock) do   # the encoding, the write and its reply together: the LCAs and a MOD IN output may share this scope
+        #convert the voltage value to a 16 bit integer value depending on range
+        dacoutput = volttooutput(scope, dacnum, voltvalue)
 
-    #create the command string
-    commandstring = "DAC" * string(dacnum) * "," * string(dacoutput) * "\n"
+        #create the command string
+        commandstring = "DAC" * string(dacnum) * "," * string(dacoutput) * "\n"
 
-    #write the command to the serial port
-    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        #write the command to the serial port
         writecommand(scope, commandstring)
         readresponse(scope)
     end
@@ -50,12 +52,12 @@ function setttl(scope::Triggerscope4, channel::Int, ttlval::Bool)
 end
 
 function setrange(scope::Triggerscope4, dacchannel::Int, range::Range)
-    #create the command string
-    scope.dacranges[dacchannel] = range  # Update the range in the scope object
-    commandstring = "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
+    return lock(scope.lock) do   # the cached range, the write and its reply together: the LCAs and a MOD IN output may share this scope
+        #create the command string
+        scope.dacranges[dacchannel] = range  # Update the range in the scope object
+        commandstring = "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
 
-    #write the command to the serial port
-    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+        #write the command to the serial port
         writecommand(scope, commandstring)
         readresponse(scope)
     end

@@ -19,7 +19,7 @@ import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: gui as red_
 # and the status-word layout it shares with its simulated twin.
 import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: effective_max_current, STATUS_BITS
 # Public, not exported by the interface: the modulator lifecycle every light with a `modulator` field shares.
-import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: open_modulator!, close_modulator!, zero_modulator!, apply_level!, holds_output, output_id
+import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: open_modulator!, close_modulator!, zero_modulator!, apply_level!, propagate_interrupt, holds_output, output_id
 
 
 const Thorlabs_Tcube_laser = "C:\\Program Files\\Thorlabs\\Kinesis\\Thorlabs.MotionControl.TCube.LaserDiode.dll"

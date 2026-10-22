@@ -17,7 +17,8 @@ mutable struct SimLight <: LightSource
     const modulator::Union{Nothing,AbstractModulationControl}
 end
 
-SimLight(unique_id::String, properties::LightSourceProperties) = SimLight(unique_id, properties, nothing)
+# The two-argument form the struct always had, unconstrained so its arguments are converted as before (a `SubString` id).
+SimLight(unique_id, properties) = SimLight(unique_id, properties, nothing)
 
 function SimLight(;
     unique_id::String="SimLight",

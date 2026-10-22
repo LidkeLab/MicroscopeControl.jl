@@ -94,6 +94,12 @@ function Triggerscope4(;
     return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs, ReentrantLock())
 end
 
+# The positional constructor before the lock field was added (19 arguments), kept: it supplies the lock.
+Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges,
+              ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs) =
+    Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges,
+                  ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs, ReentrantLock())
+
 mutable struct CommandSignal
     commandType::CommandType
     channel::Int

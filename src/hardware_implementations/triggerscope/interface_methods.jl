@@ -33,10 +33,12 @@ function TrigInterface.setoutputvalue(scope::Triggerscope4, output::Output, chan
     end
 
     if output.label == "DAC"
-        scope.dacvalues[channel] = volttooutput(scope, channel, value)
-        scope.outputs[1].values[channel] = value
+        lock(scope.lock) do   # the cached code and the write use one range
+            scope.dacvalues[channel] = volttooutput(scope, channel, value)
+            scope.outputs[1].values[channel] = value
 
-        setdac(scope, channel, value)
+            setdac(scope, channel, value)
+        end
     elseif output.label == "TTL"
         scope.ttlvalues[channel] = value
         scope.outputs[2].values[channel] = value
@@ -56,10 +58,12 @@ function TrigInterface.setoutputrange(scope::Triggerscope4, output::Output, chan
     @info "Setting " * output.label * " channel " * string(channel) * " to " * string(range)
 
     if output.label == "DAC"
-        scope.dacranges[channel] = Range(range)
-        scope.outputs[1].ranges[channel] = Range(range)
+        lock(scope.lock) do
+            scope.dacranges[channel] = Range(range)
+            scope.outputs[1].ranges[channel] = Range(range)
 
-        setrange(scope, channel, Range(range))
+            setrange(scope, channel, Range(range))
+        end
     end
 end
 

@@ -36,13 +36,17 @@ end
 
 output_id(m::NIDAQModulator) = "NIDAQ $(m.channel)"
 
-"The voltage `setpower(m, p)` writes; `ArgumentError` when `p` has none the output can make."
+"The voltage `setpower(m, p)` writes; `ArgumentError` when `p` is not a finite level of at least 0 or has no voltage the output can make."
 function volts(m::NIDAQModulator, p::Float64)
+    (isfinite(p) && p >= 0) || throw(ArgumentError(
+        "NIDAQModulator $(m.channel): a level is finite and at least 0 (0 is 0 V), got $p"))
     v = p / m.per_volt
     (isfinite(v) && m.v_min <= v <= m.v_max) || throw(ArgumentError(
         "NIDAQModulator $(m.channel): level $p needs $v V ($(m.per_volt) per V), outside the output's range [$(m.v_min), $(m.v_max)] V"))
     return v
 end
+
+holds_resources(m::NIDAQModulator) = m.task !== nothing
 
 function setpower(m::NIDAQModulator, p::Float64)
     m.task === nothing && error("NIDAQModulator $(m.channel): setpower before initialize (or after shutdown)")
@@ -51,23 +55,25 @@ function setpower(m::NIDAQModulator, p::Float64)
     return nothing
 end
 
+# The task handle is kept (`m.task`) from the moment it exists until the DAQ has deleted it, so a cleanup that fails
+# leaves it for `shutdown` to retry and `holds_resources` true, which keeps the light's claim.
 function initialize(m::NIDAQModulator)
     if m.task !== nothing   # opened already: one task for life, so only the level is put back to 0 V
         setvoltage(m.daq, m.task, 0.0)
         return nothing
     end
-    task = createtask(m.daq, "AO", m.channel; min_val=m.v_min, max_val=m.v_max)
+    m.task = createtask(m.daq, "AO", m.channel; min_val=m.v_min, max_val=m.v_max)
     try
-        setvoltage(m.daq, task, 0.0)
+        setvoltage(m.daq, m.task, 0.0)
     catch
         try
-            deletetask(m.daq, task)
+            deletetask(m.daq, m.task)
+            m.task = nothing
         catch derr
-            @error "NIDAQModulator $(m.channel): deleting the task failed while cleaning up a failed initialize" exception = derr
+            @error "NIDAQModulator $(m.channel): deleting the task failed while cleaning up a failed initialize; shutdown retries it" exception = derr
         end
         rethrow()
     end
-    m.task = task
     return nothing
 end
 

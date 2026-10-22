@@ -274,8 +274,9 @@ written. A modulator is not an `AbstractInstrument` (no panel). It defines `setp
    the output off (it claims `output_id`, so a second light object cannot drive the same output, then opens at 0 V);
    `shutdown` calls `close_modulator!(light)` after switching off (a failed `shutdown(mc)` keeps the claim for a retry);
 2. `light_on` writes level 0 before the enable (a throw enables nothing), runs its own steps, then
-   `setpower(modulator, request)`;
-3. `light_off` writes 0 first, logging a failure, and always switches off;
+   `setpower(modulator, request)`; any throw after the enable, an `ArgumentError` included, switches the light off;
+3. `light_off` writes 0 first, logging a failure, and always switches off, even when the write is interrupted
+   (`LightSourceInterface.propagate_interrupt` passes the interrupt on after the switch-off);
 4. a level setter validates as it did, then writes `setpower(modulator, p)` only while the light is on, so the output
    holds 0 V while off; an `ArgumentError` changes nothing, any other throw tries level 0, switches off and rethrows
    (`LightSourceInterface.apply_level!` does that);

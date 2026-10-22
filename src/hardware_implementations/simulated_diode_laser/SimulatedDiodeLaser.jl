@@ -9,7 +9,7 @@ module SimulatedDiodeLaser
 
 using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface
 import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: effective_max_current, STATUS_BITS
-import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: open_modulator!, close_modulator!, zero_modulator!, apply_level!
+import ...MicroscopeControl.HardwareInterfaces.LightSourceInterface: open_modulator!, close_modulator!, zero_modulator!, apply_level!, propagate_interrupt
 
 import ...MicroscopeControl: export_state, initialize, shutdown
 
@@ -250,12 +250,16 @@ end
 
 function shutdown(sim::SimDiodeLaser)
     push!(sim.log, (:shutdown, nothing))
-    zero_modulator!(sim)
+    zerr = zero_modulator!(sim)
     sim.output_enabled = false
     sim.properties.is_on = false
     sim.modulator === nothing || (sim.setpoint = 0.0)
     sim.is_open = false
-    close_modulator!(sim)   # after the switch-off; a failure keeps the claim for the next shutdown
+    try
+        close_modulator!(sim)   # after the switch-off; a failure keeps the claim for the next shutdown
+    finally
+        propagate_interrupt(zerr)
+    end
     return nothing
 end
 
@@ -296,7 +300,7 @@ function LightSourceInterface.light_on(sim::SimDiodeLaser)
         sim.output_enabled = true
         sim.properties.is_on = true
         _settle(sim)
-        apply_level!(sim, _request(sim), () -> _darken!(sim))
+        apply_level!(sim, _request(sim), () -> _darken!(sim); darken_argument_errors=true)   # enabled already: every throw darkens
         sim.setpoint = _level_setpoint(sim, _request(sim))
         return nothing
     end
@@ -309,10 +313,11 @@ end
 function LightSourceInterface.light_off(sim::SimDiodeLaser)
     push!(sim.log, (:light_off, nothing))
     _require_open(sim, "light_off")
-    zero_modulator!(sim)
+    zerr = zero_modulator!(sim)
     sim.output_enabled = false
     sim.properties.is_on = false
     sim.modulator === nothing || (sim.setpoint = 0.0)
+    propagate_interrupt(zerr)   # an interrupted 0 V write passes on only after the switch-off
     return nothing
 end
 

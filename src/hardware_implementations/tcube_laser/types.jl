@@ -72,6 +72,10 @@ so that an 80 mA call can never become an 80 mW one.
   source it needs belong to one modulator for life. See "With a modulator" below.
 - `source_before::Union{Nothing,Int}`: State. The control source `initialize` found,
   to restore at `shutdown`; `nothing` outside an open/close cycle of a modulator.
+- `connected::Bool`: State. Whether `initialize` has opened the Kinesis handle and `shutdown` has not closed it.
+  With a modulator, a `shutdown` retried after the handle closed touches no closed-handle call.
+- `generation::Threads.Atomic{Int}`: State. Counts the events that supersede a `light_on` in progress with a
+  modulator: a level setter, `light_off`, `shutdown` or another `light_on`.
 
 The first fourteen fields are in the order they have always been in, and the
 two added in 0.2.5 and the two added since are at the end, so the pre-0.2.5
@@ -144,6 +148,8 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     pd::Union{Nothing,PhotodiodeLoop}
     const modulator::Union{Nothing,AbstractModulationControl}
     source_before::Union{Nothing,Int}
+    connected::Bool
+    const generation::Threads.Atomic{Int}
 
     function TCubeLaser{M}(unique_id, properties, laser_color, min_current, max_current,
         max_setcurrent, max_setpoint, serialNo, task_mod, daq,
@@ -168,7 +174,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
             controller_max_current, daq_device, ao_channel, drive_current,
-            threshold_current, pd, modulator, nothing)
+            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0))
     end
 end
 

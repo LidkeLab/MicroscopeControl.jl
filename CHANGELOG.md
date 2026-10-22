@@ -28,7 +28,8 @@ the next version with `-DEV`).
     source found is restored at `shutdown`); `light_on` writes 0 V, enables, sends USB setpoint 0, waits `MOD_SETTLE_S`
     (1.3 s), puts the request on MOD IN and confirms that the setpoint register shows it within `max(30 words, 3 %)`,
     refusing with the light off at 0 V otherwise (a wrong `per_volt`, a dead cable, an unarmed source); level changes are
-    one analogue write while on and nothing while off. **Costs 1.3 s more per `light_on`.** The controller keeps one
+    one analogue write while on and nothing while off. A level change, `light_off`, `shutdown` or another `light_on`
+    during the wait supersedes an activation in progress, which ends dark and throws. **Costs 1.3 s more per `light_on`.** The controller keeps one
     setpoint register, so no USB setpoint but 0 (and the calibration reference) is sent while a level is held. The scale
     is measured per laser, range and loop (`CALIBRATION.md`, "MOD IN scale"); the controller facts behind the design are
     recorded there. `control_source` and `set_control_source!` (flag sums such as 3 and 5, which the
@@ -39,6 +40,7 @@ the next version with `-DEV`).
     `scope.lock`, so a modulator and an attenuator can share one scope from several tasks; the read and write time-outs
     are re-armed for every command (LibSerialPort's timeout is a cumulative budget: one command in a few thousand failed
     and reset the port at 400 Hz).
+  - The positional `Triggerscope4` constructor keeps its 19 arguments (it supplies the lock); `SimLight(id, properties)` keeps converting its arguments.
   - `TCubeLaser.setupIO` and `set_modvoltage` warn that they are deprecated and name `modulator = NIDAQModulator(...)`.
     Nothing else about them changed.
 - Opt-in per-call trace of the DCAM library calls, turned on only by `DCAM4.dcam_trace!(path)` (a local-disk

@@ -882,12 +882,13 @@ function initialize(light::TCubeLaser)
     numdev = TLI_GetDeviceListSize()
 
     check_err(LD_Open(serialNo), "LD_Open", serialNo)
+    light.connected = true
     try
         # A success FLAG, not a status code: `false` is the failure.
         check_flag(LD_StartPolling(serialNo, POLL_INTERVAL_MS), "LD_StartPolling", serialNo)
         sleep(REQUEST_WAIT_S[])
         # A modulator still open from an earlier initialize may hold a level: 0 V before the zero.
-        modulator_open(light) && zero_modulator!(light)
+        zerr = modulator_open(light) ? zero_modulator!(light) : nothing
         # Whatever else left the output on, it is off before the mode command
         # is sent, and `is_on` is false afterwards.
         try
@@ -897,6 +898,7 @@ function initialize(light::TCubeLaser)
             @error "TCubeLaser $serialNo: initialize could not disable the output; it may still be ON at the controller's stored setpoint"
             rethrow()
         end
+        propagate_interrupt(zerr)   # an interrupted 0 V write passes on only after the disable
         enter_mode!(regulation_mode(light), light)
         # The diode current limit has its OWN request in the Kinesis API, and
         # a generic readings request does not stand in for it. Reading the limit
@@ -920,6 +922,7 @@ function initialize(light::TCubeLaser)
         try
             LD_StopPolling(serialNo)
             LD_Close(serialNo)
+            light.connected = false
         catch closeerr
             @error "TCubeLaser $serialNo: LD_Close failed while cleaning up a failed initialize" exception = closeerr
         end
@@ -1366,6 +1369,13 @@ the next enable must start dark, not on a stale setpoint.
 """
 function disable_after_failure(light::TCubeLaser, what::AbstractString)
     serialNo = light.serialNo
+    light.modulator === nothing || zero_modulator!(light)   # 0 V before the USB zero, which would else absorb the level
+    if light.modulator !== nothing && !light.connected
+        # A shutdown closed the handle under a light_on that was waiting; it disabled the output first. Nothing to send.
+        light.properties.is_on = false
+        @error "TCubeLaser $serialNo: $what failed after shutdown; the output was disabled by the shutdown"
+        return true
+    end
     zeroed = zero_setpoint(light)
     note_zero!(light, zeroed)
     disabled, offerr = false, nothing
@@ -1427,8 +1437,10 @@ throw, since the output is still turned off; a failed disable throws and leaves
 its level 0 is written first (a failure is logged and does not stop the switch-off).
 """
 function LightSourceInterface.light_off(light::TCubeLaser)
-    zero_modulator!(light)   # level 0 first (a failure is logged, never prevents the switch-off)
+    light.modulator === nothing || bump_generation!(light)   # supersedes a light_on that is waiting
+    zerr = zero_modulator!(light)   # level 0 first (a failure is logged, never prevents the switch-off)
     zero_then_disable(light)
+    propagate_interrupt(zerr)       # an interrupted 0 V write passes on only after the disable
     println("$(light.laser_color)" * "_laser is off")
     return nothing
 end
@@ -1447,10 +1459,14 @@ released); a failure there is thrown after the connection is closed, and the out
 claimed until the next `shutdown` retries it.
 """
 function shutdown(light::TCubeLaser)
+    # A retry after the handle was closed (the modulator's release failed): no closed-handle call.
+    light.modulator !== nothing && !light.connected && return shutdown_disconnected(light)
     serialNo = light.serialNo
     modulator_err = nothing
+    zerr = nothing
+    light.modulator === nothing || bump_generation!(light)   # supersedes a light_on that is waiting
     try
-        zero_modulator!(light)
+        zerr = zero_modulator!(light)
         zero_then_disable(light)
     finally
         # With a modulator: restore the control source and close it (0 V, release) while the handle is open.
@@ -1461,7 +1477,9 @@ function shutdown(light::TCubeLaser)
             @error "TCubeLaser $serialNo: LD_StopPolling failed during shutdown" exception = stoperr
         end
         LD_Close(serialNo) # returns Cvoid: no status to check
+        light.connected = false
     end
+    propagate_interrupt(zerr)                           # after the disable and the close
     modulator_err === nothing || throw(modulator_err)   # after the handle is closed; the claim is kept for a retry
     println("$(light.laser_color)" * "_laser is shutdown")
     return nothing

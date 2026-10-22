@@ -33,8 +33,10 @@ end
 
 output_id(m::TriggerscopeModulator) = dac_output_id(m.scope, m.dac)
 
-"The voltage `setpower(m, p)` writes; `ArgumentError` when `p` has none this DAC range can make."
+"The voltage `setpower(m, p)` writes; `ArgumentError` when `p` is not a finite level of at least 0 or has no voltage this DAC range can make."
 function volts(m::TriggerscopeModulator, p::Float64)
+    (isfinite(p) && p >= 0) || throw(ArgumentError(
+        "TriggerscopeModulator DAC $(m.dac): a level is finite and at least 0 (0 is 0 V), got $p"))
     v = p / m.per_volt
     lo, hi = dac_range_volts(m.range)
     (isfinite(v) && lo <= v <= hi) || throw(ArgumentError(
@@ -48,12 +50,16 @@ function check_compause(m::TriggerscopeModulator)
     return nothing
 end
 
+# The checks, the conversion and the command run under the scope's lock (reentrant), so another task cannot change the
+# DAC's range between the check and the encoding.
 function setpower(m::TriggerscopeModulator, p::Float64)
-    v = volts(m, p)
-    m.is_open || error("TriggerscopeModulator DAC $(m.dac): setpower before initialize (or after shutdown)")
-    m.scope.dacranges[m.dac] == m.range || error(
-        "TriggerscopeModulator DAC $(m.dac): the scope's range for this DAC is $(m.scope.dacranges[m.dac]), not $(m.range); the voltage would not be the one computed")
-    setdac(m.scope, m.dac, v)
+    lock(m.scope.lock) do
+        v = volts(m, p)
+        m.is_open || error("TriggerscopeModulator DAC $(m.dac): setpower before initialize (or after shutdown)")
+        m.scope.dacranges[m.dac] == m.range || error(
+            "TriggerscopeModulator DAC $(m.dac): the scope's range for this DAC is $(m.scope.dacranges[m.dac]), not $(m.range); the voltage would not be the one computed")
+        setdac(m.scope, m.dac, v)
+    end
     return nothing
 end
 

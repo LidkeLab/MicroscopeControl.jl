@@ -15,8 +15,9 @@ A light with a modulator follows this convention, and a new driver that takes on
    modulator's `output_id`, so a second light object cannot drive the same output, then opens it at 0 V); call
    `close_modulator!` from `shutdown`, after switching off;
 2. `light_on`: write level 0 BEFORE the enable (a throw enables nothing), do its own steps, then
-   `setpower(modulator, request)`;
-3. `light_off`: write level 0 first, logging a failure, and always switch off;
+   `setpower(modulator, request)`; every throw after the enable, an `ArgumentError` included, switches the light off;
+3. `light_off`: write level 0 first, logging a failure, and always switch off, even for an `InterruptException` in the
+   write (switch off, then pass the interrupt on);
 4. a level setter validates as it always did, then, only while the light is on, calls `setpower(modulator, p)`: the
    output holds 0 V while the light is off. An `ArgumentError` (the modulator refused before writing) changes
    nothing; any other throw leaves the output unknown, so level 0 is tried, the light is switched off, and the error

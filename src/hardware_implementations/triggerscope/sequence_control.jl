@@ -45,11 +45,11 @@ function progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bo
 end
 
 function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::Float64)
-    dac_code = volttooutput(scope, dacnum, voltage)
-    #Build string
-    commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(dac_code) * "\n"
-    #Write command
-    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+    return lock(scope.lock) do   # the encoding, the write and its reply together: the LCAs and a MOD IN output may share this scope
+        dac_code = volttooutput(scope, dacnum, voltage)
+        #Build string
+        commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(dac_code) * "\n"
+        #Write command
         writecommand(scope, commandstring)
         scope.dacvalues[dacnum] = dac_code
         readresponse(scope)
@@ -91,10 +91,10 @@ Duty cycle in percent, phase in degrees
 """
 # NOTE: Does not appear to function, also not present in offical documentation
 function progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform::Int, centervolt::Float64, dutycycle::Int, phase::Int, trigtype::Int; programstep::Int = 0)
-    #Build string
-    commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, dacnum, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
-    #Write command
-    return lock(scope.lock) do   # the write and its reply together: the LCAs and a MOD IN output may share this scope
+    return lock(scope.lock) do   # the encoding, the write and its reply together: the LCAs and a MOD IN output may share this scope
+        #Build string
+        commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, dacnum, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
+        #Write command
         writecommand(scope, commandstring)
         readresponse(scope)
     end

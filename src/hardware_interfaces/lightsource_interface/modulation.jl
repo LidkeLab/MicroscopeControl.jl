@@ -83,7 +83,10 @@ end
 const MODULATOR_OUTPUTS = Dict{String,Any}()
 const MODULATOR_OUTPUTS_LOCK = ReentrantLock()
 
-"Claim `id` for `light`, or refuse (`ErrorException`) when another light object holds it."
+"""
+Claim `id` for `light`, or refuse (`ErrorException`) when another light object holds it. Returns `true` when this call
+took the claim and `false` when `light` already held it.
+"""
 function claim_output!(light, id::AbstractString)
     lock(MODULATOR_OUTPUTS_LOCK) do
         holder = get(MODULATOR_OUTPUTS, id, nothing)
@@ -91,8 +94,8 @@ function claim_output!(light, id::AbstractString)
             "modulator output \"$id\" is already driving the light $(repr(holder.unique_id)); a second light object may not use it. " *
             "Give each light its own output, or shut the other light down first.")
         MODULATOR_OUTPUTS[id] = light
+        return holder === nothing
     end
-    return nothing
 end
 
 "Release `id` if `light` holds it."
@@ -108,12 +111,22 @@ holds_output(light, id::AbstractString) = lock(MODULATOR_OUTPUTS_LOCK) do
 end
 
 """
+    holds_resources(mc::AbstractModulationControl) -> Bool
+
+Whether `mc` still holds something that a `shutdown` must release (an open task whose cleanup failed). `false` by
+default. [`open_modulator!`](@ref) keeps the claim while this is `true`, so a later `shutdown` can still release it.
+"""
+holds_resources(mc::AbstractModulationControl) = false
+
+"""
     open_modulator!(light)
 
 Claim `output_id(light.modulator)` for `light` (refused if another light object holds it), then
-[`initialize`](@ref) the modulator, which leaves 0 V. If the initialize throws, the claim is released and the
-error rethrown. A no-op when `light.modulator === nothing`. A light calls it at the end of its own
-`initialize`, with its output off. Public, not exported.
+[`initialize`](@ref) the modulator, which leaves 0 V. If the initialize throws, the error is rethrown and the claim
+is released, unless the modulator still [`holds_resources`](@ref) (a task it could not delete): the claim, whether
+taken by this call or an earlier `initialize`, then stays until `close_modulator!` releases it. A no-op when
+`light.modulator === nothing`. A light calls it at the end of its own `initialize`, with its output off. Public, not
+exported.
 """
 function open_modulator!(light)
     mc = light.modulator
@@ -123,7 +136,7 @@ function open_modulator!(light)
     try
         initialize(mc)
     catch
-        release_output!(light, id)
+        holds_resources(mc) || release_output!(light, id)
         rethrow()
     end
     return nothing
@@ -151,8 +164,9 @@ end
     zero_modulator!(light) -> Nothing or the exception
 
 Write level 0 to `light.modulator`, never throwing: a failure is logged (`@error`) and returned. The
-switch-off paths call it first and must go on to switch the light off whatever happens here. Public, not
-exported.
+switch-off paths call it first and must go on to switch the light off whatever happens here. An
+`InterruptException` is returned like any other failure, so the caller can switch the light off first; it then
+passes it on with [`propagate_interrupt`](@ref). Public, not exported.
 """
 function zero_modulator!(light)
     mc = light.modulator
@@ -161,25 +175,33 @@ function zero_modulator!(light)
         setpower(mc, 0.0)
         return nothing
     catch e
-        e isa InterruptException && rethrow()
         @error "$(light.unique_id): writing 0 V to the modulator failed; the voltage on its output is unknown" exception = e
         return e
     end
 end
 
 """
-    apply_level!(light, p, darken!)
+    propagate_interrupt(err)
 
-Put level `p` on `light.modulator`, for a level setter whose light is on. An `ArgumentError` (the modulator
-refused before writing) is rethrown and changes nothing. Any other throw leaves the output unknown: level 0
-is written (tried; a failure is logged), `darken!()` switches the light off, and the error is rethrown. Public,
-not exported.
+Throw `err` if it is an `InterruptException`, else return `nothing`. A switch-off path calls it AFTER it has switched
+the light off, with what [`zero_modulator!`](@ref) returned, so an interrupted 0 V write never skips the disable.
 """
-function apply_level!(light, p::Float64, darken!)
+propagate_interrupt(err) = err isa InterruptException ? throw(err) : nothing
+
+"""
+    apply_level!(light, p, darken!; darken_argument_errors = false)
+
+Put level `p` on `light.modulator`. For a level setter whose light is on, an `ArgumentError` (the modulator refused
+before writing) is rethrown and changes nothing; with `darken_argument_errors = true` (an activation, where the light
+is already enabled) it darkens like any other throw. Any other throw, an `InterruptException` included, leaves the
+output unknown: level 0 is written (tried; a failure is logged), `darken!()` switches the light off, and the error is
+rethrown. Public, not exported.
+"""
+function apply_level!(light, p::Float64, darken!; darken_argument_errors::Bool=false)
     try
         setpower(light.modulator, p)
     catch e
-        (e isa ArgumentError || e isa InterruptException) && rethrow()
+        (e isa ArgumentError && !darken_argument_errors) && rethrow()
         zero_modulator!(light)
         darken!()
         rethrow()
@@ -255,7 +277,8 @@ modulator should then be asked for. It leaves the light off and the recorder cle
 5. an `ArgumentError` from the modulator reaches the caller and changes nothing (the light stays on, no 0
    written);
 6. any other throw from the modulator reaches the caller, level 0 is tried, and the light is off;
-7. `light_on` with a failing modulator throws and leaves the light off, and `light_off` with one does not throw.
+7. `light_on` with a failing modulator throws and leaves the light off, and `light_off` with one does not throw;
+8. `light_on` with a recorded level the modulator refuses (`ArgumentError` after the enable) leaves the light off.
 
 Public, not exported.
 """
@@ -337,6 +360,16 @@ function modulation_violations(light; set!, expect::Real, atol::Real=1e-9)
     e = throws(() -> light_off(light))
     e === nothing || push!(v, "light_off threw when the modulator's write failed ($(repr(e))); it must log and switch off")
     ison() === true && push!(v, "light_off with a failing modulator left the light on")
+
+    # A level recorded while off that the modulator then refuses: light_on has already enabled, so it must darken.
+    clear!()
+    step("light_off", () -> light_off(light))
+    clear!()
+    step("a level set while off", () -> set!(light))
+    mc.reach = 0.0
+    e = throws(() -> light_on(light))
+    e isa ArgumentError || push!(v, "light_on with a level the modulator refuses did not throw its ArgumentError (got $(repr(e)))")
+    ison() === true && push!(v, "light_on left the light on after the modulator refused its level; an activation must darken on every throw")
 
     clear!()
     step("light_off", () -> light_off(light))

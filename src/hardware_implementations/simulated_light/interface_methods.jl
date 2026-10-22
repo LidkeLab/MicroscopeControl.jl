@@ -15,15 +15,18 @@ function LightSourceInterface.light_on(light::SimLight)
             rethrow()
         end
         light.properties.is_on = true
-        apply_level!(light, light.properties.power, () -> (light.properties.is_on = false))
+        apply_level!(light, light.properties.power, () -> (light.properties.is_on = false); darken_argument_errors=true)   # enabled already: every throw darkens
         return nothing
     end
     light.properties.is_on = true
 end
 
 function LightSourceInterface.light_off(light::SimLight)
-    zero_modulator!(light)
+    light.modulator === nothing && return (light.properties.is_on = false)
+    zerr = zero_modulator!(light)
     light.properties.is_on = false
+    propagate_interrupt(zerr)   # an interrupted 0 V write passes on only after the switch-off
+    return false
 end
 
 function initialize(light::SimLight)
@@ -37,9 +40,13 @@ end
 
 function shutdown(light::SimLight)
     light.modulator === nothing && return (light.properties.is_on = false)
-    zero_modulator!(light)
+    zerr = zero_modulator!(light)
     light.properties.is_on = false
-    close_modulator!(light)
+    try
+        close_modulator!(light)
+    finally
+        propagate_interrupt(zerr)
+    end
     return nothing
 end
 

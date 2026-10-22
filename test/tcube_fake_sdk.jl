@@ -229,6 +229,13 @@ function apply_ext!(words::Integer)
 end
 "Voltages the test writer received, in order (also recorded in `calls` as \"MOD <v>\")."
 const mod_volts = Float64[]
+"Whether the Kinesis handle is open: `LD_Open` opens it, `LD_Close` closes it."
+const opened = Ref(false)
+"""
+While `true`, every `LD_*` call other than `LD_Open` on a handle that is not open raises, as the DLL does on a closed
+handle. Off by default (`reset!`), so the older tests, which call methods on lights they never initialized, run as they did.
+"""
+const strict_handle = Ref(false)
 "Every `LD_SetLaserSetPoint`: `(code, external input's words at that moment, output enabled)`. A light with a modulator may send only 0 (or the calibration reference) with the input at 0."
 const setpoint_log = Tuple{Int,Int,Bool}[]
 
@@ -241,6 +248,8 @@ function reset!(; limit_raw::Integer=23830, stored::Integer=0)
     last_write_t[] = 0.0
     empty!(mod_volts)
     empty!(setpoint_log)
+    opened[] = false
+    strict_handle[] = false
     empty!(calls)
     empty!(status)
     empty!(setpoints)
@@ -280,6 +289,8 @@ throws still happened, and the order assertions need to see it.
 """
 function record!(op::AbstractString)
     push!(calls, op)
+    (strict_handle[] && startswith(op, "LD_") && op != "LD_Open" && !opened[]) && error(
+        "fake Kinesis: $op called on a handle that is not open (never opened, or closed)")
     haskey(throws, op) && error(throws[op])
     return get(status, op, 0)
 end
@@ -330,8 +341,16 @@ end
 @eval MicroscopeControl.HardwareImplementations.TCubeLaserControl begin
     TLI_BuildDeviceList() = Main.FakeKinesis.record!("TLI_BuildDeviceList")
     TLI_GetDeviceListSize() = (Main.FakeKinesis.record!("TLI_GetDeviceListSize"); 1)
-    LD_Open(serialNo) = Main.FakeKinesis.record!("LD_Open")
-    LD_Close(serialNo) = (Main.FakeKinesis.record!("LD_Close"); nothing)
+    function LD_Open(serialNo)
+        s = Main.FakeKinesis.record!("LD_Open")
+        s == 0 && (Main.FakeKinesis.opened[] = true)
+        return s
+    end
+    function LD_Close(serialNo)
+        Main.FakeKinesis.record!("LD_Close")
+        Main.FakeKinesis.opened[] = false
+        return nothing
+    end
     function LD_SetOpenLoopMode(serialNo)
         s = Main.FakeKinesis.record!("LD_SetOpenLoopMode")
         (s == 0 && !Main.FakeKinesis.open_loop_ignored[]) && Main.FakeKinesis.setbits!(Main.FakeKinesis.CLOSED; on=false)
