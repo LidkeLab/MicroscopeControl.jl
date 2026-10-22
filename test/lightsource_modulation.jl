@@ -26,9 +26,30 @@ const LATENCIES = Float64[]   # seconds from a light_off / shutdown call to the 
 # Fixtures
 # ---------------------------------------------------------------------------
 
-"Silence the driver's prints and logs."
-quiet(f) = get(ENV, "LSM_VERBOSE", "") == "1" ? f() :   # LSM_VERBOSE=1 shows what a test failure inside a quiet block printed
-           redirect_stdout(() -> Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger()), devnull)
+# Silence the driver's prints and logs. Tasks started by a test call it concurrently, so the redirect is made by the
+# outermost caller and undone when the last one leaves (a scoped redirect in each task restored in the wrong order and
+# left stdout on /dev/null, which hid the test summary). LSM_VERBOSE=1 shows what a failure inside a quiet block printed.
+const QUIET_DEPTH = Ref(0)
+const QUIET_OLD = Ref{Any}(nothing)
+const QUIET_SINK = Ref{Any}(nothing)
+function quiet(f)
+    get(ENV, "LSM_VERBOSE", "") == "1" && return f()
+    QUIET_DEPTH[] += 1
+    if QUIET_DEPTH[] == 1
+        QUIET_OLD[] = stdout
+        QUIET_SINK[] = open(Sys.iswindows() ? "NUL" : "/dev/null", "w")
+        redirect_stdout(QUIET_SINK[])
+    end
+    try
+        return Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+    finally
+        QUIET_DEPTH[] -= 1
+        if QUIET_DEPTH[] == 0
+            redirect_stdout(QUIET_OLD[])
+            close(QUIET_SINK[])
+        end
+    end
+end
 
 """
 A DAQ that refuses everything the real one would: only "AO" tasks, only with a range named, only a range the card has
