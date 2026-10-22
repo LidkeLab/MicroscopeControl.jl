@@ -56,6 +56,15 @@ const error_code = Ref(0)
 "`PI_IsMoving` answers moving on both axes for this many polls."
 const moving_polls = Ref(0)
 
+"What `PI_qPOS` reports for axes \"1\" and \"2\"; it answers in the order of the axes it is asked for."
+const position = [12.5, 12.5]
+
+"The (ID, axes) of every `PI_qPOS` call, since the last `reset!`."
+const qpos_queries = Tuple{Int,String}[]
+
+"Values of every `PI_MOV`, as (axes, values), since the last `reset!`."
+const moves = Tuple{String,Vector{Float64}}[]
+
 const ready_polls = Ref(0)
 const moving_count = Ref(0)
 const referenced_polls = Ref(0)
@@ -68,6 +77,9 @@ function reset!()
     empty!(open_ids)
     empty!(failing)
     empty!(throwing)
+    position .= 12.5
+    empty!(moves)
+    empty!(qpos_queries)
     close_leaves_open[] = false
     not_ready_polls[] = 0
     unreferenced_polls[] = 0
@@ -172,12 +184,18 @@ FakePIStage.reset!()
     end
     function PI_qPOS(ID, axes, values)
         st = Main.FakePIStage.status!("PI_qPOS")
-        for i in eachindex(values)
-            values[i] = 12.5
+        push!(Main.FakePIStage.qpos_queries, (Int(ID), String(axes)))
+        order = parse.(Int, split(String(axes)))
+        st == 1 && for i in eachindex(values)
+            values[i] = Main.FakePIStage.position[order[i]]
         end
         return st
     end
-    PI_MOV(ID, axes, values) = Main.FakePIStage.unmodelled("PI_MOV")
+    function PI_MOV(ID, axes, values)
+        st = Main.FakePIStage.status!("PI_MOV")
+        push!(Main.FakePIStage.moves, (String(axes), Float64.(values)))
+        return st
+    end
     PI_HLT(ID, axes) = Main.FakePIStage.unmodelled("PI_HLT")
     PI_STP(ID) = Main.FakePIStage.unmodelled("PI_STP")
 end

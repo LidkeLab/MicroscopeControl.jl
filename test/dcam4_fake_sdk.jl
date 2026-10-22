@@ -128,6 +128,18 @@ const violations = String[]
 
 const next_handle = Ref(0)
 
+"Called with the wrapper's name as `dcamprop_getnextid`, `_getattr`, `_setvalue` and `_getvalue` are entered, so a test can land a `shutdown` there."
+const on_prop = Ref{Function}(op -> nothing)
+
+"Property calls made with a null handle, since the last `reset!`."
+const null_handle_calls = Ref(0)
+
+function prop_call!(op, hdcam)
+    on_prop[](op)
+    hdcam == C_NULL && (null_handle_calls[] += 1)
+    return nothing
+end
+
 function record!(op::AbstractString, default)
     push!(calls, op)
     api_down_code[] !== nothing && !api_up[] && return api_down_code[]
@@ -138,6 +150,8 @@ end
 function reset!()
     empty!(calls)
     empty!(codes)
+    on_prop[] = op -> nothing
+    null_handle_calls[] = 0
     empty!(values)
     frame[] = nothing
     status[] = nothing
@@ -220,16 +234,23 @@ end
         return err
     end
     dcamprop_getsize(hdcam::Ptr{Cvoid}) = (2, 2)
+    function dcamprop_getnextid(hdcam::Ptr{Cvoid}, idprop::Int32, option::DCAMPROP_OPTION)
+        Main.FakeDCAM.prop_call!("dcamprop_getnextid", hdcam)
+        return Main.FakeDCAM.record!("dcamprop_getnextid", DCAMERR_SUCCESS), Int32(0)   # a camera with no properties
+    end
     function dcamprop_getattr(hdcam::Ptr{Cvoid}, iProp::Int32)
+        Main.FakeDCAM.prop_call!("dcamprop_getattr", hdcam)
         dca = DCAMPROP_ATTR()
         dca.attribute = Int32(-1)   # every attribute bit: writable, with a range
         return Main.FakeDCAM.record!("dcamprop_getattr", DCAMERR_SUCCESS), dca
     end
     function dcamprop_setvalue(hdcam::Ptr{Cvoid}, iProp::Int32, fValue::Float64)
+        Main.FakeDCAM.prop_call!("dcamprop_setvalue", hdcam)
         Main.FakeDCAM.values[iProp] = fValue
         return Main.FakeDCAM.record!("dcamprop_setvalue", DCAMERR_SUCCESS)
     end
     function dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32)
+        Main.FakeDCAM.prop_call!("dcamprop_getvalue", hdcam)
         default = iProp == Int32(DCAM_IDPROP_IMAGE_WIDTH) ? 2.0 :
                   iProp == Int32(DCAM_IDPROP_IMAGE_HEIGHT) ? 2.0 :
                   iProp == Int32(DCAM_IDPROP_IMAGE_ROWBYTES) ? 4.0 :

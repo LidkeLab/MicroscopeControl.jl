@@ -42,7 +42,27 @@ function showdevicelist()
     return uninit_err
 end
 
+# The property setters and getters below make a DCAM call with `camera.camera_handle`, which `shutdown` nulls. After
+# `shutdown` they refuse, as `begin_start!` does: log an error, set `last_error` to `DCAMERR_INVALIDHANDLE`, and make no
+# DCAM call. True when the caller must stop. Call it with `camera.acquisition_lock` held, and keep the lock across the
+# DCAM calls that follow: `shutdown` closes the device and nulls the handle under that lock, so a check without it can
+# be overtaken. The lock is reentrant, and none of the guarded functions waits on `acquisition_changed` (the wait that
+# `getlastframe` and `shutdown` release the lock in), so a held lock only makes `shutdown` wait for a short call.
+function refused_closed!(camera::DCAM4Camera, what::AbstractString)
+    camera.closing == 0 && return false
+    camera.last_error = DCAMERR_INVALIDHANDLE
+    @error "DCAM4Camera $(camera.unique_id): $(what) refused: the camera has been shut down"
+    return true
+end
+
 function showproperties(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "showproperties") && return nothing
+        _showproperties(camera)
+    end
+end
+
+function _showproperties(camera::DCAM4Camera)
     hdcam = camera.camera_handle
 
     err, idprop = dcamprop_getnextid(hdcam, Int32(0), DCAMPROP_OPTION_SUPPORT)
@@ -67,6 +87,13 @@ function showproperties(camera::DCAM4Camera)
 end
 
 function setvalue(camera::DCAM4Camera, iProp::Int32, value::Float64)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setvalue") && return DCAMERR_INVALIDHANDLE, value
+        _setvalue(camera, iProp, value)
+    end
+end
+
+function _setvalue(camera::DCAM4Camera, iProp::Int32, value::Float64)
     hdcam = camera.camera_handle
     err, dca = dcamprop_getattr(hdcam::Ptr{Cvoid},iProp)
 
@@ -100,6 +127,13 @@ function setvalue(camera::DCAM4Camera, idprop::DCAM_IDPROP, value)
 end
 
 function setexposuretime!(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setexposuretime!") && return DCAMERR_INVALIDHANDLE, camera.exposure_time
+        _setexposuretime!(camera)
+    end
+end
+
+function _setexposuretime!(camera::DCAM4Camera)
     hdcam = camera.camera_handle
     exposure_time = camera.exposure_time
     err = dcamprop_setvalue(hdcam, DCAM_IDPROP_EXPOSURETIME, Float64(exposure_time))
@@ -117,11 +151,21 @@ function setexposuretime!(camera::DCAM4Camera)
 end
 
 function setexposuretime!(camera::DCAM4Camera, exposure_time::Real)
-    camera.exposure_time = Float64(exposure_time)
-    return setexposuretime!(camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setexposuretime!") && return DCAMERR_INVALIDHANDLE, camera.exposure_time
+        camera.exposure_time = Float64(exposure_time)
+        return _setexposuretime!(camera)
+    end
 end
 
 function setroi!(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setroi!") && return nothing
+        _setroi!(camera)
+    end
+end
+
+function _setroi!(camera::DCAM4Camera)
     setvalue(camera, DCAM_IDPROP_SUBARRAYMODE, 1) # set subarray mode to off so that the order of setting the ROI would not matter.
     setvalue(camera, DCAM_IDPROP_SUBARRAYHPOS, camera.roi.x_start)
     err, hpos = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_SUBARRAYHPOS)
@@ -185,11 +229,14 @@ Positions are **0-based**, and the ORCA wants positions and sizes in multiples
 of 4; a value the camera does not accept now throws.
 """
 function setroi!(camera::DCAM4Camera, roi::CameraROI)
-    camera.roi.x_start = roi.x_start
-    camera.roi.y_start = roi.y_start
-    camera.roi.width   = roi.width
-    camera.roi.height  = roi.height
-    return setroi!(camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setroi!") && return nothing
+        camera.roi.x_start = roi.x_start
+        camera.roi.y_start = roi.y_start
+        camera.roi.width   = roi.width
+        camera.roi.height  = roi.height
+        return _setroi!(camera)
+    end
 end
 
 """
@@ -201,11 +248,14 @@ Apply an ROI given as `(x, WIDTH, y, HEIGHT)` — note that this is **not**
 preferred.
 """
 function setroi!(camera::DCAM4Camera, hpos::Int32, hsize::Int32, vpos::Int32, vsize::Int32)
-    camera.roi.x_start = hpos
-    camera.roi.width  = hsize
-    camera.roi.y_start  = vpos
-    camera.roi.height = vsize
-    setroi!(camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setroi!") && return nothing
+        camera.roi.x_start = hpos
+        camera.roi.width  = hsize
+        camera.roi.y_start  = vpos
+        camera.roi.height = vsize
+        _setroi!(camera)
+    end
 end
 
 function settriggermode!(camera::DCAM4Camera)
@@ -247,11 +297,19 @@ const READOUT_FALLBACK_S = 1.0
     readout_time(camera::DCAM4Camera) -> Float64
 
 The sensor readout time in seconds, read from the camera's `DCAM_IDPROP_TIMING_READOUTTIME`, which depends on the
-current ROI and readout speed, so read it after `setroi!`. It reads the camera and caches the value in
+current ROI and readout speed, so read it after `setroi!`. After `shutdown` it refuses (see `refused_closed!`) and returns
+`READOUT_FALLBACK_S` without caching it. It reads the camera and caches the value in
 `camera.readout_s`. If the read fails or the value is not a finite, non-negative number, it warns and returns (and
 caches) `READOUT_FALLBACK_S`.
 """
 function readout_time(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "readout_time") && return READOUT_FALLBACK_S
+        _readout_time(camera)
+    end
+end
+
+function _readout_time(camera::DCAM4Camera)
     err, t = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_TIMING_READOUTTIME)
     if is_failed(err) || !isfinite(t) || t < 0
         @warn "DCAM4Camera $(camera.unique_id): the camera did not report its readout time ($(err), $(t)); assuming $(READOUT_FALLBACK_S) s for the frame-wait timeout" maxlog = 1

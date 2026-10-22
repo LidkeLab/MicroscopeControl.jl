@@ -439,6 +439,13 @@ Extract the properties of the camera.
 - `properties::Dict`: A dictionary of properties.
 "
 function extract_properties(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "extract_properties") && return Dict{String, Any}()
+        _extract_properties(camera)
+    end
+end
+
+function _extract_properties(camera::DCAM4Camera)
     
     properties = Dict{String, Any}()
     

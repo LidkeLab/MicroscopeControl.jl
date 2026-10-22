@@ -754,5 +754,80 @@
         end
         @test length(FK.closed) == 1 && FK.uninits[] == 1 && DC.DCAM_API_USERS[] == 0
     end
-end
 
+    @testset "property setters and getters make no DCAM call after shutdown" begin
+        FK.reset!()
+        DC.DCAM_API_USERS[] = 0
+        c = DC.DCAM4Camera(0)
+        c.exposure_time = 0.01
+        DC.shutdown(c)
+        n = length(FK.calls)
+        # Each refusal logs one error, sets last_error, and returns what a caller that destructures can still take.
+        function refusal(f, expected)
+            c.last_error = DC.DCAMERR_SUCCESS
+            r = @test_logs (:error, r"refused: the camera has been shut down") match_mode = :any f()
+            @test c.last_error == DC.DCAMERR_INVALIDHANDLE
+            @test r == expected
+        end
+        refusal(() -> DC.setexposuretime!(c), (DC.DCAMERR_INVALIDHANDLE, 0.01))
+        refusal(() -> DC.setexposuretime!(c, 0.02), (DC.DCAMERR_INVALIDHANDLE, 0.01))
+        @test c.exposure_time == 0.01
+        refusal(() -> DC.setroi!(c), nothing)
+        refusal(() -> DC.setroi!(c, DC.CameraROI(0, 0, 4, 4)), nothing)
+        refusal(() -> DC.setroi!(c, Int32(0), Int32(4), Int32(0), Int32(4)), nothing)
+        refusal(() -> DC.setvalue(c, DC.DCAM_IDPROP_EXPOSURETIME, 0.01), (DC.DCAMERR_INVALIDHANDLE, 0.01))
+        refusal(() -> DC.settriggermode!(c), (DC.DCAMERR_INVALIDHANDLE, Float64(Int(c.trigger_mode))))
+        refusal(() -> DC.showproperties(c), nothing)
+        refusal(() -> DC.readout_time(c), DC.READOUT_FALLBACK_S)
+        refusal(() -> DC.extract_properties(c), Dict{String, Any}())
+        refusal(() -> DC.gui_param(c), nothing)
+        @test isnan(c.readout_s)
+        @test length(FK.calls) == n
+        @test FK.null_handle_calls[] == 0
+    end
+
+    @testset "a shutdown that lands inside a property call waits for it" begin
+        # `shutdown` takes the acquisition lock to null the handle, so one that arrives between the closed check and the
+        # DCAM calls of `setroi!` or `setexposuretime!` must wait until they are done: no property call sees a null handle.
+        # The shutdown lands at a call made directly by the function (not inside the nested `setvalue`, which takes the
+        # lock itself), so the function's own lock is what is tested. Joined by `finished`, so a deadlock fails the test.
+        roi(c) = DC.setroi!(c, DC.CameraROI(0, 0, 4, 4))
+        expo(c) = DC.setexposuretime!(c, 0.02)
+        for (call, at) in ((roi, "dcamprop_getvalue"), (roi, "dcamprop_getattr"), (expo, "dcamprop_getvalue"))
+            FK.reset!()
+            DC.DCAM_API_USERS[] = 0
+            c = DC.DCAM4Camera(0)
+            sd = Ref{Any}(nothing)
+            FK.on_prop[] = op -> begin
+                op == at || return
+                FK.on_prop[] = op -> nothing
+                sd[] = @async DC.shutdown(c)
+                for _ in 1:20
+                    yield()
+                end
+            end
+            call(c)
+            @test sd[] !== nothing && finished(sd[])
+            @test FK.null_handle_calls[] == 0
+            @test c.camera_handle == C_NULL && c.closing == 2
+            @test FK.last_index("dcamprop_getvalue") < FK.first_index("dcamdev_close")
+        end
+    end
+
+    @testset "gui_param reads under the lock and builds with it released" begin
+        FK.reset!()
+        DC.DCAM_API_USERS[] = 0
+        c = DC.DCAM4Camera(0)
+        read_locked = Ref(false)
+        FK.on_prop[] = op -> (read_locked[] = islocked(c.acquisition_lock))
+        build_locked = Ref{Any}(nothing)
+        entries = Ref{Any}(nothing)
+        DC._gui_param(c, (cam, e) -> (build_locked[] = islocked(cam.acquisition_lock); entries[] = e; :built))
+        @test read_locked[]
+        @test build_locked[] === false
+        @test entries[] == DC.GuiParamEntry[]
+        @test FK.first_index("dcamprop_getnextid") !== nothing
+        @test !islocked(c.acquisition_lock)
+        DC.shutdown(c)
+    end
+end
