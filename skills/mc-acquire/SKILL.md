@@ -259,6 +259,28 @@ Do the check before the first move on a new rig. Settling time is the driver's b
 instantly, so on hardware poll `getposition` until the position field is within
 tolerance before exposing.
 
+## Modulated light sources during an acquisition
+
+**[guarantee]** A light built with `modulator = ...` (`TCubeLaser`, `SimDiodeLaser`, `SimLight`) puts its level on an
+analogue input through `setpower(modulator, p)`, `p` in the light's own unit. The calls that cost time and the calls
+that do not:
+
+- `light_on` is slow on a `TCubeLaser` with a modulator: it writes 0 V, enables, waits `MOD_SETTLE_S` (1.3 s), puts the
+  request on the input and confirms the controller's setpoint register shows it (refusing, off and at 0 V, if not).
+  Switch the light on before the acquisition, not between frames. **[limitation]** One more second and a read-back per
+  `light_on` than without a modulator.
+- A level change while the light is on (`setcurrent!`, `setoutputpower!`, `setlevel!`) is one analogue write: no USB
+  call, no lock check. **[limitation]** Nothing watches the level between `light_on`s; poll `loop_status`.
+- While the light is off a level change writes nothing; the output holds 0 V, and `light_on` applies the recorded level.
+- `light_off` writes 0 V first and always switches off, even if that write fails (it logs).
+- An `ArgumentError` from a level change means the level is out of reach (or out of range) and nothing changed; any
+  other error means the light was switched off.
+
+**[policy]** A system that sets a level per frame sets it through the unit-true setter with the light on, and treats a
+thrown non-`ArgumentError` as "the light is off now". To check a driver or a faked light against this, a test runs
+`MicroscopeControl.modulation_violations(light; set! = l -> setpower(l, 2.0), expect = 2.0)` on an initialized light with
+`modulator = RecordingModulator()`; an empty result means it keeps the convention (`mc-extend`).
+
 ## Array conventions
 
 Restated from the upstream `CLAUDE.md` and `docs/src/conventions.md`; the lab rule is decision 0040
