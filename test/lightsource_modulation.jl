@@ -1,0 +1,721 @@
+# Light-source modulation: a light with a `modulator` field puts its level on an analogue input through an
+# `AbstractModulationControl`, while with `modulator = nothing` every driver runs the code it always did (the rest
+# of the suite is that regression test).
+#
+# The TCube runs on the fake Kinesis SDK of `tcube_fake_sdk.jl`, which models the TLD001's ONE setpoint register
+# (a USB write sets it outright, a MOD IN change adds its difference and is lost inside the settle window) and the
+# control-source read-back. The MOD IN voltage comes from a test modulator, `FakeModIn`, that turns the level
+# into register words at a TRUE scale, which may differ from the `per_volt` it believes. `NIDAQModulator` runs on a
+# strict test-local `FakeDAQ <: DAQ`. The Triggerscope serial path has no seam: `TriggerscopeModulator` gets its
+# pure parts only. Nothing here commands hardware.
+#
+# Everything lives in a module so the fixtures (a `FakeDAQ <: DAQ`, test lights) stay out of `Main`, where the
+# contract tests walk the interface subtypes.
+module LightSourceModulationTests
+
+using Test
+using MicroscopeControl
+
+const MC = MicroscopeControl
+const LSI = MC.HardwareInterfaces.LightSourceInterface
+const TCmod = MC.HardwareImplementations.TCubeLaserControl
+const Trig = MC.HardwareImplementations.Triggerscope
+const FK = Main.FakeKinesis
+const RecordingModulator = MC.RecordingModulator
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+"Silence the driver's prints and logs."
+quiet(f) = redirect_stdout(() -> Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger()), devnull)
+
+"""
+A DAQ that refuses everything the real one would: only "AO" tasks, only with a range named, only a range the card has
+(DAQmx -200077 otherwise), a write outside the task's range, a write or delete on a task that is not live.
+"""
+mutable struct FakeDAQ <: MC.DAQ
+    card_range::Tuple{Float64,Float64}
+    tasks::Dict{Int,NamedTuple{(:channel, :min, :max),Tuple{String,Float64,Float64}}}
+    log::Vector{Tuple}
+    next_id::Int
+    fail_write::Bool
+    fail_delete::Bool
+end
+FakeDAQ(; card_range=(0.0, 5.0)) = FakeDAQ(card_range, Dict{Int,NamedTuple{(:channel, :min, :max),Tuple{String,Float64,Float64}}}(), Tuple[], 0, false, false)
+
+MC.export_state(d::FakeDAQ) = (Dict{String,Any}("unique_id" => "FakeDAQ"), nothing, Dict{String,Any}())
+
+function MC.createtask(d::FakeDAQ, tasktype::String, channel::String; min_val=nothing, max_val=nothing)
+    tasktype == "AO" || error("FakeDAQ: only AO tasks")
+    (min_val !== nothing && max_val !== nothing) || error("FakeDAQ: the channel must be created with an explicit range")
+    (d.card_range[1] <= min_val && max_val <= d.card_range[2]) || error(
+        "FakeDAQ: DAQmx error -200077: the range [$min_val, $max_val] V is not supported by this device")
+    d.next_id += 1
+    d.tasks[d.next_id] = (channel=channel, min=Float64(min_val), max=Float64(max_val))
+    push!(d.log, (:create, d.next_id, Float64(min_val), Float64(max_val)))
+    return d.next_id
+end
+
+function MC.setvoltage(d::FakeDAQ, t::Int, v::Float64)
+    haskey(d.tasks, t) || error("FakeDAQ: write to a task that is not live ($t)")
+    d.fail_write && error("FakeDAQ: write refused")
+    task = d.tasks[t]
+    (task.min <= v <= task.max) || error("FakeDAQ: $v V is outside the task's range [$(task.min), $(task.max)]")
+    push!(d.log, (:write, t, v))
+    return 1
+end
+
+function MC.deletetask(d::FakeDAQ, t::Int)
+    haskey(d.tasks, t) || error("FakeDAQ: delete of a task that is not live ($t)")
+    d.fail_delete && error("FakeDAQ: delete refused")
+    delete!(d.tasks, t)
+    push!(d.log, (:delete, t))
+    return nothing
+end
+
+"""
+A modulator for the fake Kinesis controller. It believes `per_volt` (the light's unit per volt) and turns the level into
+a voltage; the fake's MOD IN input then sees `v * words_per_volt` register words, the TRUE electrical scale. A level
+whose voltage is above `v_max` is refused (`ArgumentError`) before any write. `failure` makes every call throw it,
+`fail_nonzero` only a nonzero level, `shutdown_failure` the `shutdown`.
+"""
+mutable struct FakeModIn <: MC.AbstractModulationControl
+    id::String
+    per_volt::Float64
+    words_per_volt::Float64
+    v_max::Float64
+    failure::Any
+    fail_nonzero::Any
+    shutdown_failure::Any
+    volts::Vector{Float64}
+    times::Vector{Float64}
+    attempts::Vector{Float64}
+    opened::Int
+    closed::Int
+end
+FakeModIn(; id="mod1", per_volt, words_per_volt, v_max=5.0) =
+    FakeModIn(id, per_volt, words_per_volt, v_max, nothing, nothing, nothing, Float64[], Float64[], Float64[], 0, 0)
+
+LSI.output_id(m::FakeModIn) = m.id
+function MC.setpower(m::FakeModIn, p::Float64)
+    push!(m.attempts, p)
+    m.failure === nothing || throw(m.failure)
+    (p != 0 && m.fail_nonzero !== nothing) && throw(m.fail_nonzero)
+    v = p / m.per_volt
+    (isfinite(v) && 0.0 <= v <= m.v_max) || throw(ArgumentError("FakeModIn: $v V is out of reach [0, $(m.v_max)]"))
+    push!(m.volts, v)
+    push!(m.times, time())
+    push!(FK.mod_volts, v)
+    push!(FK.calls, "MOD $v")
+    FK.apply_ext!(round(Int, v * m.words_per_volt))
+    return nothing
+end
+function MC.initialize(m::FakeModIn)
+    m.failure === nothing || throw(m.failure)
+    m.opened += 1
+    return MC.setpower(m, 0.0)
+end
+function MC.shutdown(m::FakeModIn)
+    m.shutdown_failure === nothing || throw(m.shutdown_failure)
+    m.closed += 1
+    return MC.setpower(m, 0.0)
+end
+
+# Closed loop: 10 V is the photodiode's full scale, tia_range x wa_calibration W: 22.42 mW per volt, 3276.7 words per volt.
+# Open loop: 16 mA per volt (a 160 mA limit / 10 V), and the words of 220 mA full scale.
+const CP_PER_VOLT = 1e-3 * 224.2 * 1000 / 10
+const CP_WORDS_PER_VOLT = 32767 / 10
+const CC_PER_VOLT = 16.0
+const CC_WORDS_PER_VOLT = 16.0 / 220 * 32767
+
+modin(kind::Symbol; id="mod1", scale=1.0, kw...) = kind === :cp ?
+    FakeModIn(; id, per_volt=CP_PER_VOLT * scale, words_per_volt=CP_WORDS_PER_VOLT, kw...) :
+    FakeModIn(; id, per_volt=CC_PER_VOLT * scale, words_per_volt=CC_WORDS_PER_VOLT, kw...)
+
+# A level (mA open loop, mW closed loop) and a second one, and the sink that drives the fake from a RecordingModulator.
+const LV1 = Dict(:cc => 40.0, :cp => 20.0)
+const LV2 = Dict(:cc => 60.0, :cp => 30.0)
+words_of(kind::Symbol, p) = round(Int, p * (kind === :cp ? CP_WORDS_PER_VOLT / CP_PER_VOLT : CC_WORDS_PER_VOLT / CC_PER_VOLT))
+
+props() = LightSourceProperties("mW", 0.0, false, 1.0, 70.0)
+cc(; kw...) = TCubeLaser("00000000"; mode=ConstantCurrent(), max_current=160.0, kw...)
+cp(; kw...) = TCubeLaser("00000000"; mode=ConstantPhotocurrent(), wa_calibration=224.2, tia_range=1e-3,
+                         tec_stabilised=missing, properties=props(), max_current=160.0,
+                         lock_check_s=0.1, ramp_step_s=0.0, kw...)
+tcube(kind::Symbol; kw...) = kind === :cp ? cp(; kw...) : cc(; kw...)
+setlvl!(l, kind::Symbol, p::Float64) = kind === :cp ? setoutputpower!(l, p) : setcurrent!(l, p)
+requested(l, kind::Symbol) = kind === :cp ? l.pd.output_power_requested : l.drive_current
+
+"A fresh controller and an initialized TCube of `kind` (`:cc` open loop, `:cp` closed loop); `calls` is left as initialize made it."
+function ready(kind::Symbol; modulator=modin(kind), settle=0.0, kw...)
+    FK.reset!()
+    empty!(LSI.MODULATOR_OUTPUTS)
+    kind === :cp && (FK.limit_follows_pot[] = true)
+    TCmod.MOD_SETTLE_S[] = settle
+    l = tcube(kind; modulator, kw...)
+    quiet(() -> initialize(l))
+    return l
+end
+
+idx(op) = findfirst(==(op), FK.calls)
+lastidx(op) = findlast(==(op), FK.calls)
+modwrites() = [i for (i, c) in enumerate(FK.calls) if startswith(c, "MOD ")]
+
+struct StubDAQ <: MC.DAQ end
+struct NoField <: MC.LightSource end
+
+# Lights that break the convention, one way each, for `modulation_violations` to find.
+mutable struct BadLight <: MC.LightSource
+    unique_id::String
+    properties::LightSourceProperties
+    modulator::Union{Nothing,MC.AbstractModulationControl}
+    flavor::Symbol   # :ignores, :writes_while_off, :no_zero_first, :no_darken, :swallows
+end
+BadLight(flavor::Symbol; modulator=RecordingModulator()) = BadLight("BadLight", LightSourceProperties("mW", 0.0, false, 0.0, 100.0), modulator, flavor)
+function MC.setpower(l::BadLight, p::Float64)
+    l.flavor === :ignores && return (l.properties.power = p)
+    if l.flavor === :writes_while_off || l.properties.is_on
+        try
+            MC.setpower(l.modulator, p)
+        catch e
+            e isa ArgumentError && rethrow()
+            l.flavor === :no_darken && rethrow()
+            l.flavor === :swallows && return nothing
+            MC.setpower(l.modulator, 0.0)
+            l.properties.is_on = false
+            rethrow()
+        end
+    end
+    l.properties.power = p
+end
+function MC.light_on(l::BadLight)
+    if l.flavor !== :ignores
+        l.flavor === :no_zero_first || MC.setpower(l.modulator, 0.0)
+        l.properties.is_on = true
+        MC.setpower(l.modulator, l.properties.power)
+        return nothing
+    end
+    l.properties.is_on = true
+end
+function MC.light_off(l::BadLight)
+    l.flavor === :ignores || LSI.zero_modulator!(l)
+    l.properties.is_on = false
+end
+
+# ---------------------------------------------------------------------------
+
+@testset "LightSource modulation" begin
+
+    @testset "types and defaults" begin
+        @test isabstracttype(MC.AbstractModulationControl)
+        @test !(MC.AbstractModulationControl <: MC.AbstractInstrument)
+        # Public, not exported.
+        for name in (:output_id, :open_modulator!, :close_modulator!, :RecordingModulator, :modulation_violations)
+            @test isdefined(MC, name) && Base.ispublic(MC, name) && !Base.isexported(MC, name)
+        end
+        @test :AbstractModulationControl in names(MC)
+        rec = RecordingModulator(id="x")
+        # The export_state fallback: the type and the output id.
+        a, d, c = MC.export_state(rec)
+        @test a["output_id"] == "x" && a["modulator_type"] == "RecordingModulator" && d === nothing && isempty(c)
+    end
+
+    @testset "claim and lifecycle (RecordingModulator on SimLight)" begin
+        empty!(LSI.MODULATOR_OUTPUTS)
+        r1, r2 = RecordingModulator(id="out"), RecordingModulator(id="out")
+        l1, l2 = SimLight(modulator=r1), SimLight(modulator=r2)
+        initialize(l1)
+        @test r1.opened == 1 && r1.writes == [0.0] && !l1.properties.is_on
+        # A second light object on the same output is refused; a re-initialize of the holder is not.
+        @test_throws r"already driving" initialize(l2)
+        @test r2.opened == 0 && LSI.MODULATOR_OUTPUTS["out"] === l1
+        initialize(l1)
+        @test r1.opened == 2
+        # A failed shutdown keeps the claim for a retry; the next shutdown releases it.
+        r1.failure = ErrorException("DAQ gone")
+        @test_throws "DAQ gone" quiet(() -> shutdown(l1))
+        @test_throws r"already driving" initialize(l2)
+        r1.failure = nothing
+        shutdown(l1)
+        @test r1.closed == 1 && isempty(LSI.MODULATOR_OUTPUTS)
+        initialize(l2)
+        @test r2.opened == 1
+        shutdown(l2)
+        # An initialize that throws releases the claim.
+        r3 = RecordingModulator(id="out")
+        r3.failure = ErrorException("no output")
+        l3 = SimLight(modulator=r3)
+        @test_throws "no output" initialize(l3)
+        @test isempty(LSI.MODULATOR_OUTPUTS)
+        # A light that never opened has nothing to close.
+        @test shutdown(SimLight(modulator=RecordingModulator(id="never"))) === nothing
+        @test isempty(LSI.MODULATOR_OUTPUTS)
+    end
+
+    @testset "NIDAQModulator on a strict FakeDAQ" begin
+        mk(daq; kw...) = NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=22.42, daq, kw...)
+        daq = FakeDAQ()
+        m = mk(daq)
+        @test MC.output_id(m) == "NIDAQ Dev1/ao1"
+        @test isempty(daq.log) && isempty(daq.tasks)            # construction is pure
+        @test_throws "before initialize" MC.setpower(m, 1.0)
+        initialize(m)
+        @test daq.log == [(:create, 1, 0.0, 5.0), (:write, 1, 0.0)]   # one task with v_range, 0 V at open
+        MC.setpower(m, 22.42)
+        MC.setpower(m, 0.0)
+        @test daq.log[end-1:end] == [(:write, 1, 1.0), (:write, 1, 0.0)]
+        n = length(daq.log)
+        for p in (120.0, -1.0, NaN, Inf)                         # out of reach: ArgumentError before any write
+            @test_throws ArgumentError MC.setpower(m, p)
+        end
+        @test length(daq.log) == n
+        initialize(m)                                            # one task for life
+        @test count(e -> e[1] == :create, daq.log) == 1 && length(daq.tasks) == 1
+        shutdown(m)
+        @test daq.log[end-1:end] == [(:write, 1, 0.0), (:delete, 1)] && isempty(daq.tasks)
+        @test_throws "before initialize" MC.setpower(m, 1.0)
+        @test shutdown(m) === nothing
+
+        # A failed initialize deletes the task it made.
+        daq = FakeDAQ(); daq.fail_write = true
+        m = mk(daq)
+        @test_throws "write refused" initialize(m)
+        @test isempty(daq.tasks) && count(e -> e[1] == :create, daq.log) == count(e -> e[1] == :delete, daq.log) == 1
+        # A card without the range (P6): DAQmx refuses, nothing is left behind.
+        daq = FakeDAQ(card_range=(0.0, 5.0))
+        m = NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 10.0), per_volt=22.42, daq)
+        @test_throws r"-200077" initialize(m)
+        @test isempty(daq.tasks)
+        # A delete that fails keeps the task for the next shutdown.
+        daq = FakeDAQ(); m = mk(daq); initialize(m); daq.fail_delete = true
+        @test_throws "delete refused" shutdown(m)
+        @test length(daq.tasks) == 1
+        daq.fail_delete = false
+        shutdown(m)
+        @test isempty(daq.tasks)
+
+        # Construction.
+        @test_throws UndefKeywordError NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), daq=FakeDAQ())
+        for bad in (0.0, -1.0, NaN, Inf)
+            @test_throws ArgumentError mk(FakeDAQ(); per_volt=bad)
+        end
+        @test_throws ArgumentError NIDAQModulator(; channel="Dev1/ao1", v_range=(1.0, 5.0), per_volt=1.0)   # 0 V must be reachable
+        @test_throws ArgumentError NIDAQModulator(; channel="Dev1/ao1", v_range=(5.0, 0.0), per_volt=1.0)
+        @test_throws ArgumentError NIDAQModulator(; channel="", v_range=(0.0, 5.0), per_volt=1.0)
+        @test NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=1.0).daq isa NIdaq   # the default DAQ
+
+        # On a light: the light opens and closes it.
+        empty!(LSI.MODULATOR_OUTPUTS)
+        daq = FakeDAQ(); light = SimLight(modulator=mk(daq))
+        initialize(light)
+        @test length(daq.tasks) == 1
+        light_on(light); setpower(light, 22.42)
+        @test daq.log[end] == (:write, 1, 1.0)
+        shutdown(light)
+        @test isempty(daq.tasks) && daq.log[end] == (:delete, 1)
+        a, _, c = MC.export_state(m)
+        @test a["output_id"] == "NIDAQ Dev1/ao1" && a["per_volt"] == 22.42 && haskey(c, "daq")
+    end
+
+    @testset "createtask keywords" begin
+        @test_throws "not implemented" MC.createtask(StubDAQ(), "AO", "Dev1/ao0")
+        @test_throws "not implemented" MC.createtask(StubDAQ(), "AO", "Dev1/ao0"; min_val=0.0, max_val=5.0)
+        # NIdaq: a half-given or non-voltage range is refused before DAQmx is reached.
+        daq = NIdaq()
+        @test_throws ArgumentError MC.createtask(daq, "AO", "Dev1/ao0"; min_val=0.0)
+        @test_throws ArgumentError MC.createtask(daq, "AO", "Dev1/ao0"; max_val=5.0)
+        @test_throws ArgumentError MC.createtask(daq, "DO", "Dev1/port0/line0"; min_val=0.0, max_val=5.0)
+    end
+
+    # A `Triggerscope4` holds an unopened `SerialPort`, which libserialport only builds for a port the machine has.
+    # `COM3` is the driver's default; the others are device nodes that exist on a Linux box without a Triggerscope.
+    function a_scope()
+        for port in ("COM3", "/dev/ttyS0", "/dev/tty")
+            try
+                return Triggerscope4(; portname=port)
+            catch
+            end
+        end
+        return nothing
+    end
+    scope = a_scope()
+    scope === nothing && @warn "no serial port name libserialport accepts on this machine; the TriggerscopeModulator tests are skipped"
+    scope === nothing || @testset "TriggerscopeModulator: pure parts" begin
+        @test scope.lock isa ReentrantLock
+        @test Trig.dac_range_volts(ZEROTOFIVE) == (0.0, 5.0)
+        @test Trig.dac_range_volts(ZEROTOTEN) == (0.0, 10.0)
+        @test Trig.dac_range_volts(PLUSMINUS5) == (-5.0, 5.0)
+        @test Trig.dac_range_volts(PLUSMINUS10) == (-10.0, 10.0)
+        @test Trig.dac_range_volts(PLUSMINUS2_5) == (-2.5, 2.5)
+        m = TriggerscopeModulator(; scope, dac=3, range=ZEROTOFIVE, per_volt=22.42)
+        @test MC.output_id(m) == "Triggerscope $(scope.portname) DAC 3" == quiet(() -> Trig.dac_output(scope, 3)).output_id
+        # Construction.
+        @test_throws UndefKeywordError TriggerscopeModulator(; scope, dac=3, per_volt=22.42)    # range is required
+        @test_throws UndefKeywordError TriggerscopeModulator(; scope, dac=3, range=ZEROTOFIVE)  # so is per_volt
+        @test_throws ArgumentError TriggerscopeModulator(; scope, dac=0, range=ZEROTOFIVE, per_volt=1.0)
+        @test_throws ArgumentError TriggerscopeModulator(; scope, dac=scope.dacoutputs + 1, range=ZEROTOFIVE, per_volt=1.0)
+        for bad in (0.0, -1.0, NaN)
+            @test_throws ArgumentError TriggerscopeModulator(; scope, dac=3, range=ZEROTOFIVE, per_volt=bad)
+        end
+        # The arithmetic and the reach, in the range's own span.
+        @test Trig.volts(m, 22.42) ≈ 1.0
+        @test Trig.volts(m, 0.0) == 0.0
+        @test Trig.volts(m, 5 * 22.42) ≈ 5.0
+        for p in (-1.0, 5 * 22.42 + 1, NaN, Inf)
+            @test_throws ArgumentError Trig.volts(m, p)
+        end
+        m10 = TriggerscopeModulator(; scope, dac=4, range=ZEROTOTEN, per_volt=15.0)
+        @test Trig.volts(m10, 150.0) ≈ 10.0
+        @test_throws ArgumentError Trig.volts(m10, 151.0)
+        # ... and what the DAC would be sent for it.
+        scope.dacranges[3] = ZEROTOFIVE
+        @test Trig.volttooutput(scope, 3, 1.0) == round(Int, 65535 / 5)
+        # setpower refuses before touching the serial port: out of reach (ArgumentError), not opened, range moved.
+        @test_throws ArgumentError MC.setpower(m, 1e9)
+        @test_throws "before initialize" MC.setpower(m, 1.0)
+        m.is_open = true
+        scope.dacranges[3] = PLUSMINUS10
+        @test_throws r"not ZEROTOFIVE" MC.setpower(m, 1.0)
+        m.is_open = false
+        # The compause warning, from the pure check initialize runs first.
+        scope.compause = 0.1
+        @test_logs (:warn, r"compause = 0.1") Trig.check_compause(m)
+        scope.compause = 0.0
+        @test_logs Trig.check_compause(m)
+        a, d, c = MC.export_state(m)
+        @test a["output_id"] == MC.output_id(m) && a["dac"] == 3 && a["range"] == "ZEROTOFIVE" && a["per_volt"] == 22.42
+        @test shutdown(m) === nothing   # not open: no serial write
+    end
+
+    @testset "SimLight and SimDiodeLaser with a modulator" begin
+        # SimLight: the plain-setpower reference.
+        empty!(LSI.MODULATOR_OUTPUTS)
+        rec = RecordingModulator(id="sl")
+        l = SimLight(modulator=rec)
+        initialize(l)
+        @test !l.properties.is_on && rec.writes == [0.0]
+        setpower(l, 2.0)                                   # off: recorded, not written
+        @test l.properties.power == 2.0 && rec.writes == [0.0]
+        light_on(l)
+        @test l.properties.is_on && rec.writes == [0.0, 0.0, 2.0]
+        setpower(l, 3.0)
+        @test rec.writes[end] == 3.0
+        rec.reach = 5.0
+        @test_throws ArgumentError setpower(l, 9.0)       # out of reach: changes nothing
+        @test l.properties.power == 3.0 && l.properties.is_on && rec.writes[end] == 3.0
+        rec.failure = ErrorException("DAQ gone")
+        @test_throws "DAQ gone" quiet(() -> setpower(l, 4.0))   # any other throw darkens
+        @test !l.properties.is_on && l.properties.power == 3.0 && rec.attempts[end] == 0.0
+        @test_throws "DAQ gone" quiet(() -> light_on(l))   # and a light_on throw enables nothing
+        @test !l.properties.is_on
+        rec.failure = nothing
+        light_on(l); rec.failure = ErrorException("DAQ gone")
+        quiet(() -> light_off(l))                          # light_off logs and switches off
+        @test !l.properties.is_on
+        rec.failure = nothing
+        shutdown(l)
+        @test rec.closed == 1 && isempty(LSI.MODULATOR_OUTPUTS) && rec.writes[end] == 0.0
+        # Without a modulator: unchanged (on after initialize, no claim).
+        plain = SimLight(); initialize(plain)
+        @test plain.properties.is_on && isempty(LSI.MODULATOR_OUTPUTS)
+
+        # SimDiodeLaser, open loop: the same convention; the model follows the level the modulator was given.
+        for mode in (:cc, :cp)
+            rec = RecordingModulator(id="sd-$mode")
+            sim = mode === :cc ? SimDiodeLaser(; mode=ConstantCurrent(), modulator=rec) :
+                  SimDiodeLaser(; mode=ConstantPhotocurrent(), max_current=160.0, wa_calibration=224.2, tia_range=1e-3,
+                                tec_stabilised=missing, properties=props(), modulator=rec)
+            initialize(sim)
+            @test rec.opened == 1 && rec.writes == [0.0] && !sim.properties.is_on
+            setlvl!(sim, mode, LV1[mode])                  # off: recorded, nothing written, still dark
+            @test rec.writes == [0.0] && requested(sim, mode) == LV1[mode] && sim.setpoint == 0.0
+            light_on(sim)
+            @test rec.writes == [0.0, 0.0, LV1[mode]] && sim.properties.is_on && sim.setpoint > 0
+            before = (requested(sim, mode), sim.setpoint)
+            setlvl!(sim, mode, LV2[mode])
+            @test rec.writes[end] == LV2[mode] && sim.setpoint > before[2]
+            rec.reach = LV2[mode]
+            @test_throws ArgumentError setlvl!(sim, mode, LV2[mode] + 1.0)
+            @test rec.writes[end] == LV2[mode] && sim.properties.is_on
+            rec.failure = ErrorException("DAQ gone")
+            @test_throws "DAQ gone" quiet(() -> setlvl!(sim, mode, LV1[mode]))
+            @test !sim.properties.is_on && !sim.output_enabled && sim.setpoint == 0.0 && rec.attempts[end] == 0.0
+            @test requested(sim, mode) == LV2[mode]       # the failed request is not recorded
+            rec.failure = nothing
+            light_off(sim)
+            @test rec.writes[end] == 0.0
+            shutdown(sim)
+            @test rec.closed == 1 && isempty(LSI.MODULATOR_OUTPUTS)
+            @test haskey(MC.export_state(sim)[3], "modulator") == true
+        end
+        # ... and with none, the exported children and the setpoint are as they were.
+        plain = SimDiodeLaser(); initialize(plain); setcurrent!(plain, 20.0)
+        @test plain.setpoint == 20.0 && isempty(MC.export_state(plain)[3])
+    end
+
+    for kind in (:cc, :cp)
+    @testset "TCube with a modulator, $(kind === :cc ? "open loop" : "closed loop")" begin
+        lv, lv2 = LV1[kind], LV2[kind]
+
+        @testset "initialize: modulator at 0 V, source 3 set while off, never enabled" begin
+            l = ready(kind)
+            m = l.modulator
+            @test m.opened == 1 && m.volts == [0.0] && haskey(LSI.MODULATOR_OUTPUTS, "mod1")
+            @test FK.source[] == 3 && l.source_before == 5                   # the fake starts at 5
+            @test "LD_EnableOutput" ∉ FK.calls && !FK.enabled() && !l.properties.is_on
+            @test idx("MOD 0.0") < idx("LD_SetControlSource")
+            @test all(e -> e[1] == 0 && e[2] == 0, FK.setpoint_log)
+            # Kept across a re-initialize: the first source found is the one restored (a 3 would read back as 1).
+            quiet(() -> initialize(l))
+            @test l.source_before == 5 && FK.source[] == 3 && m.opened == 2
+            quiet(() -> shutdown(l))
+            @test FK.source[] == 5 && l.source_before === nothing && m.closed == 1 && isempty(LSI.MODULATOR_OUTPUTS)
+            quiet(() -> initialize(l))                                       # a new cycle records again
+            @test l.source_before == 5
+            quiet(() -> shutdown(l))
+            # A failed step releases the modulator and the claim, and closes the handle.
+            l = ready(kind)
+            FK.throw!("LD_SetControlSource")
+            @test_throws "fake Kinesis failure" quiet(() -> initialize(l))
+            @test "LD_Close" in FK.calls && isempty(LSI.MODULATOR_OUTPUTS) && l.modulator.closed == 1
+        end
+
+        @testset "untouched with modulator = nothing" begin
+            l = ready(kind; modulator=nothing)
+            quiet(() -> (setlvl!(l, kind, lv); light_on(l); setlvl!(l, kind, lv2); light_off(l); light_on(l); shutdown(l)))
+            @test FK.source[] == 5 && isempty(FK.mod_volts)
+            @test "LD_SetControlSource" ∉ FK.calls && "LD_RequestControlSource" ∉ FK.calls && "LD_GetControlSource" ∉ FK.calls
+            @test isempty(LSI.MODULATOR_OUTPUTS) && !any(c -> startswith(c, "MOD"), FK.calls)
+        end
+
+        @testset "setters while off write nothing" begin
+            l = ready(kind); m = l.modulator
+            empty!(FK.calls); n = length(m.attempts)
+            quiet(() -> (setlvl!(l, kind, lv); setlvl!(l, kind, lv2); setlevel!(l, 0.5)))
+            @test isempty(FK.calls) && length(m.attempts) == n          # no USB call, no modulator write
+            @test requested(l, kind) ≈ (kind === :cp ? 1.0 + 0.5 * 69.0 : 0.0 + 0.5 * TCmod.effective_max_current(l))
+            @test_throws ArgumentError setlvl!(l, kind, kind === :cp ? 80.0 : 200.0)   # validated as always
+            @test isempty(FK.calls) && length(m.attempts) == n
+        end
+
+        @testset "light_on: the order of the steps, the wait, the confirm" begin
+            l = ready(kind; settle=0.15); m = l.modulator
+            quiet(() -> setlvl!(l, kind, lv))
+            empty!(FK.calls); empty!(FK.setpoints)
+            elapsed = @elapsed quiet(() -> light_on(l))
+            ops = [c for c in FK.calls if c in ("LD_EnableOutput", "LD_SetLaserSetPoint", "LD_DisableOutput") || startswith(c, "MOD ")]
+            @test ops[1:3] == ["MOD 0.0", "LD_EnableOutput", "LD_SetLaserSetPoint"]
+            @test startswith(ops[4], "MOD ") && ops[4] != "MOD 0.0" && length(ops) == 4
+            @test lastidx("LD_GetLaserSetPoint") > modwrites()[2]       # the confirm reads after the level is on
+            @test FK.setpoints == [0x0000]                                # the only USB setpoint is the zero
+            @test m.times[end] - FK.last_write_t[] >= 0.15 - 1e-3        # the wait between the zero and the level
+            @test elapsed >= 0.15
+            @test l.properties.is_on && FK.enabled()
+            @test abs(FK.held_total() - words_of(kind, lv)) <= 2
+            # A second light_on while on reruns all of it.
+            empty!(FK.calls)
+            quiet(() -> light_on(l))
+            @test length(modwrites()) == 2 && FK.calls[modwrites()[1]] == "MOD 0.0" && l.properties.is_on
+            empty!(FK.calls)
+            quiet(() -> light_off(l))
+            @test !FK.enabled() && m.volts[end] == 0.0 && FK.ext_words[] == 0
+            @test idx("MOD 0.0") < idx("LD_SetLaserSetPoint") < idx("LD_DisableOutput")   # 0 V, then USB 0 and the disable
+            TCmod.MOD_SETTLE_S[] = 0.0
+        end
+
+        @testset "level setters while on: one modulator write, no USB call" begin
+            l = ready(kind); m = l.modulator
+            quiet(() -> (setlvl!(l, kind, lv); light_on(l)))
+            empty!(FK.calls)
+            quiet(() -> setlvl!(l, kind, lv2))
+            @test length(FK.calls) == 1 && startswith(FK.calls[1], "MOD ")
+            @test abs(FK.held_total() - words_of(kind, lv2)) <= 2
+            @test requested(l, kind) == lv2
+            quiet(() -> setlevel!(l, 0.25))
+            @test length(FK.calls) == 2 && all(c -> startswith(c, "MOD "), FK.calls)
+            quiet(() -> light_off(l))
+        end
+
+        @testset "every USB setpoint is 0 or the reference, at 0 V" begin
+            ref = kind === :cp ? (; ref_current_mA=90.0, ref_photocurrent_A=FK.pd_word_at(90.0) / 32767 * 1e-3) : (;)
+            l = ready(kind; ref...)
+            quiet() do
+                setlvl!(l, kind, lv)
+                light_on(l)
+                setlvl!(l, kind, lv2)
+                light_on(l)
+                light_off(l)
+                setlvl!(l, kind, lv)
+                light_on(l)
+                initialize(l)          # re-initialize while lit: 0 V first, then the zero
+                light_on(l)
+                shutdown(l)
+            end
+            refcode = kind === :cp ? Int(TCmod.setpoint_code(l, 90.0)) : 0
+            @test !isempty(FK.setpoint_log)
+            @test all(e -> e[2] == 0 && e[1] in (0, refcode), FK.setpoint_log)
+            kind === :cp && @test count(e -> e[1] == refcode, FK.setpoint_log) == 2   # the check ran, once per initialize
+        end
+
+        @testset "the confirm refuses, ending off at 0 V" begin
+            function refused(l; during=nothing)
+                task = during === nothing ? nothing : @async(during())
+                quiet() do
+                    @test_throws r"setpoint register" light_on(l)
+                end
+                task === nothing || wait(task)
+                @test !l.properties.is_on && !FK.enabled() && FK.ext_words[] == 0
+                @test l.modulator.volts[end] == 0.0 && "LD_DisableOutput" in FK.calls
+            end
+            # (a) the controller loses a MOD IN change made within its window; MOD_SETTLE_S is shorter than the window.
+            l = ready(kind); quiet(() -> setlvl!(l, kind, lv))
+            FK.settle_s[] = 0.3
+            refused(l)
+            #     ... and with MOD_SETTLE_S above the window it lands.
+            TCmod.MOD_SETTLE_S[] = 0.35
+            quiet(() -> light_on(l))
+            @test l.properties.is_on && abs(FK.held_total() - words_of(kind, lv)) <= 2
+            quiet(() -> light_off(l))
+            # (b) a per_volt the manual's 3.2x too high.
+            l = ready(kind; modulator=modin(kind; scale=3.2)); quiet(() -> setlvl!(l, kind, lv))
+            refused(l)
+            #     ... and one too low (cp: 2.85 V is within reach; cc: 8 V is not, and light_on refuses all the same).
+            if kind === :cp
+                l = ready(kind; modulator=modin(kind; scale=1 / 3.2)); quiet(() -> setlvl!(l, kind, lv))
+                refused(l)
+            end
+            # (c) a level change from another task during the wait is lost: the confirm finds the old level's code.
+            l = ready(kind; settle=0.4); quiet(() -> setlvl!(l, kind, lv))
+            FK.settle_s[] = 0.05
+            refused(l; during=() -> (sleep(0.15); setlvl!(l, kind, lv2)))
+            # (d) a light_off during the wait leaves a stale read-back.
+            l = ready(kind; settle=0.4); quiet(() -> setlvl!(l, kind, lv))
+            refused(l; during=() -> (sleep(0.15); light_off(l)))
+            TCmod.MOD_SETTLE_S[] = 0.0
+        end
+
+        @testset "an ArgumentError keeps the old level; a transport throw ends off" begin
+            l = ready(kind); m = l.modulator
+            quiet(() -> (setlvl!(l, kind, lv); light_on(l)))
+            m.v_max = kind === :cp ? 1.0 : 3.0                          # reaches lv, not lv2
+            words = FK.held_total(); nw = length(m.volts)
+            @test_throws ArgumentError quiet(() -> setlvl!(l, kind, lv2))
+            @test requested(l, kind) == lv && l.properties.is_on && FK.enabled()
+            @test FK.held_total() == words && length(m.volts) == nw && m.volts[end] > 0   # no write, no 0
+            @test_throws ArgumentError quiet(() -> setlvl!(l, kind, kind === :cp ? 80.0 : 200.0))   # the driver's own check
+            @test requested(l, kind) == lv && l.properties.is_on
+            # A transport failure: level 0 is tried, the light is off, the error reaches the caller, the request is not recorded.
+            m.failure = ErrorException("DAQ gone")
+            empty!(FK.calls)
+            @test_throws "DAQ gone" quiet(() -> setlvl!(l, kind, lv2 - 10.0))
+            @test m.attempts[end] == 0.0 && !l.properties.is_on && !FK.enabled() && "LD_DisableOutput" in FK.calls
+            @test requested(l, kind) == lv
+            # light_off with a failing modulator: logged, and the output is still disabled.
+            m.failure = nothing; quiet(() -> light_on(l)); m.failure = ErrorException("DAQ gone")
+            @test quiet(() -> light_off(l)) === nothing
+            @test !l.properties.is_on && !FK.enabled()
+            # light_on with a failing modulator enables nothing.
+            empty!(FK.calls)
+            @test_throws "DAQ gone" quiet(() -> light_on(l))
+            @test "LD_EnableOutput" ∉ FK.calls && !l.properties.is_on && !FK.enabled()
+            # A failure of the level itself (not of the 0 V before the enable): off again, 0 tried.
+            m.failure = nothing; m.fail_nonzero = ErrorException("level refused")
+            empty!(FK.calls)
+            @test_throws "level refused" quiet(() -> light_on(l))
+            @test "LD_EnableOutput" in FK.calls && "LD_DisableOutput" in FK.calls && !l.properties.is_on && !FK.enabled()
+            @test m.attempts[end] == 0.0 && FK.ext_words[] == 0
+            # An out-of-reach request at light_on is an ArgumentError, with the light dark.
+            m.fail_nonzero = nothing; m.v_max = 0.5
+            @test_throws ArgumentError quiet(() -> light_on(l))
+            @test !l.properties.is_on && !FK.enabled() && FK.ext_words[] == 0
+        end
+
+        @testset "shutdown: 0 V, disable, source restored, claim released" begin
+            l = ready(kind); m = l.modulator
+            quiet(() -> (setlvl!(l, kind, lv); light_on(l)))
+            empty!(FK.calls)
+            quiet(() -> shutdown(l))
+            @test idx("MOD 0.0") < idx("LD_DisableOutput") < idx("LD_SetControlSource") < idx("LD_Close")
+            @test FK.source[] == 5 && m.closed == 1 && isempty(LSI.MODULATOR_OUTPUTS) && !FK.enabled()
+        end
+
+        @testset "the claim: a second light is refused; a failed shutdown(mc) keeps it" begin
+            l1 = ready(kind)
+            l2 = tcube(kind; modulator=modin(kind))                      # same output id
+            @test_throws r"already driving" quiet(() -> initialize(l2))
+            @test "LD_Close" in FK.calls && FK.source[] == 3              # l2's handle closed; l1's source untouched
+            m1 = l1.modulator
+            m1.shutdown_failure = ErrorException("DAQ gone")
+            @test_throws "DAQ gone" quiet(() -> shutdown(l1))
+            @test FK.source[] == 5                                        # the source was restored, the handle closed
+            @test_throws r"already driving" quiet(() -> initialize(l2))
+            m1.shutdown_failure = nothing
+            quiet(() -> shutdown(l1))                                     # the retry
+            @test m1.closed == 1 && isempty(LSI.MODULATOR_OUTPUTS)
+            quiet(() -> initialize(l2))
+            @test haskey(LSI.MODULATOR_OUTPUTS, "mod1")
+            quiet(() -> shutdown(l2))
+        end
+
+        @testset "export_state carries the modulator as a child" begin
+            l = ready(kind)
+            a, d, c = MC.export_state(l)
+            @test haskey(c, "daq") && c["modulator"][1]["output_id"] == "mod1"
+            @test !haskey(MC.export_state(ready(kind; modulator=nothing))[3], "modulator")
+        end
+    end
+    end
+
+    @testset "modulation_violations" begin
+        function sinked(kind)
+            RecordingModulator(id="rec-$kind", sink=p -> FK.apply_ext!(words_of(kind, p)))
+        end
+        for kind in (:cc, :cp)
+            l = ready(kind; modulator=sinked(kind))
+            viol = quiet(() -> MC.modulation_violations(l; set! = x -> setlvl!(x, kind, LV1[kind]), expect = LV1[kind]))
+            @test viol == String[]
+            @test !l.properties.is_on
+        end
+        for (name, mk) in (
+            "SimLight" => () -> (l = SimLight(modulator=RecordingModulator(id="v1")); (l, x -> setpower(x, 2.0), 2.0)),
+            "SimDiodeLaser current" => () -> (l = SimDiodeLaser(modulator=RecordingModulator(id="v2")); (l, x -> setcurrent!(x, 20.0), 20.0)),
+            "SimDiodeLaser power" => () -> (l = SimDiodeLaser(; mode=ConstantPhotocurrent(), max_current=160.0, wa_calibration=224.2,
+                tia_range=1e-3, tec_stabilised=missing, properties=props(), modulator=RecordingModulator(id="v3"));
+                (l, x -> setoutputpower!(x, 20.0), 20.0)),
+        )
+            empty!(LSI.MODULATOR_OUTPUTS)
+            l, set!, expect = mk()
+            initialize(l)
+            @test (name => quiet(() -> MC.modulation_violations(l; set!, expect))) == (name => String[])
+        end
+
+        # A light that breaks the convention is found, each in its own way.
+        function violations(flavor)
+            empty!(LSI.MODULATOR_OUTPUTS)
+            l = BadLight(flavor)
+            quiet(() -> MC.modulation_violations(l; set! = x -> MC.setpower(x, 2.0), expect = 2.0))
+        end
+        @test any(v -> occursin("wrote nothing", v), violations(:ignores))
+        @test any(v -> occursin("while the light was off reached the output", v), violations(:writes_while_off))
+        @test any(v -> occursin("not level 0", v), violations(:no_zero_first))
+        @test any(v -> occursin("still on", v), violations(:no_darken))
+        @test any(v -> occursin("did not reach the caller", v), violations(:swallows))
+        # Missing pieces are reported, not thrown.
+        @test MC.modulation_violations(NoField(); set! = identity, expect = 1.0) == ["NoField has no `modulator` field"]
+        @test any(v -> occursin("RecordingModulator", v),
+                  MC.modulation_violations(BadLight(:ignores; modulator=nothing); set! = identity, expect = 1.0))
+    end
+
+    @testset "setupIO and set_modvoltage are deprecated, naming the modulator" begin
+        l = cc()
+        @test_deprecated r"NIDAQModulator" (try TCmod.setupIO(l) catch end)
+        @test_deprecated r"NIDAQModulator" (try TCmod.set_modvoltage(l, 1.0) catch end)
+    end
+
+    FK.reset!()
+    TCmod.MOD_SETTLE_S[] = 0.0
+    empty!(LSI.MODULATOR_OUTPUTS)
+end
+
+end # module
