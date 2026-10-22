@@ -428,7 +428,9 @@ arming nothing is written (an arming `light_on` applies the latest recorded requ
 modulator changes nothing; any other throw writes 0 (tried), disables and rethrows. Returns whether a level was written.
 """
 function set_level_modulated!(light::TCubeLaser, p::Float64)
-    (light.properties.is_on && !light.arming) || return false
+    # Record-only while off, arming, or closing: after a failed shutdown `is_on` may still be true (the disable is pending), but
+    # nothing may put a level on MOD IN again.
+    (light.properties.is_on && !light.arming && !light.closing) || return false
     # A failed write leaves the output at an unknown level: DISABLE FIRST (a stalled MOD zero must not keep it on), then zero.
     apply_level!(light, p, () -> disable_after_failure(light, "setpoint change through the modulator"); zero_first=false)
     return true

@@ -927,6 +927,10 @@ end
             @test isempty(FK.violations)                                        # (the USB zero was skipped or at 0 V throughout)
             # While the output is still enabled the front knob is NOT handed the controller back, and the output is not given up.
             @test FK.source[] == 3 && l.source_before == 5 && l.modulator.closed == 0 && LSI.MODULATOR_OUTPUTS["mod1"] === l
+            # A setter now must not put a level on MOD IN: the shutdown has begun and the disable is pending.
+            nw = length(l.modulator.volts)
+            quiet(() -> setlvl!(l, kind, lv2))
+            @test requested(l, kind) == lv2 && length(l.modulator.volts) == nw && l.properties.is_on && l.disable_pending
             delete!(FK.status, "LD_DisableOutput")
             empty!(FK.calls)
             quiet(() -> shutdown(l))                                            # reopens deliberately for the disable
