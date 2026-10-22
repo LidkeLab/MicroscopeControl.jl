@@ -189,20 +189,21 @@ the light off, with what [`zero_modulator!`](@ref) returned, so an interrupted 0
 propagate_interrupt(err) = err isa InterruptException ? throw(err) : nothing
 
 """
-    apply_level!(light, p, darken!; darken_argument_errors = false)
+    apply_level!(light, p, darken!; darken_argument_errors = false, zero_first = true)
 
 Put level `p` on `light.modulator`. For a level setter whose light is on, an `ArgumentError` (the modulator refused
 before writing) is rethrown and changes nothing; with `darken_argument_errors = true` (an activation, where the light
 is already enabled) it darkens like any other throw. Any other throw, an `InterruptException` included, leaves the
 output unknown: level 0 is written (tried; a failure is logged), `darken!()` switches the light off, and the error is
-rethrown. Public, not exported.
+rethrown. With `zero_first = false` the caller's `darken!` is run first and is itself responsible for the level-0 write (a
+driver whose off must not wait for a MOD write). Public, not exported.
 """
-function apply_level!(light, p::Float64, darken!; darken_argument_errors::Bool=false)
+function apply_level!(light, p::Float64, darken!; darken_argument_errors::Bool=false, zero_first::Bool=true)
     try
         setpower(light.modulator, p)
     catch e
         (e isa ArgumentError && !darken_argument_errors) && rethrow()
-        zero_modulator!(light)
+        zero_first && zero_modulator!(light)
         darken!()
         rethrow()
     end

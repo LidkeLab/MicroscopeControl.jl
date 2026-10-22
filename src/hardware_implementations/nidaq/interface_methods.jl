@@ -60,6 +60,8 @@ ao_alloc() = DAQmx.AOTask()
 ai_add!(task, channel, lo, hi) = DAQmx.add_ai_voltage!(task, channel; min_val=lo, max_val=hi)
 ao_add!(task, channel, lo, hi) = DAQmx.add_ao_voltage!(task, channel; min_val=lo, max_val=hi)
 task_clear!(task) = DAQmx.clear!(task)
+# One scalar analogue write with an explicit DAQmx timeout (seconds); `setvoltage` keeps DAQmx's 10 s default.
+ao_write!(task, v, timeout) = DAQmx.write_scalar(task, v; auto_start=true, timeout=timeout)
 
 """
     createtask(daq::NIdaq,tasktype::String,channel::String; min_val=nothing, max_val=nothing)

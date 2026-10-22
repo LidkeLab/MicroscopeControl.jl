@@ -75,7 +75,8 @@ so that an 80 mA call can never become an 80 mW one.
 - `connected::Bool`: State. Whether `initialize` has opened the Kinesis handle and `shutdown` has not closed it.
   With a modulator, a `shutdown` retried after the handle closed touches no closed-handle call.
 - `generation::Threads.Atomic{Int}`, `lock::ReentrantLock`, `arming::Bool`: State of a light with a modulator, see
-  "Locking" below. `disable_pending::Bool`: State. A `LD_DisableOutput` failed and has not been retried; a `shutdown`
+  "Locking" below; `closing::Bool`: a `shutdown` has begun (no activation may arm or enable) until the next `initialize`.
+  `disable_pending::Bool`: State. A `LD_DisableOutput` failed and has not been retried; a `shutdown`
   retried after the handle closed reopens it to retry the disable.
 
 The first fourteen fields are in the order they have always been in, and the
@@ -92,7 +93,14 @@ generation check, then USB 0), releases `lock` to sleep `MOD_SETTLE_S`, applies 
 the read-back and the lock check WITHOUT it, re-checking the generation before each write. A `light_off` or `shutdown`
 bumps `generation`, then disables under `usb_lock` right away, with no wait for `lock` and so none for a MOD IN write
 that is blocked on its transport; the MOD IN zero follows. No enable can follow a disable that superseded it. An activation
-that finds `generation` moved throws "superseded" and writes nothing more. While arming, level setters record only
+that finds `generation` moved throws "superseded" and writes nothing more. `[guarantee]` `shutdown` is final: it sets
+`closing` before it disables, an activation that reaches the lock or the enable gate afterwards is refused, and `shutdown`
+disables again as its last hardware step before it closes; `initialize` clears `closing`. `light_off` is not final: a
+`light_on` that is linearized after it (it takes the lock later) may legitimately turn the light on again, and `light_off`'s
+own disable is prompt either way.
+`[limitation]` With ONE Julia thread, a vendor call that blocks (a DAQmx scalar write stalled on its transport) blocks the
+thread that would run `light_off` too, up to the write's timeout ([`NIDAQModulator`](@ref): 0.5 s by default). Issue
+`light_off` from another thread (`julia -t 2`, `Threads.@spawn`) to be independent of it. While arming, level setters record only
 (the activation applies the latest request); while on, they write MOD IN under `lock`. A USB setpoint is written only
 when the MOD IN zero succeeded in the same critical section, and never when the modulator is not open: then it is
 skipped and the output disabled. A light without a modulator takes no lock and runs as it always did.
@@ -120,8 +128,11 @@ USB: a level change is one analogue write, not a USB setpoint and a lock check.
   An `ArgumentError` from the modulator changes nothing; any other throw darkens the
   light and is rethrown. `[limitation]` Between `light_on`s nothing watches the level;
   poll [`loop_status`](@ref).
-- `light_off`, `shutdown` and every failure path write 0 V first (a failure is logged),
-  then zero the USB setpoint and disable, as always.
+- `light_off`, `shutdown` and every failure path DISABLE FIRST (at once, without waiting for
+  a MOD IN write) and then write 0 V (a failure is logged). No USB zero is sent after a
+  modulated off: the controller ignores one with the output off, and the next `light_on`
+  writes USB 0 at 0 V after its enable. (`initialize` and the calibration-reference check
+  still zero the USB setpoint before they disable, when the MOD IN level is known to be 0.)
 - `[limitation]` The controller has ONE setpoint register: a USB write sets it outright
   (taking the MOD IN voltage then as reference) and MOD IN changes add their difference.
   So no USB setpoint is sent while the modulator holds a level: only 0, and the
@@ -135,11 +146,15 @@ and, on the next `LD_EnableOutput`, runs on whatever setpoint it had stored
 (observed on the 642 nm rig's TLD001 64849775, 2026-09-28). So a requested
 setpoint (`setcurrent!`, `setoutputpower!`) reaches the diode only because
 `light_on` sends it right after enabling, and `light_off` and `shutdown` zero
-the setpoint before disabling, so the next enable starts dark.
+the setpoint before disabling, so the next enable starts dark. (With a modulator they
+disable first and send no USB zero; see "With a modulator". The stored setpoint then
+stays at the 0 the last `light_on` wrote, and the register's MOD IN part is back at
+0 V before the next enable.)
 
 `[limitation]` Between the enable and the setpoint that follows it (one USB
 round trip) the controller runs on its stored setpoint: 0 after this driver's
-`light_off` or `shutdown`, but anything up to the controller's current limit if
+`light_off` or `shutdown` (with a modulator: 0 because every `light_on` wrote USB 0, after a
+failed disable-first cleanup possibly not), but anything up to the controller's current limit if
 other software left it there. In that window the current-limit potentiometer
 is the only hardware bound; set it at or below the diode's rating.
 """
@@ -168,6 +183,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
     arming::Bool
     disable_pending::Bool
     const usb_lock::ReentrantLock
+    closing::Bool
     const arm_gen::Threads.Atomic{Int}
 
     function TCubeLaser{M}(unique_id, properties, laser_color, min_current, max_current,
@@ -193,7 +209,7 @@ mutable struct TCubeLaser{M<:RegulationMode} <: DiodeLaser
         new{M}(unique_id, properties, laser_color, min_current, max_current,
             max_setcurrent, max_setpoint, serialNo, task_mod, daq,
             controller_max_current, daq_device, ao_channel, drive_current,
-            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0), ReentrantLock(), false, false, ReentrantLock(), Threads.Atomic{Int}(0))
+            threshold_current, pd, modulator, nothing, false, Threads.Atomic{Int}(0), ReentrantLock(), false, false, ReentrantLock(), false, Threads.Atomic{Int}(0))
     end
 end
 

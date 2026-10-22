@@ -293,14 +293,15 @@ function LightSourceInterface.light_on(sim::SimDiodeLaser)
     _require_open(sim, "light_on")
     _require_clamp(sim, "light_on")
     if sim.modulator !== nothing
+        gen = Threads.atomic_add!(sim.generation, 1) + 1   # before the first write: a light_off or shutdown during it supersedes this
         try
             setpower(sim.modulator, 0.0)   # level 0 before the enable: a throw enables nothing
         catch
             sim.properties.is_on && _darken!(sim)
             rethrow()
         end
+        sim.generation[] == gen || throw(ErrorException("SimDiodeLaser $(sim.unique_id): light_on was superseded; it enabled nothing"))
         sim.setpoint = 0.0
-        gen = Threads.atomic_add!(sim.generation, 1) + 1
         sim.output_enabled = true
         sim.properties.is_on = true
         try

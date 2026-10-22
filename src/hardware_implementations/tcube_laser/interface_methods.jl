@@ -879,6 +879,7 @@ function initialize(light::TCubeLaser)
     light.modulator === nothing && return _initialize(light)
     # Under the light's lock, after superseding any activation in flight (which then throws and touches nothing).
     lock(light.lock) do
+        light.closing = false
         bump_generation!(light)
         light.arming = false
         _initialize(light)

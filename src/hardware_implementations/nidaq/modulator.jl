@@ -1,5 +1,5 @@
 """
-    NIDAQModulator(; channel, v_range, per_volt, daq = NIdaq())
+    NIDAQModulator(; channel, v_range, per_volt, daq = NIdaq(), write_timeout = 0.5)
 
 An [`AbstractModulationControl`](@ref) that drives a light's analogue input from one NI-DAQmx analogue
 output `channel` (`"Dev1/ao1"`). `v_range = (v_min, v_max)` is the range the output is created with, passed to
@@ -14,6 +14,14 @@ light opens and closes it.
 
 `setpower(mc, p)` writes `p / per_volt` volts, and throws `ArgumentError`, before any write, when that is not
 finite or lies outside `v_range`.
+
+`write_timeout` (seconds, default 0.5) is the DAQmx timeout of every analogue write this modulator makes, instead of
+DAQmx's 10 s default. A software-timed scalar write to an NI USB DAQ takes about 0.5 ms (measured, PR #83, 2026-10-13), so 0.5 s
+is three orders of magnitude of margin and bounds a stall.
+`[limitation]` DAQmx's scalar write is a synchronous native call: with ONE Julia thread, a write stalled on its transport
+blocks the whole thread, so a `light_off` issued from another task cannot run until the write returns or times out, up to
+`write_timeout`. Issue `light_off` from another thread (`julia -t 2`, `Threads.@spawn`), as 0.2.7 does for the DCAM4 frame
+wait, to be independent of it.
 """
 mutable struct NIDAQModulator <: AbstractModulationControl
     daq::DAQ
@@ -23,16 +31,19 @@ mutable struct NIDAQModulator <: AbstractModulationControl
     per_volt::Float64
     task::Any   # nothing until initialize; the DAQ's own task object after
     configured::Bool   # whether `task` has its channel (a task that could not be set up or released has not)
+    write_timeout::Float64
 end
 
-function NIDAQModulator(; channel::AbstractString, v_range::Tuple{<:Real,<:Real}, per_volt::Real, daq::DAQ=NIdaq())
+function NIDAQModulator(; channel::AbstractString, v_range::Tuple{<:Real,<:Real}, per_volt::Real, daq::DAQ=NIdaq(), write_timeout::Real=0.5)
     v_min, v_max = Float64(v_range[1]), Float64(v_range[2])
     (isfinite(v_min) && isfinite(v_max) && v_min <= 0.0 <= v_max && v_min < v_max) || throw(ArgumentError(
         "NIDAQModulator: v_range = $(v_range) must be finite with v_min < v_max and contain 0 V (level 0 is 0 V)"))
     (isfinite(per_volt) && per_volt > 0) || throw(ArgumentError(
         "NIDAQModulator: per_volt is the light's unit per volt and must be finite and positive, got $(per_volt)"))
     isempty(channel) && throw(ArgumentError("NIDAQModulator: channel names the analogue output, e.g. \"Dev1/ao1\""))
-    return NIDAQModulator(daq, String(channel), v_min, v_max, Float64(per_volt), nothing, false)
+    (isfinite(write_timeout) && write_timeout > 0) || throw(ArgumentError(
+        "NIDAQModulator: write_timeout is the DAQmx timeout of each write in seconds and must be finite and positive, got $(write_timeout)"))
+    return NIDAQModulator(daq, String(channel), v_min, v_max, Float64(per_volt), nothing, false, Float64(write_timeout))
 end
 
 output_id(m::NIDAQModulator) = "NIDAQ $(m.channel)"
@@ -49,10 +60,15 @@ end
 
 holds_resources(m::NIDAQModulator) = m.task !== nothing
 
+# One analogue write, with this modulator's timeout where the DAQ takes one (NIdaq); another DAQ writes as `setvoltage` does.
+write_level(m::NIDAQModulator, v::Float64) = write_level(m.daq, m.task, v, m.write_timeout)
+write_level(daq::DAQ, task, v::Float64, timeout::Float64) = setvoltage(daq, task, v)
+write_level(daq::NIdaq, task, v::Float64, timeout::Float64) = ao_write!(task, v, timeout)
+
 function setpower(m::NIDAQModulator, p::Float64)
     (m.task === nothing || !m.configured) && error("NIDAQModulator $(m.channel): setpower before initialize (or after shutdown, or with the task not set up)")
     v = volts(m, p)
-    setvoltage(m.daq, m.task, v)
+    write_level(m, v)
     return nothing
 end
 
@@ -60,7 +76,7 @@ end
 # leaves it for `shutdown` to retry and `holds_resources` true, which keeps the light's claim.
 function initialize(m::NIDAQModulator)
     if m.task !== nothing && m.configured   # opened already: one task for life, so only the level is put back to 0 V
-        setvoltage(m.daq, m.task, 0.0)
+        write_level(m, 0.0)
         return nothing
     end
     if m.task === nothing
@@ -82,7 +98,7 @@ function initialize(m::NIDAQModulator)
         return initialize(m)
     end
     try
-        setvoltage(m.daq, m.task, 0.0)
+        write_level(m, 0.0)
     catch
         try
             deletetask(m.daq, m.task)
@@ -100,7 +116,7 @@ end
 # them, and the next `shutdown` retries from the zero (a task that never had its channel has no level to zero).
 function shutdown(m::NIDAQModulator)
     m.task === nothing && return nothing
-    m.configured && setvoltage(m.daq, m.task, 0.0)
+    m.configured && write_level(m, 0.0)
     deletetask(m.daq, m.task)
     m.task = nothing
     m.configured = false

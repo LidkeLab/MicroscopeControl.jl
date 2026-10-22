@@ -93,18 +93,19 @@ mutable struct FakeModIn <: MC.AbstractModulationControl
     attempts::Vector{Float64}
     opened::Int
     closed::Int
-    gate::Union{Nothing,Base.Event}   # a nonzero write waits on it, as on a stalled transport
+    gate::Union{Nothing,Base.Event}   # a nonzero write (and a zero one, with `block_zero`) waits on it, as on a stalled transport
     blocked::Bool
+    block_zero::Bool
 end
 FakeModIn(; id="mod1", per_volt, words_per_volt, v_max=5.0) =
-    FakeModIn(id, per_volt, words_per_volt, v_max, nothing, nothing, nothing, Float64[], Float64[], Float64[], 0, 0, nothing, false)
+    FakeModIn(id, per_volt, words_per_volt, v_max, nothing, nothing, nothing, Float64[], Float64[], Float64[], 0, 0, nothing, false, false)
 
 LSI.output_id(m::FakeModIn) = m.id
 function MC.setpower(m::FakeModIn, p::Float64)
     push!(m.attempts, p)
     m.failure === nothing || throw(m.failure)
     (p != 0 && m.fail_nonzero !== nothing) && throw(m.fail_nonzero)
-    if p != 0 && m.gate !== nothing
+    if (p != 0 || m.block_zero) && m.gate !== nothing
         m.blocked = true
         wait(m.gate)
         m.blocked = false
@@ -190,9 +191,10 @@ mutable struct VendorTask
     cleared::Bool
     channel::Any
     writes::Vector{Float64}
+    timeouts::Vector{Float64}
 end
 const VENDOR = (live=VendorTask[], fail_add=Ref(false), fail_clear=Ref(false))
-vendor_alloc() = (t = VendorTask(false, nothing, Float64[]); push!(VENDOR.live, t); t)
+vendor_alloc() = (t = VendorTask(false, nothing, Float64[], Float64[]); push!(VENDOR.live, t); t)
 function vendor_add!(t, channel, lo, hi)
     VENDOR.fail_add[] && error("vendor: add refused")
     t.channel = (channel, lo, hi)
@@ -204,15 +206,16 @@ function vendor_clear!(t)
     filter!(x -> x !== t, VENDOR.live)
     return nothing
 end
+function vendor_write!(t, v, timeout)
+    t.channel === nothing && error("vendor: write to a task with no channel")
+    push!(t.writes, v); push!(t.timeouts, timeout)
+    return nothing
+end
 @eval MC.HardwareImplementations.NIDAQcard begin
+    ao_write!(task, v, timeout) = $(@__MODULE__).vendor_write!(task, v, timeout)
     ao_alloc() = $(@__MODULE__).vendor_alloc()
     ao_add!(task, channel, lo, hi) = $(@__MODULE__).vendor_add!(task, channel, lo, hi)
     task_clear!(task) = $(@__MODULE__).vendor_clear!(task)
-end
-function MC.setvoltage(d::NIdaq, t::VendorTask, v::Float64)
-    t.channel === nothing && error("vendor: write to a task with no channel")
-    push!(t.writes, v)
-    return 1
 end
 MC.deletetask(d::NIdaq, t::VendorTask) = vendor_clear!(t)
 
@@ -364,7 +367,16 @@ end
         light = SimLight(modulator=mn)
         initialize(light)
         @test length(VENDOR.live) == 1 && VENDOR.live[1].channel == ("Dev1/ao1", 0.0, 5.0) && VENDOR.live[1].writes == [0.0]
+        light_on(light); setpower(light, 22.42)
+        # Every write carries the modulator's explicit DAQmx timeout (0.5 s by default, not DAQmx's 10 s).
+        @test VENDOR.live[1].writes == [0.0, 0.0, 0.0, 1.0] && all(==(0.5), VENDOR.live[1].timeouts)
         shutdown(light)
+        @test_throws ArgumentError NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=1.0, write_timeout=0.0)
+        @test_throws ArgumentError NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=1.0, write_timeout=NaN)
+        light = SimLight(modulator=NIDAQModulator(; channel="Dev1/ao1", v_range=(0.0, 5.0), per_volt=22.42, daq=NIdaq(), write_timeout=0.2))
+        t1 = nothing
+        initialize(light); t1 = VENDOR.live[1]; shutdown(light)
+        @test length(t1.timeouts) == 3 && all(==(0.2), t1.timeouts)   # the initial 0 V and the two of shutdown
         @test isempty(VENDOR.live) && isempty(LSI.MODULATOR_OUTPUTS)
         # ... a task allocated and then refused its channel is cleared: nothing leaks ...
         VENDOR.fail_add[] = true
@@ -517,6 +529,19 @@ end
         n = length(rec.writes)
         quiet(() -> setcurrent!(sim, 30.0))                 # a later setter does not drive the modulator
         @test length(rec.writes) == n
+
+        # A light_off or shutdown during the FIRST level-0 write (before the enable) supersedes the activation: it enables nothing.
+        for how in (:light_off, :shutdown)
+            empty!(LSI.MODULATOR_OUTPUTS)
+            armed = Ref(false)
+            rec = RecordingModulator(id="init0-$how")
+            sim = SimDiodeLaser(modulator=rec); initialize(sim)
+            rec.sink = p -> (armed[] && (armed[] = false; how === :light_off ? light_off(sim) : shutdown(sim)))
+            quiet(() -> setcurrent!(sim, 40.0))
+            armed[] = true
+            @test_throws r"superseded" light_on(sim)
+            @test !sim.output_enabled && !sim.properties.is_on
+        end
 
         # A light_off or an initialize during the settle owns the output: the delayed activation writes nothing more.
         for how in (:light_off, :initialize)
@@ -1055,6 +1080,40 @@ end
             @test FK.source[] == 5 && l.source_before === nothing && !FK.opened[]
             @test FK.calls[1] == "LD_Open" && FK.calls[end] == "LD_Close" && "LD_SetControlSource" in FK.calls
             @test isempty(LSI.MODULATOR_OUTPUTS)
+        end
+
+        @testset "shutdown is final: an activation queued ahead of it is refused" begin
+            l = ready(kind; settle=0.05)
+            quiet(() -> setlvl!(l, kind, lv))
+            lock(l.lock)                                   # hold the coordination lock
+            act = @async try quiet(() -> light_on(l)) catch e; e end
+            sleep(0.05)                                    # the activation is queued on the lock, ahead of shutdown
+            sd = @async try quiet(() -> shutdown(l)) catch e; e end
+            sleep(0.05)                                    # shutdown has set `closing` and disabled; it waits for the same lock
+            unlock(l.lock)
+            @test timedwait(() -> istaskdone(act) && istaskdone(sd), 20.0) === :ok
+            @test occursin("shutdown has begun", sprint(showerror, fetch(act)))
+            @test fetch(sd) === nothing
+            @test !FK.enabled() && !l.properties.is_on && l.modulator.closed == 1 && !FK.opened[] && FK.source[] == 5
+            @test isempty(FK.violations) && isempty(LSI.MODULATOR_OUTPUTS)
+            # initialize clears it: the light works again.
+            quiet(() -> (initialize(l); light_on(l)))
+            @test l.properties.is_on && FK.enabled() && abs(FK.held_total() - words_of(kind, lv)) <= max(30, ceil(Int, 0.03 * words_of(kind, lv)))
+            quiet(() -> shutdown(l))
+            TCmod.MOD_SETTLE_S[] = 0.0
+        end
+
+        @testset "a failed level write disables before the MOD zero is attempted" begin
+            l = ready(kind); m = l.modulator
+            quiet(() -> (setlvl!(l, kind, lv); light_on(l)))
+            m.fail_nonzero = ErrorException("level refused"); m.gate = Base.Event(); m.block_zero = true
+            task = @async try quiet(() -> setlvl!(l, kind, lv2)) catch e; e end
+            @test timedwait(() -> m.blocked, 5.0; pollint=0.001) === :ok   # the zero is stalled ...
+            @test !FK.enabled()                                            # ... and the output is already off
+            notify(m.gate)
+            @test timedwait(() -> istaskdone(task), 20.0) === :ok
+            @test occursin("level refused", sprint(showerror, fetch(task)))
+            @test !l.properties.is_on && isempty(FK.violations)
         end
 
         @testset "export_state carries the modulator as a child" begin

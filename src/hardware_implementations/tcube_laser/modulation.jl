@@ -102,6 +102,8 @@ current (`arm_gen == generation`), so no enable follows a `light_off`, `shutdown
 function enable_output!(light::TCubeLaser)
     serialNo = light.serialNo
     usb_locked(light) do
+        light.modulator === nothing || light.closing && error(
+            "TCubeLaser $serialNo: enable refused: a shutdown has begun")
         light.modulator === nothing || light.arm_gen[] == light.generation[] || error(
             "TCubeLaser $serialNo: enable refused: superseded by a light_off, initialize, shutdown or another light_on")
         light.modulator === nothing || (light.properties.is_on = true)   # on (or unknown) from the moment the enable is sent, never after a supersession
@@ -295,7 +297,7 @@ same way. `light_off` waits for neither lock before it disables.
 function light_on_modulated(light::TCubeLaser)
     serialNo = light.serialNo
     gen = 0
-    current() = light.generation[] == gen
+    current() = light.generation[] == gen && !light.closing
     superseded_error() = ErrorException(
         "TCubeLaser $serialNo: light_on was superseded by a light_off, initialize, shutdown or another light_on; it wrote nothing more")
     check_current_activation() = current() || throw(superseded_error())
@@ -310,6 +312,8 @@ function light_on_modulated(light::TCubeLaser)
         end
     end
     lock(light.lock) do
+        # A shutdown that began while this call waited for the lock is final: nothing may arm or enable after it.
+        light.closing && error("TCubeLaser $serialNo: light_on refused: a shutdown has begun (initialize clears it)")
         gen = bump_generation!(light)   # supersedes any activation in flight and any earlier arming
         light.arm_gen[] = gen
         light.arming = false
@@ -425,7 +429,8 @@ modulator changes nothing; any other throw writes 0 (tried), disables and rethro
 """
 function set_level_modulated!(light::TCubeLaser, p::Float64)
     (light.properties.is_on && !light.arming) || return false
-    apply_level!(light, p, () -> disable_after_failure(light, "setpoint change through the modulator"))
+    # A failed write leaves the output at an unknown level: DISABLE FIRST (a stalled MOD zero must not keep it on), then zero.
+    apply_level!(light, p, () -> disable_after_failure(light, "setpoint change through the modulator"); zero_first=false)
     return true
 end
 
@@ -491,6 +496,7 @@ retry it. With the handle already closed it retries only what is pending ([`shut
 """
 function shutdown_modulated(light::TCubeLaser)
     serialNo = light.serialNo
+    light.closing = true            # final: no activation may arm or enable from here on (initialize clears it)
     bump_generation!(light)
     if !light.connected
         return lock(light.lock) do
@@ -508,6 +514,15 @@ function shutdown_modulated(light::TCubeLaser)
     merr = nothing
     lock(light.lock) do
         light.arming = false
+        # An activation that was queued on the lock ahead of this section has been refused (`closing`); the disable is
+        # established again as the last hardware step, so nothing that ran in between leaves the output on.
+        if derr === nothing
+            try
+                disable_now!(light)
+            catch e
+                derr = e
+            end
+        end
         zerr = modulator_open(light) ? zero_modulator!(light) : nothing
         merr = end_modulation!(light)   # defers itself while the disable is pending
         try

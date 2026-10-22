@@ -41,7 +41,11 @@ the next version with `-DEV`).
     is skipped and the output disabled. A disable that fails stays pending: the control source is not restored and the
     output not released until a `shutdown` (which reopens the handle for it) disables the output. A modulated light's
     `light_off` no longer sends a USB zero (the controller ignores one with the output off). A Triggerscope DAC modulator
-    follows in a later release. The controller keeps one
+    follows in a later release. `shutdown` is final: an activation queued behind it is refused and the output is disabled
+    again as its last hardware step; `initialize` re-enables activation. A `light_on` linearized after a `light_off` may
+    legitimately turn the light on again. `NIDAQModulator` writes with a 0.5 s DAQmx timeout (`write_timeout`) instead of
+    10 s. **[limitation]** With one Julia thread a stalled DAQmx write blocks the thread, so `light_off` waits up to that
+    timeout; issue `light_off` from another thread (`julia -t 2`, `Threads.@spawn`). The controller keeps one
     setpoint register, so no USB setpoint but 0 (and the calibration reference) is sent while a level is held. The scale
     is measured per laser, range and loop (`CALIBRATION.md`, "MOD IN scale"); the controller facts behind the design are
     recorded there. `control_source` and `set_control_source!` (flag sums such as 3 and 5, which the
