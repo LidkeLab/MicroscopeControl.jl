@@ -1853,6 +1853,8 @@ lab_summary("Core") do
     include("dcam4_pure.jl")
     include("image_layout.jl")
 
+    include("meadowlark_binding.jl")
+
     include("contract.jl")
     include("skills.jl")
     include("gui.jl")
