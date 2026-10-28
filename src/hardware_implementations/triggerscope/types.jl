@@ -50,7 +50,18 @@ mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     #GUI Interface Fields
     outputs::Vector{Output}
     inputs::Vector{Input}
+
+    # One command and its reply at a time: several devices (attenuators on different DACs, say) and tasks can share
+    # one scope. Every command function holds it across its write and its reply read.
+    lock::ReentrantLock
 end
+
+# The positional form without the lock (the field list before the lock was added) still works.
+Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges,
+    ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs) =
+    Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges,
+        ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs,
+        ReentrantLock())
 
 #constructor for the Triggerscope4 object
 
@@ -88,7 +99,7 @@ function Triggerscope4(;
     inputs = Vector{Input}(undef, 1) #TTL inputs
     inputs[1] = Input("TTL", Bool, ttlinputs, [false, true], ttlreadings, false)
 
-    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs)
+    return Triggerscope4(devicename, portname, baudrate, rwtimeout, compause, sp, dacresolution, dacoutputs, dacvalues, dacranges, ttloutputs, ttlvalues, ttloutputranges, ttlinputs, ttlreadings, ttlinputranges, trigmode, outputs, inputs, ReentrantLock())
 end
 
 mutable struct CommandSignal

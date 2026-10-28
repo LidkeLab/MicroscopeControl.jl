@@ -38,6 +38,7 @@ module Triggerscope
     export TriggerMode, RISING, FALLING, CHANGE
     export Range, ZEROTOFIVE, ZEROTOTEN, PLUSMINUS5, PLUSMINUS10, PLUSMINUS2_5
     export openport, closeport
+    export dac_range_volts
     export SignalArray, CommandType
     export gui
 

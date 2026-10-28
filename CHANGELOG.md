@@ -163,6 +163,17 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   concurrent `shutdown` waits for it. They log an error and set `last_error` to `DCAMERR_INVALIDHANDLE`, as `live` and `sequence` do; the setters return
   `(DCAMERR_INVALIDHANDLE, value)` (`setroi!`, `showproperties` and `gui_param` return `nothing`),
   `extract_properties` returns an empty `Dict`, and `readout_time` returns `READOUT_FALLBACK_S` without caching it.
+- `Triggerscope4`: the serial read and write timeouts are set before every command. LibSerialPort's timeout is a
+  budget that every read spends, and set once at `openport`, the 10 s budget ran out after a few thousand commands:
+  then one command failed, the port was reset, and a DAC write was lost (measured on a rig at 400 Hz, about one
+  command in 2,500 to 5,000; after the fix 0 in 10,000). `rwtimeout` is now the limit of one command.
+- `Triggerscope4` has a per-scope lock (`scope.lock`, a `ReentrantLock`), held by every command function across its
+  write and its reply read, so tasks sharing one scope (two attenuators on different DACs, say) can no longer take
+  each other's replies. The positional constructor without the lock still works.
+- `volttooutput` (and so `setdac`, `progdac`, `progwave` and the DAC output setter) throws an `ArgumentError` for a
+  voltage that is not finite or lies outside the DAC's range, before anything is sent; the out-of-range code used
+  to be sent. New exported `dac_range_volts(range)` gives a range's span. A failed serial command's error names the
+  port and the cause.
 
 ### Changed
 
