@@ -163,6 +163,13 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   concurrent `shutdown` waits for it. They log an error and set `last_error` to `DCAMERR_INVALIDHANDLE`, as `live` and `sequence` do; the setters return
   `(DCAMERR_INVALIDHANDLE, value)` (`setroi!`, `showproperties` and `gui_param` return `nothing`),
   `extract_properties` returns an empty `Dict`, and `readout_time` returns `READOUT_FALLBACK_S` without caching it.
+- `Meadowlark.initializesdk` passes `Create_SDK`'s last argument, `char* static_regional_lut_file`, as a NULL
+  `Ptr{Cchar}`. It passed `0::Cuint`, a 4-byte integer where the header declares a pointer: on Windows x64 that
+  argument goes on the stack, the SDK read 8 bytes, took 4 bytes of garbage as part of the pointer and the process
+  died with no Julia traceback. `constructed_ok` and the four `int` flags now use `Cint`, as the header declares.
+  `initializesdk` takes the vendor parameters as keywords (defaults unchanged; `regional_lut` = a file path or
+  `nothing`), still prints the board count and the constructor's flag, and now also returns them as
+  `(; n_boards_found, constructed_ok)`. Checked without the DLL against the binding's lowered `foreigncall`.
 
 ### Changed
 

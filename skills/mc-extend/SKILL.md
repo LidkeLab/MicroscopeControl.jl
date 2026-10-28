@@ -76,7 +76,7 @@ is in `references/rig-causes.md`; the short form:
 | Symptom | Usually | Check |
 |---|---|---|
 | `initialize(::PIStage)` logs `@error` and returns, `connectionstatus` stays `false` (it does not throw) | controller unpowered, USB, or **held by another process** (PIMikroMove, a second Julia) | close the others; re-run; if it connects it was contention |
-| `MLSLM` does nothing | board claimed elsewhere, or SDK found 0 boards (`n_boards_found` is a default of 0 and never updated) | read what `initializesdk()` prints; close the vendor GUI; reboot if a dead process holds it |
+| `MLSLM` does nothing | board claimed elsewhere, or SDK found 0 boards (`n_boards_found` is a default of 0 and never updated) | read what `initializesdk()` prints or returns (`n_boards_found`, `constructed_ok`); close the vendor GUI; reboot if a dead process holds it |
 | serial timeouts / "port busy" (`Triggerscope4`, and `LCC1620` through it) | wrong COM number (Windows renumbers), or port open elsewhere; **two `Triggerscope4` objects on one port** | `LibSerialPort.list_ports()`; one scope object per port, shared (`mc-system-design`) |
 | `CrystaLaser`/`VortranLaser`/`DaqTrLight` `@warn` at construction, then `setpower` does nothing | NI-DAQ discovery picked the wrong device (`devs[1]`, or `device_index`), runtime missing, or partial AO/DO discovery | inspect `light.channelsAO`/`channelsDO` after construction; `NIDAQcard.showdevices(NIdaq())` |
 | a method throws `not implemented for <Type>` or does nothing | a contract stub, not a broken `ccall` (`mc-api-map`: resolving is not implementing) | `which(f, Tuple{typeof(dev)}).sig` names the interface or `AbstractInstrument` |
