@@ -6,8 +6,10 @@ function arm(scope::Triggerscope4)
     #Build string
     commandstring = "ARM\n"
     #Write command
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 #Clears the program written to the triggerscope
@@ -15,25 +17,31 @@ function clearall(scope::Triggerscope4)
     #Build string
     commandstring = "CLEAR_ALL\n"
     #Write command
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 #Focus settings for the triggerscope, see manual for more information
 function progfocus(scope::Triggerscope4, startpos::Int, stepsize::Int, numsteps::Int, direction::Bool, priority::Bool)
     #Build string
     commandstring = "PROG_FOCUS," * string(startpos) * "," * string(stepsize) * "," * string(numsteps) * "," * string(Int(direction)) * "," * string(Int(priority)) * "\n"
     #Write command
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bool)
     #Build string
     commandstring = "PROG_TTL," * string(programline) * "," * string(ttlnum) * "," * string(Int(ttlval)) * "\n"
     #Write command
-    writecommand(scope, commandstring)
-    scope.ttloutputs[ttlnum] = ttlval
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        scope.ttloutputs[ttlnum] = ttlval
+        readresponse(scope)
+    end
 end
 
 function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::Float64)
@@ -41,9 +49,11 @@ function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::F
     #Build string
     commandstring = "PROG_DAC," * string(programline) * "," * string(dacnum) * "," * string(dac_code) * "\n"
     #Write command
-    writecommand(scope, commandstring)
-    scope.dacvalues[dacnum] = dac_code
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        scope.dacvalues[dacnum] = dac_code
+        readresponse(scope)
+    end
 end
 
 #"Clears active program table"
@@ -51,8 +61,10 @@ function cleartable(scope::Triggerscope4)
     #Build string
     commandstring = "CLEARTABLE\n"
     #Write command
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 #Add delay to specific line (in ms)
@@ -61,8 +73,10 @@ function progdelay(scope::Triggerscope4, programline::Int, delayms::Int)
     #Build string
     commandstring = "PROG_DEL," * string(programline) * "," * string(delayms) * "\n"
     #Write command
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 """
 Can have two waveforms per line (0, 1)
@@ -80,8 +94,10 @@ function progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform:
     #Build string
     commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, dacnum, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
     #Write command
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
     
 end
 
@@ -89,17 +105,21 @@ function timecycles(scope::Triggerscope4, cycles::Int)
     #Build string
     commandstring = "TIMECYCLES," * string(cycles) * "\n"
     #Write command
-    writecommand(scope, commandstring)
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        readresponse(scope)
+    end
 end
 
 function trigmode(scope::Triggerscope4, mode::TriggerMode)
     #Build string
     commandstring = "TRIGMODE," * string(Int(mode)) * "\n"
     #Write command
-    writecommand(scope, commandstring)
-    scope.trigmode = mode
-    return readresponse(scope)
+    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        writecommand(scope, commandstring)
+        scope.trigmode = mode
+        readresponse(scope)
+    end
 end
 
 """

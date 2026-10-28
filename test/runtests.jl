@@ -1865,5 +1865,7 @@ lab_summary("Core") do
     include("image_layout_fakes.jl")
     # Likewise for the MCL stage's Madlib wrappers (see the file).
     include("mcl_stage.jl")
+    # Likewise for the Triggerscope serial port (see the file).
+    include("triggerscope.jl")
 end
 end  # lab_summary
