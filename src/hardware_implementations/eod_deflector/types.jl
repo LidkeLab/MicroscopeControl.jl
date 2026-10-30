@@ -16,6 +16,9 @@ For an HVA200 at a gain of 20 with an inverting output, `setcrystalvoltage(eod, 
 0.0)` writes −5 V on the DAQ. The limits are always checked in DAQ volts, since that is
 what reaches hardware, and a rejected crystal-volt command reports both numbers.
 
+The crystal's rating is a required keyword, `max_crystal_volts`, and the DAQ limits are
+held to it: the backend's ±10 V alone would put ±200 V across the crystal at gain 20.
+
 # Arguments
 - `backend::SteeringBackend`: What drives the two amplifier inputs — usually a
   `DAQmxBackend`, though a `TriggerscopeBackend` works the same way.
@@ -33,9 +36,12 @@ what reaches hardware, and a rejected crystal-volt command reports both numbers.
 - `invert::Bool`: `true` when the amplifier inverts, so positive DAQ volts give negative
   crystal volts. Default `true`, matching the HVA200 wiring in the MINFLUX scripts, where
   the monitor has to be negated to recover the real output.
+- `max_crystal_volts::Real`: **Required.** The highest voltage, of either sign, the
+  crystals may see. The DAQ limits are held to `max_crystal_volts / amplifier_gain`:
+  omitted limits are narrowed to it, and explicit limits beyond it throw.
 - `xlimits`, `ylimits`: Allowed **DAQ** voltage range per axis. Default to the backend's
-  range. Set these to keep the high voltage inside what the crystal tolerates — see
-  `crystal_limits` for the same bounds expressed across the crystal.
+  range, narrowed to the crystal ceiling. See `MicroscopeControl.crystal_limits` for the
+  same bounds expressed across the crystal.
 - `unique_id::String`: Name used in logs and `export_state`. Default `"EOD"`.
 
 # Example
@@ -45,7 +51,7 @@ eod = EOD(DAQmxBackend("Dev2/ao0", "Dev2/ao1"),
           calibration = AngleCalibration(mrad_per_volt_x = 0.003, mrad_per_volt_y = 0.003),
           calibration_basis = :crystal,
           amplifier_gain = 20.0, invert = true,
-          xlimits = (-7.5, 7.5), ylimits = (-7.5, 7.5))
+          max_crystal_volts = 150.0)        # DAQ limits become +/-7.5 V
 initialize(eod)
 setcrystalvoltage(eod, 100.0, 0.0)   # 100 V on the X crystal, -5 V out of the DAQ
 setangle(eod, 0.3, 0.0)              # 0.3 mrad on X
@@ -59,6 +65,7 @@ mutable struct EOD <: BeamSteerer
     calibration_basis::Symbol
     amplifier_gain::Float64
     invert::Bool
+    max_crystal_volts::Float64
     xlimits::Tuple{Float64,Float64}
     ylimits::Tuple{Float64,Float64}
     voltages::Vector{Float64}
@@ -70,6 +77,7 @@ function EOD(backend::SteeringBackend;
     calibration_basis::Symbol=:crystal,
     amplifier_gain::Real=20.0,
     invert::Bool=true,
+    max_crystal_volts::Union{Nothing,Real}=nothing,
     xlimits::Union{Nothing,Tuple{<:Real,<:Real}}=nothing,
     ylimits::Union{Nothing,Tuple{<:Real,<:Real}}=nothing,
     unique_id::String="EOD")
@@ -77,8 +85,14 @@ function EOD(backend::SteeringBackend;
     calibration_basis in (:crystal, :daq) || throw(ArgumentError(
         "calibration_basis must be :crystal or :daq, got :$calibration_basis"))
     amplifier_gain == 0 && throw(ArgumentError("amplifier_gain cannot be zero"))
+    max_crystal_volts === nothing && throw(ArgumentError(
+        "$unique_id: max_crystal_volts is required: the highest voltage, of either sign, the " *
+        "crystals may see. Without it the limits would be the backend's range times the gain."))
+    max_crystal_volts > 0 || throw(ArgumentError(
+        "$unique_id: max_crystal_volts must be positive, got $max_crystal_volts"))
 
-    xlim, ylim = resolve_limits(backend, xlimits, ylimits, unique_id)
+    xlim, ylim = resolve_limits(backend, xlimits, ylimits, unique_id;
+        max_abs=max_crystal_volts / abs(amplifier_gain))
     return EOD(unique_id, backend, calibration, calibration_basis, Float64(amplifier_gain),
-        invert, xlim, ylim, [0.0, 0.0], false)
+        invert, Float64(max_crystal_volts), xlim, ylim, [0.0, 0.0], false)
 end

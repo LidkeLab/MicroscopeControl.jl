@@ -1,5 +1,11 @@
-# The three-method backend contract from BeamSteeringInterface, implemented for the
-# Triggerscope4 DAC pair and for an NI-DAQmx analog-output pair.
+# The backend contract from BeamSteeringInterface, implemented for the Triggerscope4 DAC
+# pair and for an NI-DAQmx analog-output pair.
+
+# A park that did not reach the hardware is reported after the hardware is released, so a
+# failed write cannot also leak the serial port or the NI tasks.
+park_failed(what::AbstractString, e) = ErrorException(
+    "Could not park $what at 0 V before releasing it; the outputs may still hold their last " *
+    "voltage. Cause: $(sprint(showerror, e))")
 
 # ── Triggerscope ─────────────────────────────────────────────────────────────
 
@@ -37,26 +43,45 @@ function BeamSteeringInterface.backend_limits(backend::TriggerscopeBackend)
     return (lims, lims)
 end
 
+# The DAC sends round((v - vmin) / step) as its code. Moving each end of the limit inward
+# to a whole code makes every voltage inside the limit round to a code inside it.
+function BeamSteeringInterface.snap_limits(backend::TriggerscopeBackend, lims::Tuple{Float64,Float64})
+    vmin, _ = rangelimits(backend.range)
+    step = min_voltage_step(backend)
+    # The tolerance keeps a limit already on the grid, up to float error, where it is.
+    lo = ceil((lims[1] - vmin) / step - 1e-9)
+    hi = floor((lims[2] - vmin) / step + 1e-9)
+    return (vmin + lo * step, vmin + hi * step)
+end
+
+# No CLEAR_ALL here: it erases the board's sequence tables, which another device on a
+# shared Triggerscope may have programmed, and this backend uses no sequences.
 function BeamSteeringInterface.openbackend!(backend::TriggerscopeBackend)
     if backend.owns_device
         initialize(backend.scope)
         # The board resets when the serial port opens and ignores commands until it boots.
         sleep(backend.boot_delay)
     end
-    clearall(backend.scope)
-    setrange(backend.scope, backend.x_channel, backend.range)
-    setrange(backend.scope, backend.y_channel, backend.range)
-    write_voltages!(backend, 0.0, 0.0)
+    try
+        setrange(backend.scope, backend.x_channel, backend.range)
+        setrange(backend.scope, backend.y_channel, backend.range)
+        write_voltages!(backend, 0.0, 0.0)
+    catch
+        backend.owns_device && shutdown(backend.scope)
+        rethrow()
+    end
     return nothing
 end
 
 function BeamSteeringInterface.closebackend!(backend::TriggerscopeBackend)
-    try
+    park_error = try
         write_voltages!(backend, 0.0, 0.0)
+        nothing
     catch e
-        @warn "Could not park the Triggerscope DACs at 0 V before closing" exception = e
+        e
     end
     backend.owns_device && shutdown(backend.scope)
+    park_error === nothing || throw(park_failed("the Triggerscope DACs", park_error))
     return nothing
 end
 
@@ -73,34 +98,58 @@ function BeamSteeringInterface.backend_limits(backend::DAQmxBackend)
     return (lims, lims)
 end
 
+# Stop and clear one task, each in its own `try`, so a failed stop still clears it.
+function release_task(task, channel)
+    try
+        stop!(task)
+    catch e
+        @warn "Error stopping the NI analog-output task on $channel" exception = e
+    end
+    try
+        clear!(task)
+    catch e
+        @warn "Error clearing the NI analog-output task on $channel" exception = e
+    end
+    return nothing
+end
+
 function BeamSteeringInterface.openbackend!(backend::DAQmxBackend)
+    (backend.x_task === nothing && backend.y_task === nothing) || throw(ArgumentError(
+        "the NI analog-output tasks on $(backend.x_channel) and $(backend.y_channel) are already open; " *
+        "shut the device down first"))
     # Tasks are created and started once and held for the life of the device, so each
     # move costs one write_scalar rather than a task setup and teardown.
-    backend.x_task = AOTask(backend.x_channel, min_val=backend.vmin, max_val=backend.vmax)
-    backend.y_task = AOTask(backend.y_channel, min_val=backend.vmin, max_val=backend.vmax)
-    start!(backend.x_task)
-    start!(backend.y_task)
-    write_voltages!(backend, 0.0, 0.0)
+    x_task = AOTask(backend.x_channel, min_val=backend.vmin, max_val=backend.vmax)
+    y_task = nothing
+    try
+        y_task = AOTask(backend.y_channel, min_val=backend.vmin, max_val=backend.vmax)
+        start!(x_task)
+        start!(y_task)
+        backend.x_task = x_task
+        backend.y_task = y_task
+        write_voltages!(backend, 0.0, 0.0)
+    catch
+        backend.x_task = nothing
+        backend.y_task = nothing
+        release_task(x_task, backend.x_channel)
+        y_task === nothing || release_task(y_task, backend.y_channel)
+        rethrow()
+    end
     return nothing
 end
 
 function BeamSteeringInterface.closebackend!(backend::DAQmxBackend)
-    try
+    park_error = try
         write_voltages!(backend, 0.0, 0.0)
+        nothing
     catch e
-        @warn "Could not park the NI analog outputs at 0 V before closing" exception = e
+        e
     end
-    for task in (backend.x_task, backend.y_task)
-        task === nothing && continue
-        try
-            stop!(task)
-            clear!(task)
-        catch e
-            @warn "Error releasing an NI analog-output task" exception = e
-        end
-    end
+    backend.x_task === nothing || release_task(backend.x_task, backend.x_channel)
+    backend.y_task === nothing || release_task(backend.y_task, backend.y_channel)
     backend.x_task = nothing
     backend.y_task = nothing
+    park_error === nothing || throw(park_failed("the NI analog outputs", park_error))
     return nothing
 end
 

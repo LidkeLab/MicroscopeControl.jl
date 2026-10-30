@@ -10,14 +10,16 @@ module EODControl
 
 using ...MicroscopeControl
 using ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface
+using ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface: resolve_limits, angle_to_voltage, voltage_to_angle
 using ..BeamSteeringBackends
 
 import ...MicroscopeControl: export_state, initialize, shutdown
-import ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface: angle_setpoint_voltage, getangle
+import ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface: angle_setpoint_voltage, getangle, panel_readout
 
+# `crystal_limits`, `amplifier_factor`, `tocrystal` and `todaq` are public, not exported
+# (`MicroscopeControl.<name>`).
 export EOD
-export setcrystalvoltage, getcrystalvoltage, crystal_limits
-export amplifier_factor, tocrystal, todaq
+export setcrystalvoltage, getcrystalvoltage
 
 include("types.jl")
 include("interface_methods.jl")

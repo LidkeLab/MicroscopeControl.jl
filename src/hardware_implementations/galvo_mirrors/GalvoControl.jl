@@ -9,6 +9,7 @@ module GalvoControl
 
 using ...MicroscopeControl
 using ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface
+using ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface: resolve_limits
 using ..BeamSteeringBackends
 
 import ...MicroscopeControl: export_state, initialize, shutdown

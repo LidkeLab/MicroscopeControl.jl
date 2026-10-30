@@ -32,6 +32,16 @@ include("hardware_implementations/HardwareImplementations.jl")
 using .HardwareInterfaces.LightSourceInterface: output_id, open_modulator!, close_modulator!, RecordingModulator, modulation_violations
 public output_id, open_modulator!, close_modulator!, RecordingModulator, modulation_violations
 
+# Beam steering: only the device API is exported. The calibration arithmetic, the limit helpers, the backend contract
+# (for backend authors and fakes) and the amplifier conversions are public, not exported.
+using .HardwareInterfaces.BeamSteeringInterface: voltage_to_angle, angle_to_voltage, angle_setpoint_voltage,
+    checklimits, resolve_limits, gridpoints, write_voltages!, openbackend!, closebackend!, backend_limits, snap_limits
+using .HardwareImplementations.BeamSteeringBackends: rangelimits, min_voltage_step
+using .HardwareImplementations.EODControl: crystal_limits, amplifier_factor, tocrystal, todaq
+public voltage_to_angle, angle_to_voltage, angle_setpoint_voltage, checklimits, resolve_limits, gridpoints,
+    write_voltages!, openbackend!, closebackend!, backend_limits, snap_limits,
+    rangelimits, min_voltage_step, crystal_limits, amplifier_factor, tocrystal, todaq
+
 # HDF5 file saving utilities
 include("h5_file_saving.jl")
 export save_h5, save_attributes_and_data

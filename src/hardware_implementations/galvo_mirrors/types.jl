@@ -30,7 +30,7 @@ calibration and needs no extra factor of two.
 
 # Example
 ```julia
-scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
+scope = Triggerscope4(portname = "COM5")
 galvo = Galvo(TriggerscopeBackend(scope, x_channel = 1, y_channel = 2),
               calibration = AngleCalibration([0.45 0.0; 0.0 0.42]),
               xlimits = (-2.0, 2.0), ylimits = (-2.0, 2.0))

@@ -13,6 +13,7 @@ module BeamSteeringBackends
 
 using ...MicroscopeControl
 using ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface
+using ...MicroscopeControl.HardwareInterfaces.BeamSteeringInterface: write_voltages!
 using ..Triggerscope
 
 using DAQmx
@@ -20,8 +21,8 @@ using DAQmx: AOTask, start!, stop!, clear!, write_scalar
 
 import ...MicroscopeControl: initialize, shutdown
 
+# `rangelimits` and `min_voltage_step` are public, not exported (`MicroscopeControl.<name>`).
 export TriggerscopeBackend, DAQmxBackend
-export rangelimits, min_voltage_step
 
 include("types.jl")
 include("backend_methods.jl")

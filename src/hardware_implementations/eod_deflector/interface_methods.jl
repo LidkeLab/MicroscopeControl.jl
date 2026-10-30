@@ -125,10 +125,17 @@ function MicroscopeControl.export_state(eod::EOD)
     cx, cy = getcrystalvoltage(eod)
     attributes["amplifier_gain"] = eod.amplifier_gain
     attributes["amplifier_inverting"] = eod.invert
+    attributes["max_crystal_volts"] = eod.max_crystal_volts
     attributes["calibration_basis"] = string(eod.calibration_basis)
     attributes["crystal_voltage_x"] = cx
     attributes["crystal_voltage_y"] = cy
     return attributes, data, children
+end
+
+function BeamSteeringInterface.panel_readout(eod::EOD)
+    cx, cy = getcrystalvoltage(eod)
+    return invoke(panel_readout, Tuple{BeamSteerer}, eod) *
+           "; crystal $(round(cx, digits=1)), $(round(cy, digits=1)) V"
 end
 
 function Base.show(io::IO, eod::EOD)

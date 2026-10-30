@@ -11,11 +11,11 @@ methods in `interface_functions.jl` operate on:
 - `calibration::AngleCalibration`   — voltage ↔ angle map (see `AngleCalibration`)
 - `xlimits::Tuple{Float64,Float64}` — allowed X voltage range, volts
 - `ylimits::Tuple{Float64,Float64}` — allowed Y voltage range, volts
-- `voltages::Vector{Float64}`       — last commanded `[vx, vy]`, volts
+- `voltages::Vector{Float64}`       — last commanded `[vx, vy]`, volts; `NaN` when unknown
 - `isopen::Bool`                    — whether `initialize` has run
 
-A device that provides those fields gets `setvoltage`, `setangle`, `gridscan` and the
-rest for free; it only has to supply its own constructor.
+A device that provides those fields gets `setvoltage`, `setangle`, `gridscan`, the
+lifecycle methods and a `gui` panel for free; it only has to supply its own constructor.
 """
 abstract type BeamSteerer <: AbstractInstrument end
 
@@ -31,7 +31,12 @@ A backend must implement three methods (see `interface_functions.jl`):
 - `closebackend!(backend)`           — park at 0 V and release the hardware
 
 and may optionally implement `backend_limits(backend)` to report the voltage range its
-hardware can actually produce, which the device constructors use as a default limit.
+hardware can actually produce, which the device constructors use as a default limit and
+as a bound on explicit limits, and `snap_limits(backend, lims)` to move a limit onto the
+voltages a quantizing output (a DAC) can produce exactly.
+
+A backend is not an `AbstractInstrument`: it has no panel and no state of its own to
+save, and its lifetime is managed by the device that holds it.
 """
 abstract type SteeringBackend end
 
