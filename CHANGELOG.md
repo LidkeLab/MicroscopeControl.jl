@@ -12,6 +12,19 @@ the next version with `-DEV`).
 
 ### Added
 
+- **Beam steering**: a `BeamSteerer` interface for two-axis devices that deflect a beam with one voltage per axis,
+  with `Galvo` and `EOD` devices over a `TriggerscopeBackend` (a DAC pair) or a `DAQmxBackend` (an NI analog-output
+  pair). Exported: those types, `SteeringBackend`, `AngleCalibration` (a 2×2 mrad/V map and a zero-angle offset),
+  `setvoltage`, `getvoltage`, `setangle`, `getangle`, `zeroaxes`, `gridscan`, and an `EOD`'s `setcrystalvoltage` and
+  `getcrystalvoltage`; a `gui` panel. Every command is range-checked before any write. An explicit limit outside the
+  backend's range throws, and limits are moved inward onto the DAC grid so rounding never crosses one. An `EOD` requires
+  `max_crystal_volts` and holds its DAQ limits to it. A write or park that fails partway leaves the recorded voltages
+  `NaN`, and a failed park throws from `shutdown` after the hardware is released. The Triggerscope backend sends no
+  `CLEAR_ALL`, so a shared board keeps other devices' sequences. Public, not exported (`MicroscopeControl.<name>`): the
+  calibration arithmetic, `checklimits`, `resolve_limits`, `gridpoints`, the backend contract (`write_voltages!`,
+  `openbackend!`, `closebackend!`, `backend_limits`, `snap_limits`), `rangelimits`, `min_voltage_step`, and the EOD
+  amplifier conversions.
+
 - **Light-source modulators**: a light can put its level on an analogue input through an `AbstractModulationControl`,
   which holds the scale. `TCubeLaser`, `SimDiodeLaser` and `SimLight` take `modulator::Union{Nothing,AbstractModulationControl}`
   (keyword `modulator = nothing`; with `nothing` every method runs the code it always did). A modulator defines

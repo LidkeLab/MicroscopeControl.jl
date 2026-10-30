@@ -118,4 +118,27 @@ one command. The "commanded" line is refreshed from the device's fields only aft
 the command returns, and a refusal is shown in the panel as `refused: <message>`,
 not thrown out of the callback.
 
+## `gui(::BeamSteerer)`
+
+One slider per axis in volts over the device's limits, a Zero button, and a
+readout line. Enumerated from `beam_steering_interface/gui.jl`; `Galvo` and
+`EOD` carry every field, which the "BeamSteerer contract" testset checks.
+
+| Field | Read by | Notes |
+|---|---|---|
+| `unique_id::String` | header label and window title | |
+| `xlimits`, `ylimits` | slider ranges (1001 steps each) | DAQ volts on an `EOD` |
+| `voltages` | slider start values and the readout | `NaN` (unknown after a failed write or park) starts the slider at 0 V, clamped into range |
+| `calibration` | the readout's angle, through `getangle` | |
+| `isopen` | the readout says "not initialized" | |
+
+An `EOD`'s readout also shows the crystal volts (`panel_readout(::EOD)`).
+
+Methods called, each only on a user action: `setvoltage` with both sliders'
+values (either slider), `zeroaxes` (Zero). `[guarantee]` Opening the panel
+issues no write: the sliders are wired with `on`, and the "Beam steering panel"
+testset checks the backend's write log. Zero writes 0 V once and moves the
+sliders back without writing their grid-rounded values. A refused command is
+shown in the readout, not thrown out of the callback.
+
 `gui(::TRIG)` exists for `Triggerscope4`; `MLSLM` has no `gui` at all.
