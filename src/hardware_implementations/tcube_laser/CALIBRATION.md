@@ -92,6 +92,13 @@ are marked with where.
 - A setpoint jumped up from 0 can lock the loop at ~90 mA / ~21 mW / ~98 uA whatever is requested: 3 of 3 at 10 mW, then 4 of 4 without the lock after a Kinesis CONST P session; stepped setpoints never failed (10 of 10), 2026-09-28/29 (driver: `PhotodiodeLoop`'s `ramp_step_mW` field, `check_lock`).
 - One USB write takes about 15 ms, so ramp pauses below ~10 ms do not go faster, 2026-09-29.
 - The controller must be power-cycled when switching between the Kinesis application and this driver, in either direction (`LD_Open` error 2, or "load device failed" in Kinesis, until then), 2026-09-29. Recorded only here.
+- With a modulator on the rear MOD IN (labels: **measured** on the named cube, **untested** not yet measured; TLD001 64865766 is "quickbeam's", 64849775 the other 642 nm cube):
+  - The controller keeps **one setpoint register**. A USB `LD_SetLaserSetPoint` sets it outright and takes the MOD IN voltage at that moment as the reference; a MOD IN change after it adds only its difference, and `LD_GetLaserSetPoint` reads the sum. So a USB 0 written at 0 V leaves the register at `V x scale`: absolute, with the DAQ's 0 V offset cancelled. A USB write while MOD IN holds a voltage absorbs that voltage. **Measured** on both cubes (64865766 report of 2026-10-19, sections 3 and 8b; 64849775 PR #83, 2026-10-13/14). The driver therefore sends no USB setpoint but 0 (and the calibration reference) while the modulator holds a level.
+  - A MOD IN change made within about a second of a USB setpoint write is **lost**. 64865766: lost up to 0.91 s, applied from 1.00 s, 117 of 117; 64849775: lost to 0.95 s, applied from 1.1 s (bases of 2 to 60 mW, steps of 1 to 10 mW). Status and photocurrent reads do not cause it; MOD IN changes alone applied at every rate tried (to 2 kHz). The driver waits `MOD_SETTLE_S` = 1.3 s between its USB zero and the first level, and confirms the register after.
+  - The control source must include the external input (flag 2). A cube can come up at 5 (software + front potentiometer), where MOD IN is ignored (64865766 was found at 5); the knob adds its own offset, so the driver sets 3 (software + external), never 5 or 7. A source of 2 or 3 reads back as 1 although the input works, so the read-back cannot confirm the external flag, and a cube found at 3 is restored to 1. **Measured.** A source of 2 (external only) made the register absolute in both loops and ignored USB setpoints but a -7-word nudge (64865766 only); not used, and not tested on both cubes (the variant would skip the 1.3 s wait but needs absolute behavior, USB-ignoring and a change right after the enable to be measured on both).
+  - The scale is per laser, range and loop: 10 V is the photodiode's full scale in closed loop (31 % of the manual's `tia_range x wa_calibration` figure on 64865766, within 0.4 % of it on 64849775) and about the controller's current limit in open loop (the manual's figure + 1.7 %). W/A is not in the path. **Measured**; hence "MOD IN scale" below.
+  - What an output reaches from base 0: a 0-5 V USB-6008 reaches about 5075 words (about 110 mA, above the 74.5 mA threshold) in closed loop on 64865766 and 70 mW, its ceiling, on 64849775; in open loop only 76.5 mA, about threshold, no useful light. A 0-10 V Triggerscope DAC reaches 153 mA, the 150.6 mA limit. A USB-6008 has no 0-10 V analogue-output range (DAQmx -200077, 2026-10-21). From base 0 in closed loop small steps are slow or dark (64849775, 200 Hz camera: up to 0.5 mW no light, 2 mW arrived 2-3 frames late, 5 mW and more within a frame).
+  - The controller's own photocurrent and current readings lag the light by a few hundred ms after a MOD IN step: time the light on a detector, not on them (64849775).
 - How the Kinesis application reaches a power setpoint was not determined (the C API has only `LD_SetLaserSetPoint`); a USB trace (Wireshark + USBPcap while it sets 10 mW) would show whether a single write can work.
 
 
@@ -313,6 +320,51 @@ from a fixed reflection) for 20 minutes from a cold start in closed loop. The
 rig probe in MicroscopeAdapt, `dev/test_tcube_power.jl` (`:drift_log` and
 `:closed_loop_trial` steps), automates this and the clamp and scan checks.
 Set `tec_stabilised` from what you find.
+
+## MOD IN scale
+
+A `TCubeLaser` built with `modulator = ...` (see its docstring) puts its level on the rear MOD IN input; the modulator
+converts the level to a voltage with its `per_volt` (mW/V in closed loop, mA/V in open loop). `per_volt` is measured, per
+laser, range and loop, never taken from the manual: it was 3.2 times too high in closed loop on TLD001 64865766 and
+within 0.4 % on 64849775. The driver checks the figure at every `light_on` (the register must show the request within
+`max(30 words, 3 %)`, or the light refuses and stays off at 0 V), but it can not tell you the value.
+
+Measure it with the output on and the control source at 3 (what `initialize` sets). The bench modulator's `per_volt` is
+1, so a level of `v` is `v` volts:
+
+```julia
+bench = NIDAQModulator(; channel = "<device>/ao<n>", v_range = (0.0, 5.0), per_volt = 1.0)   # level = volts
+laser = TCubeLaser("00000000"; modulator = bench, <your mode and limits>)
+initialize(laser)            # opens the output at 0 V, sets source 3
+light_on(laser)              # no level requested: 0 V and USB 0, so it confirms; the diode stays at its zero
+for v in volts               # at least 5, starting at 0 V and ending below the voltage that predicts max_power
+    setpower(laser.modulator, v)
+    sleep(dwell)             # the readings lag the light by a few hundred ms
+    push!(readings, regulation_mode(laser) isa ConstantPhotocurrent ?
+          indicated_output_power(laser) : measured_current(laser))
+end
+setpower(laser.modulator, 0.0); light_off(laser); shutdown(laser)
+```
+
+1. Choose `volts` from the manual's figure (closed loop `tia_range x wa_calibration x 1000 / 10` mW/V, open loop the
+   controller's current limit in mA / 10) so that the largest voltage predicts no more than `properties.max_power`
+   (`max_current` in open loop). The clamp is the only hardware backstop. Never write a USB setpoint between
+   voltages (`setpoint*!`, `light_on`): the controller keeps one setpoint register and it would absorb the voltage.
+2. A power meter before the fibre may replace `indicated_output_power` (which is the photocurrent through the same
+   `wa_calibration`); in open loop `measured_current` is the drive current the controller reports.
+3. Fit a line to the readings (volts against reading); its slope is `per_volt`, in mW/V or mA/V. The intercept should be 30 words or less (about
+   0.2 mW on a 1 mA range at 224 W/A). If the line does not pass through zero, or its slope differs by more than 2 % from the
+   last measurement of this cube and loop, the model (one register,
+   absolute from a USB 0 at 0 V) does not hold for this cube: stop and report it.
+4. Construct the laser with the real modulator and that `per_volt`, and `light_on` once with a request: the confirm
+   passes only if the figure is right.
+
+Re-measure after any move of the DIP switch, `LD_FindTIAGain`, a new `wa_calibration`, or a new laser, photodiode or cube.
+
+`[limitation]` Premises of this procedure not yet measured on the cubes: that readings settle within 0.5 s of a MOD IN
+step; that the slope through zero holds within 2 % with the intercept at most 30 words in both loops; that setting
+source 3 while the output is off arms MOD IN (otherwise `light_on` must set it after its enable); that the setpoint
+read-back shows the MOD IN part within 1 s. They are to be checked on TLD001 64849775 and 64865766 before this is merged (decision of 2026-10-22).
 
 ## What the controller's own W/A setting does
 

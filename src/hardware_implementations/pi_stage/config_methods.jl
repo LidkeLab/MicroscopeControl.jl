@@ -1,7 +1,8 @@
 """
 Initialize the PI stage. Connects to the first PI C-867 the GCS2 library enumerates, turns both
 servos on, starts the reference move, waits for the controller and for both axes to report
-referenced, reads the travel range, waits for motion to stop, and sets `stage.velocity`.
+referenced, reads the travel range, waits for motion to stop, sets `stage.velocity`, and reads the position
+into `real_x`/`real_y` and the targets `targ_x`/`targ_y`.
 
 `connectionstatus` becomes true only when all of that succeeded. A failure after the connect
 closes the connection and throws. Enumeration and connect failures log `@error` and return with
@@ -80,6 +81,14 @@ function initialize_original(stage::PIStage)
         #Set the velocity to `stage.velocity`
         setvel(stage, stage.velocity) == 1 ||
             error("PI_VEL/PI_qVEL failed (GCS error $(_pi_geterror(stage))); velocity not set")
+
+        # Start the targets at where the stage is: the panel's step buttons move to (targ_x, targ_y),
+        # so a target left at its 12.5 default would drive the other axis there on the first step.
+        position = zeros(Cdouble, 2)
+        PI_qPOS(stage.id, "1 2", position) == 1 ||
+            error("PI_qPOS failed (GCS error $(_pi_geterror(stage))); position unknown")
+        stage.real_x, stage.real_y = position
+        stage.targ_x, stage.targ_y = position
     catch
         shutdown_original(stage)
         rethrow()

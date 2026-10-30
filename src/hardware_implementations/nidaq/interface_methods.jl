@@ -52,8 +52,19 @@ function DAQInterface.showchannels(daq::NIdaq,channeltype::String,device::String
     channelfunctions[channeltype](device)
 end
 
+# The vendor (DAQmx) boundary of the ranged `createtask`: allocate a task, add a voltage channel with a range, clear a task.
+# Plain functions so a test can replace them (same seam practice as the Kinesis wrappers) and run the production
+# `createtask` body, its failed-setup cleanup included, without DAQmx.
+ai_alloc() = DAQmx.AITask()
+ao_alloc() = DAQmx.AOTask()
+ai_add!(task, channel, lo, hi) = DAQmx.add_ai_voltage!(task, channel; min_val=lo, max_val=hi)
+ao_add!(task, channel, lo, hi) = DAQmx.add_ao_voltage!(task, channel; min_val=lo, max_val=hi)
+task_clear!(task) = DAQmx.clear!(task)
+# One scalar analogue write with an explicit DAQmx timeout (seconds); `setvoltage` keeps DAQmx's 10 s default.
+ao_write!(task, v, timeout) = DAQmx.write_scalar(task, v; auto_start=true, timeout=timeout)
+
 """
-    createtask(daq::NIdaq,tasktype::String,channel::String)
+    createtask(daq::NIdaq,tasktype::String,channel::String; min_val=nothing, max_val=nothing)
 
 Create a task of a given task type and channel.
 
@@ -61,15 +72,38 @@ Create a task of a given task type and channel.
 - `daq::NIdaq`: A NIdaq type.
 - `tasktype::String`: A task type. Options are "AI","AO","DI","DO".
 - `channel::String`: A channel name, obtained from `showchannels`.
+- `min_val`, `max_val`: for "AI" and "AO", the voltage range to create the channel with, both or neither
+  (`ArgumentError` otherwise, and for "DI"/"DO"). They go to DAQmx as given, so DAQmx refuses a range the
+  device lacks (error -200077 for 0-10 V on a USB-6008) rather than the driver choosing another. With neither,
+  the driver queries the device: the widest range for "AI", the first for "AO".
 
 # Returns
 - `t::DAQmx.Task`: A DAQmx Task type.
 """
-function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String)
+function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String; min_val=nothing, max_val=nothing)
+    (min_val === nothing) == (max_val === nothing) || throw(ArgumentError(
+        "createtask: give min_val and max_val together or neither, got min_val = $(repr(min_val)), max_val = $(repr(max_val))"))
+    ranged = min_val !== nothing
+    ranged && !(tasktype in ("AI", "AO")) && throw(ArgumentError(
+        "createtask: min_val and max_val are a voltage range and apply to \"AI\" and \"AO\" tasks, not \"$tasktype\""))
     # Extract device name from channel (e.g., "Dev1/ao0" -> "Dev1")
     device = String(split(channel, "/")[1])
 
     if tasktype == "AI"
+        if ranged
+            task = ai_alloc()
+            try
+                ai_add!(task, channel, Float64(min_val), Float64(max_val))
+            catch e
+                try
+                    task_clear!(task)   # the task exists even when the channel was refused
+                catch
+                    throw(DAQInterface.UnreleasedTask(task, e))   # still allocated: the caller keeps the handle
+                end
+                rethrow()
+            end
+            return task
+        end
         # Query device's AI voltage range
         ranges = DAQmx.ai_voltage_ranges(device)
         if isempty(ranges)
@@ -82,6 +116,20 @@ function DAQInterface.createtask(daq::NIdaq, tasktype::String, channel::String)
         DAQmx.add_ai_voltage!(task, channel; min_val=min_val, max_val=max_val)
         return task
     elseif tasktype == "AO"
+        if ranged
+            task = ao_alloc()
+            try
+                ao_add!(task, channel, Float64(min_val), Float64(max_val))
+            catch e
+                try
+                    task_clear!(task)   # the task exists even when the channel was refused
+                catch
+                    throw(DAQInterface.UnreleasedTask(task, e))   # still allocated: the caller keeps the handle
+                end
+                rethrow()
+            end
+            return task
+        end
         # Query device's AO voltage range
         ranges = DAQmx.ao_voltage_ranges(device)
         if isempty(ranges)

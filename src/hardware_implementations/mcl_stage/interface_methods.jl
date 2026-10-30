@@ -6,6 +6,9 @@ function initialize(stage::MCLStage)
     if handle > 0 
         # Set stage range
         StageInterface.getrange(stage)
+        # Start the targets at where the stage is: the panel's step buttons move to (targ_x, targ_y, targ_z),
+        # so a target left at 0.0 would drive the other two axes there on the first step.
+        stage.targ_x, stage.targ_y, stage.targ_z = StageInterface.getposition(stage)
     else
         @error "Stage failed to initialize"
     end

@@ -1,34 +1,68 @@
 # These are commonly use higher-level methods that call lower-level methods
 
+"""
+    showdevicelist()
+
+Print the DCAM devices. It borrows a count of the DCAM API (`api_acquire!`), so it neither initializes the API under
+a camera that is open nor uninitializes it afterwards. Returns the `DCAMERR` of `dcamapi_uninit` when it uninitialized
+the API, as before, and `DCAMERR_SUCCESS` when another holder keeps the API up.
+"""
 function showdevicelist()
-    err, dci = dcamapi_init()
-
-    n = dci.iDeviceCount
-    println("Found $(n) devices")
-    
-    for i in 0:n-1
-        err, dco = dcamdev_open(i)
-        if is_failed(err)
-            @error "Failed to open device"
-            return
-        end
-        
-        output = "#$(i): "
-        hdcam = dco.hdcam
-
-        err, model = dcamdev_getstring(hdcam, DCAM_IDSTR_MODEL)
-        output *= length(model) == 0 ? "No DCAM_IDSTR.MODEL" : "MODEL=$(model)"
-
-        err, cameraid = dcamdev_getstring(hdcam, DCAM_IDSTR_CAMERAID)
-        output *= length(cameraid) == 0 ? ", No DCAM_IDSTR.CAMERAID" : ", CAMERAID=$(cameraid)"
-
-        println(output)
-        dcamdev_close(hdcam)
+    err, n = api_acquire!()
+    if is_failed(err)
+        @error "DCAM Failed to Initialize"
+        return err
     end
-    err = dcamapi_uninit()
+    local uninit_err = DCAMERR_SUCCESS
+    try
+        println("Found $(n) devices")
+
+        for i in 0:n-1
+            err, dco = dcamdev_open(i)
+            if is_failed(err)
+                @error "Failed to open device"
+                return
+            end
+
+            output = "#$(i): "
+            hdcam = dco.hdcam
+
+            err, model = dcamdev_getstring(hdcam, DCAM_IDSTR_MODEL)
+            output *= length(model) == 0 ? "No DCAM_IDSTR.MODEL" : "MODEL=$(model)"
+
+            err, cameraid = dcamdev_getstring(hdcam, DCAM_IDSTR_CAMERAID)
+            output *= length(cameraid) == 0 ? ", No DCAM_IDSTR.CAMERAID" : ", CAMERAID=$(cameraid)"
+
+            println(output)
+            dcamdev_close(hdcam)
+        end
+    finally
+        uninit_err = api_release!()
+    end
+    return uninit_err
+end
+
+# The property setters and getters below make a DCAM call with `camera.camera_handle`, which `shutdown` nulls. After
+# `shutdown` they refuse, as `begin_start!` does: log an error, set `last_error` to `DCAMERR_INVALIDHANDLE`, and make no
+# DCAM call. True when the caller must stop. Call it with `camera.acquisition_lock` held, and keep the lock across the
+# DCAM calls that follow: `shutdown` closes the device and nulls the handle under that lock, so a check without it can
+# be overtaken. The lock is reentrant, and none of the guarded functions waits on `acquisition_changed` (the wait that
+# `getlastframe` and `shutdown` release the lock in), so a held lock only makes `shutdown` wait for a short call.
+function refused_closed!(camera::DCAM4Camera, what::AbstractString)
+    camera.closing == 0 && return false
+    camera.last_error = DCAMERR_INVALIDHANDLE
+    @error "DCAM4Camera $(camera.unique_id): $(what) refused: the camera has been shut down"
+    return true
 end
 
 function showproperties(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "showproperties") && return nothing
+        _showproperties(camera)
+    end
+end
+
+function _showproperties(camera::DCAM4Camera)
     hdcam = camera.camera_handle
 
     err, idprop = dcamprop_getnextid(hdcam, Int32(0), DCAMPROP_OPTION_SUPPORT)
@@ -53,6 +87,13 @@ function showproperties(camera::DCAM4Camera)
 end
 
 function setvalue(camera::DCAM4Camera, iProp::Int32, value::Float64)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setvalue") && return DCAMERR_INVALIDHANDLE, value
+        _setvalue(camera, iProp, value)
+    end
+end
+
+function _setvalue(camera::DCAM4Camera, iProp::Int32, value::Float64)
     hdcam = camera.camera_handle
     err, dca = dcamprop_getattr(hdcam::Ptr{Cvoid},iProp)
 
@@ -86,6 +127,13 @@ function setvalue(camera::DCAM4Camera, idprop::DCAM_IDPROP, value)
 end
 
 function setexposuretime!(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setexposuretime!") && return DCAMERR_INVALIDHANDLE, camera.exposure_time
+        _setexposuretime!(camera)
+    end
+end
+
+function _setexposuretime!(camera::DCAM4Camera)
     hdcam = camera.camera_handle
     exposure_time = camera.exposure_time
     err = dcamprop_setvalue(hdcam, DCAM_IDPROP_EXPOSURETIME, Float64(exposure_time))
@@ -103,11 +151,21 @@ function setexposuretime!(camera::DCAM4Camera)
 end
 
 function setexposuretime!(camera::DCAM4Camera, exposure_time::Real)
-    camera.exposure_time = Float64(exposure_time)
-    return setexposuretime!(camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setexposuretime!") && return DCAMERR_INVALIDHANDLE, camera.exposure_time
+        camera.exposure_time = Float64(exposure_time)
+        return _setexposuretime!(camera)
+    end
 end
 
 function setroi!(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setroi!") && return nothing
+        _setroi!(camera)
+    end
+end
+
+function _setroi!(camera::DCAM4Camera)
     setvalue(camera, DCAM_IDPROP_SUBARRAYMODE, 1) # set subarray mode to off so that the order of setting the ROI would not matter.
     setvalue(camera, DCAM_IDPROP_SUBARRAYHPOS, camera.roi.x_start)
     err, hpos = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_SUBARRAYHPOS)
@@ -171,11 +229,14 @@ Positions are **0-based**, and the ORCA wants positions and sizes in multiples
 of 4; a value the camera does not accept now throws.
 """
 function setroi!(camera::DCAM4Camera, roi::CameraROI)
-    camera.roi.x_start = roi.x_start
-    camera.roi.y_start = roi.y_start
-    camera.roi.width   = roi.width
-    camera.roi.height  = roi.height
-    return setroi!(camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setroi!") && return nothing
+        camera.roi.x_start = roi.x_start
+        camera.roi.y_start = roi.y_start
+        camera.roi.width   = roi.width
+        camera.roi.height  = roi.height
+        return _setroi!(camera)
+    end
 end
 
 """
@@ -187,11 +248,14 @@ Apply an ROI given as `(x, WIDTH, y, HEIGHT)` — note that this is **not**
 preferred.
 """
 function setroi!(camera::DCAM4Camera, hpos::Int32, hsize::Int32, vpos::Int32, vsize::Int32)
-    camera.roi.x_start = hpos
-    camera.roi.width  = hsize
-    camera.roi.y_start  = vpos
-    camera.roi.height = vsize
-    setroi!(camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "setroi!") && return nothing
+        camera.roi.x_start = hpos
+        camera.roi.width  = hsize
+        camera.roi.y_start  = vpos
+        camera.roi.height = vsize
+        _setroi!(camera)
+    end
 end
 
 function settriggermode!(camera::DCAM4Camera)
@@ -233,11 +297,19 @@ const READOUT_FALLBACK_S = 1.0
     readout_time(camera::DCAM4Camera) -> Float64
 
 The sensor readout time in seconds, read from the camera's `DCAM_IDPROP_TIMING_READOUTTIME`, which depends on the
-current ROI and readout speed, so read it after `setroi!`. It reads the camera and caches the value in
+current ROI and readout speed, so read it after `setroi!`. After `shutdown` it refuses (see `refused_closed!`) and returns
+`READOUT_FALLBACK_S` without caching it. It reads the camera and caches the value in
 `camera.readout_s`. If the read fails or the value is not a finite, non-negative number, it warns and returns (and
 caches) `READOUT_FALLBACK_S`.
 """
 function readout_time(camera::DCAM4Camera)
+    @lock camera.acquisition_lock begin
+        refused_closed!(camera, "readout_time") && return READOUT_FALLBACK_S
+        _readout_time(camera)
+    end
+end
+
+function _readout_time(camera::DCAM4Camera)
     err, t = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_TIMING_READOUTTIME)
     if is_failed(err) || !isfinite(t) || t < 0
         @warn "DCAM4Camera $(camera.unique_id): the camera did not report its readout time ($(err), $(t)); assuming $(READOUT_FALLBACK_S) s for the frame-wait timeout" maxlog = 1
@@ -259,27 +331,135 @@ cached_readout_time(camera::DCAM4Camera) =
     isfinite(camera.readout_s) ? camera.readout_s : readout_time(camera)
 
 """
-    stop_and_release!(camera::DCAM4Camera)
+    DRAIN_POLL_S
+
+The interval, in seconds, at which `stop_and_release!` repeats the abort of the frame waits it is joining.
+"""
+const DRAIN_POLL_S = 0.05
+
+"""
+    open_wait!(camera::DCAM4Camera) -> (err, hwait)
+
+Open a frame wait and register it with the camera, so a drain (`drain_waits!`) can abort it and join it. Call it with
+`camera.acquisition_lock` held, before the wait starts, and put what follows in a `try` whose `finally` calls
+`finish_wait!`. No wait is registered when the open fails (the returned handle is then `C_NULL`); one that was opened
+and cannot be registered is closed before the error propagates.
+"""
+function open_wait!(camera::DCAM4Camera)
+    err, hwait = dcamwait_open(camera.camera_handle)
+    is_failed(err) && return err, C_NULL
+    try
+        push!(camera.waits, hwait)
+    catch
+        dcamwait_close(hwait)
+        rethrow()
+    end
+    return err, hwait
+end
+
+"""
+    finish_wait!(camera::DCAM4Camera, hwait)
+
+End a frame wait registered by `open_wait!`: close its handle and unregister it in one hold of the acquisition lock,
+then tell the drain that may be waiting for it. A drain that ends therefore leaves no wait handle open. It does
+nothing for a handle that is not registered, so it is safe on every exit and when called twice. It is the only place a
+wait handle is closed. Call it before anything that calls `stop_and_release!`, which would otherwise wait for this wait.
+"""
+function finish_wait!(camera::DCAM4Camera, hwait)
+    @lock camera.acquisition_lock begin
+        i = findfirst(==(hwait), camera.waits)
+        i === nothing && return nothing
+        try
+            dcamwait_close(hwait)
+        finally
+            deleteat!(camera.waits, i)
+            notify(camera.acquisition_changed; all = true)
+        end
+    end
+    return nothing
+end
+
+# Abort every registered frame wait and wait, with the lock released, until all have left. Call it with the lock
+# held, as the FIRST thing a start, a stop or `shutdown` does. It re-aborts every DRAIN_POLL_S: whether DCAM remembers
+# an abort sent to a wait that has not entered `dcamwait_start` is not settled by the SDK headers, so no abort is relied
+# on to land the first time. A task blocked in a DCAM wait ends in bounded time, at the abort or at its own timeout.
+function drain_waits!(camera::DCAM4Camera)
+    isempty(camera.waits) && return nothing
+    camera.draining += 1  # no new frame wait registers meanwhile, so a polling loop cannot starve the drain
+    try
+        while !isempty(camera.waits)
+            for hwait in copy(camera.waits)
+                dcamwait_abort(hwait)
+            end
+            tick = Timer(DRAIN_POLL_S) do _
+                @lock camera.acquisition_lock notify(camera.acquisition_changed; all = true)
+            end
+            try
+                wait(camera.acquisition_changed)  # releases the lock, at any reentrant depth, until a wait ends or the tick
+            finally
+                close(tick)
+            end
+        end
+    finally
+        camera.draining -= 1
+        notify(camera.acquisition_changed; all = true)  # a `capture` may be waiting for the drains to end
+    end
+    return nothing
+end
+
+# What `capture` does first: wait, with the lock released, until no other drain is in progress, then drain. A drain
+# that ends is not followed by a registration that starts it again, because a registering `capture` has to get past
+# this first, and the loop covers a drain that began while this one was joining.
+function drain_before_registering!(camera::DCAM4Camera)
+    while true
+        while camera.draining > 0
+            wait(camera.acquisition_changed)
+        end
+        drain_waits!(camera)
+        camera.draining == 0 && return nothing
+    end
+end
+
+"""
+    stop_and_release!(camera::DCAM4Camera; current = () -> true)
 
 Leave the camera with no capture running and no buffer attached, whatever an earlier call left behind (a live view,
-a sequence, or a capture that failed). It reads the status first and does nothing only when the status is known to be
-STABLE (no buffer) or UNSTABLE. A failed status read, BUSY or ERROR is stopped (unless READY, which is already
-stopped); then anything with a buffer is released. The helpers log their own failures and never throw. Sets
-`camera.is_running = false`. It also increments `capture_generation`, so a `sequence` poller started before it no
-longer acts. Every start goes through it first: `live` and `sequence` through `abort`, and `capture` directly.
+a sequence, or a capture that failed). It first checks `current()`: when it is false the capture the caller meant to
+stop has been replaced, and nothing is touched, no wait aborted. Otherwise it aborts every frame wait in progress
+(`getlastframe`, `capture`) and waits for it to end, with the acquisition lock released, as the vendor's samples do,
+and checks `current()` again; only then does it stop the capture and release the buffer, so no frame wait is inside the
+library when its buffer goes. It reads the status next and does nothing more only when the status is known to be STABLE
+(no buffer) or UNSTABLE. A failed status read, BUSY or ERROR is stopped (unless READY, which is already stopped); then
+anything with a buffer is released. The helpers log their own failures and never throw. When the stop and the release
+both worked, or nothing was running, it sets `camera.is_running = false` and increments `capture_generation`, so a
+`sequence` poller or `getdata` started before it no longer acts. When the stop or the release failed it records that
+error in `last_error`, leaves `is_running` as it was and leaves the generation alone, since the capture may still be
+running and whoever owned it still does. A `capture` whose wait that stop aborted does not own it: the failed stop
+leaves it as a leftover that the next start, `capture` or `abort` stops and releases. It does nothing on a camera that
+has been shut down. Every start goes through it first: `live` and `sequence` through `abort`, and `capture` directly.
+It holds the camera's acquisition lock throughout except while it waits for the frame waits to end (see
+`DCAM4Camera`), and its drain is empty inside a start, which drained first.
 """
-function stop_and_release!(camera::DCAM4Camera)
-    camera.capture_generation += 1  # any stop makes every older sequence poller stale
-    hdcam = camera.camera_handle
-    err, status = dcamcap_status(hdcam)
-    # Nothing to do only when the status is known to be STABLE (no buffer) or UNSTABLE. A failed
-    # status read, BUSY or ERROR is stopped; then anything with a buffer is released. The helpers
-    # log their own failures and never throw.
-    if is_failed(err) || !(status == DCAMCAP_STATUS_STABLE || status == DCAMCAP_STATUS_UNSTABLE)
-        status == DCAMCAP_STATUS_READY || dcamcap_stop(hdcam)
-        dcambuf_release(hdcam)
+function stop_and_release!(camera::DCAM4Camera; current::Function = () -> true)
+    @lock camera.acquisition_lock begin  # no other start or stop interleaves (see `DCAM4Camera`)
+        stale() = !current() || camera.closing == 2
+        stale() && return nothing
+        drain_waits!(camera)
+        stale() && return nothing
+        hdcam = camera.camera_handle
+        err, status = dcamcap_status(hdcam)
+        # Nothing to do only when the status is known to be STABLE (no buffer) or UNSTABLE. A failed
+        # status read, BUSY or ERROR is stopped; then anything with a buffer is released. The helpers
+        # log their own failures and never throw.
+        if is_failed(err) || !(status == DCAMCAP_STATUS_STABLE || status == DCAMCAP_STATUS_UNSTABLE)
+            serr = status == DCAMCAP_STATUS_READY ? DCAMERR_SUCCESS : dcamcap_stop(hdcam)
+            rerr = dcambuf_release(hdcam)
+            failed = is_failed(serr) ? serr : rerr
+            is_failed(failed) && (camera.last_error = failed; return nothing)  # may still be running: is_running and the generation are left as they were
+        end
+        camera.capture_generation += 1  # any stop that worked makes every older sequence poller and getdata stale
+        camera.is_running = false
     end
-    camera.is_running = false
     return nothing
 end
 
@@ -304,8 +484,12 @@ function wait_not_busy(camera::DCAM4Camera, timeout_ms::Integer, what::AbstractS
                        current::Function = () -> true)
     deadline = time() + timeout_ms / 1000
     logged = false
-    while current()
-        err, status = dcamcap_status(camera.camera_handle)
+    while true
+        # One status read, under the lock with the currency check, so a stop, a start or `shutdown` never
+        # closes or replaces what it reads (it is a non-blocking call). The sleep below holds nothing.
+        polled = @lock camera.acquisition_lock (current() && camera.closing != 2 ? dcamcap_status(camera.camera_handle) : nothing)
+        polled === nothing && return false
+        err, status = polled
         if is_failed(err)
             logged || @error "DCAM4Camera $(camera.unique_id): $(what) could not read the capture status ($(err)); retrying until the deadline"
             logged = true
@@ -313,12 +497,16 @@ function wait_not_busy(camera::DCAM4Camera, timeout_ms::Integer, what::AbstractS
             return true
         end
         if time() >= deadline
-            camera.last_error = is_failed(err) ? err : DCAMERR_TIMEOUT
+            # Recorded under the lock and only while this is still the capture it watches, so a stale call never
+            # overwrites a newer capture's `last_error`.
+            @lock camera.acquisition_lock begin
+                current() && camera.closing != 2 || return false
+                camera.last_error = is_failed(err) ? err : DCAMERR_TIMEOUT
+            end
             @error "DCAM4Camera $(camera.unique_id): $(what) timed out after $(timeout_ms) ms " *
                    (is_failed(err) ? "(the status read fails: $(err))" : "with the capture still running")
             return false
         end
         sleep(STATUS_POLL_S)
     end
-    return false
 end

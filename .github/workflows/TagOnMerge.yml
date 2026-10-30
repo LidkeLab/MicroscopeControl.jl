@@ -26,7 +26,7 @@ jobs:
       statuses: read # lab/tests records
       pull-requests: read # the merged pull request's head commit
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

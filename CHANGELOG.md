@@ -8,6 +8,200 @@ the README's Installation section: in `0.x.y`, `x` is the breaking component
 and `y` is the non-breaking one (releases are tagged; between them `main` carries
 the next version with `-DEV`).
 
+## [Unreleased]
+
+### Added
+
+- **Light-source modulators**: a light can put its level on an analogue input through an `AbstractModulationControl`,
+  which holds the scale. `TCubeLaser`, `SimDiodeLaser` and `SimLight` take `modulator::Union{Nothing,AbstractModulationControl}`
+  (keyword `modulator = nothing`; with `nothing` every method runs the code it always did). A modulator defines
+  `setpower(mc, p)` (`p` in the light's unit, 0 is 0 V; `ArgumentError` before any write when out of reach),
+  `initialize(mc)`, `shutdown(mc)` and `output_id(mc)`. New exported types: `AbstractModulationControl`,
+  `NIDAQModulator(; channel, v_range, per_volt, daq)` (one analogue-output task for life, created with the range, so
+  DAQmx refuses a range the card lacks); a Triggerscope DAC modulator follows in a later release. Public, not exported
+  (`MicroscopeControl.<name>`): `output_id`, `open_modulator!` and `close_modulator!` (one light object per output, a
+  failed `shutdown(mc)` keeps the claim for a retry), `RecordingModulator` and `modulation_violations(light; set!, expect)`,
+  a check of the convention for lights and their downstream fakes. The convention is in the `LightSource` docstring and
+  the `mc-extend` and `mc-acquire` skills: a light writes level 0 before it enables, writes the level only while on,
+  writes 0 first when it switches off, and darkens on a throw other than `ArgumentError`.
+  - `TCubeLaser` with a modulator drives the rear MOD IN: `initialize` sets control source 3 (software + external; the
+    source found is restored at `shutdown`); `light_on` writes 0 V, enables, sends USB setpoint 0, waits `MOD_SETTLE_S`
+    (1.3 s), puts the request on MOD IN and confirms that the setpoint register shows it within `max(30 words, 3 %)`,
+    refusing with the light off at 0 V otherwise (a wrong `per_volt`, a dead cable, an unarmed source); level changes are
+    one analogue write while on and nothing while off. **Costs 1.3 s more per `light_on`.** [guarantee] A
+    `TCubeLaser` with a modulator keeps two locks: a per-light lock for the writes and state changes of `initialize`, a
+    second `light_on`, the level setters and the MOD IN writes, held for short critical sections and never across a wait,
+    and a short `usb_lock` for the Kinesis enable and disable commands alone. `light_on` arms under the lock (0 V,
+    preflight, the enable after a generation check, USB 0), sleeps unlocked, applies the current request under the lock,
+    and polls the read-back and the lock check unlocked. While it waits a level setter only records (the activation
+    applies the latest request). `light_off` and `shutdown` bump a generation and disable right away, without waiting for
+    the lock or for a stalled MOD IN write (measured in the tests: under 0.03 s, bound 0.1 s); `initialize` and another
+    `light_on` also supersede an activation, which then throws and writes nothing more. A USB setpoint is written only
+    when the MOD IN zero succeeded in the same critical section, never while the modulator is not yet open; otherwise it
+    is skipped and the output disabled. A disable that fails stays pending: the control source is not restored and the
+    output not released until a `shutdown` (which reopens the handle for it) disables the output. A modulated light's
+    `light_off` no longer sends a USB zero (the controller ignores one with the output off). A Triggerscope DAC modulator
+    follows in a later release. `shutdown` is final: an activation queued behind it is refused and the output is disabled
+    again as its last hardware step; `initialize` re-enables activation. A `light_on` linearized after a `light_off` may
+    legitimately turn the light on again. `NIDAQModulator` writes with a 0.5 s DAQmx timeout (`write_timeout`) instead of
+    10 s. **[limitation]** With one Julia thread a stalled DAQmx write blocks the thread, so `light_off` waits up to that
+    timeout; issue `light_off` from another thread (`julia -t 2`, `Threads.@spawn`). The controller keeps one
+    setpoint register, so no USB setpoint but 0 (and the calibration reference) is sent while a level is held. The scale
+    is measured per laser, range and loop (`CALIBRATION.md`, "MOD IN scale"); the controller facts behind the design are
+    recorded there. `control_source` and `set_control_source!` (flag sums such as 3 and 5, which the
+    `LD_InputSourceFlags` enum cannot hold) are unexported.
+  - `createtask(daq, "AO", channel; min_val, max_val)`: new keywords for the voltage range of an analogue input or output
+    task (both or neither); `NIdaq` hands them to DAQmx as given.
+  - `SimLight(id, properties)` keeps converting its arguments.
+  - `TCubeLaser.setupIO` and `set_modvoltage` warn that they are deprecated and name `modulator = NIDAQModulator(...)`.
+    Nothing else about them changed.
+- Opt-in per-call trace of the DCAM library calls, turned on only by `DCAM4.dcam_trace!(path)` (a local-disk
+  path): a flushed BEGIN line before each call and an END or THROW line after it, with a per-call id, the arguments,
+  the elapsed time, the return value or the error, and the GC pause and time-to-safepoint counters. While tracing is
+  on a once-a-second heartbeat line is written, and the file is marked `trace on` and `trace off`. A failed write
+  turns tracing off with one warning. Off by default; one `Ref{Bool}` check per call.
+- The lab image layout (decision 0040), stated where readers look: a new docs page, `docs/src/conventions.md`; the
+  docstrings of the functions that take or return an image (`getlastframe`, `getdata`, `capture`, `sequence`, `live`,
+  `save_h5`, `save_attributes_and_data`, camera `export_state`); `CLAUDE.md`; and the skills that describe images.
+  An image is `[y, x]`, a stack `(ny, nx, nframes)`, `[1, 1]` at the top left; the only transposes are at a device
+  boundary.
+- `CameraInterface.rowmajor_to_yx(buf, width, height; stride = width)`, one documented conversion of an SDK's
+  row-major buffer to a `(height, width)` `[y, x]` array, dropping row padding. Not exported. `DCAM4Camera`,
+  `ThorcamDCXCamera` and `ThorCamCSCCamera` all call it. Tested on non-square images with known content, with and
+  without padding, and through the DCAM4 fake SDK, replaced ThorCam DCx and CSC SDK calls, and `SimCamera`.
+
+### Fixed
+
+- `DCAM4Camera` frames from a camera that pads its rows (`rowbytes` larger than `width` pixels) are read by the row
+  stride and the padding dropped; the buffer was allocated for `rowbytes` but reshaped to `(width, height)`, which
+  threw on a length mismatch.
+- `ThorCamCSCCamera` sizes its read buffer from the sensor (`camera_format`) instead of a hard-coded 1440 x 1080,
+  converts the full frame, and crops it to `roi` (`x_start`, `y_start`, 1-based) in software; the zero frame and the
+  `getdata` sequence array follow the cropped size. The driver does not send `roi` to the camera, so there is no
+  readout speedup, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `getdata` in
+  `SEQUENCE` mode looped to an undefined `sequence_frames`; it now loops to `sequence_length`.
+- Dev scripts that showed a frame without `permutedims` on a `yreversed` axis (`dcam4_camera/capture_single_frame.jl`,
+  `thorcam_csc/capture_single_frame.jl`, `dev/laser_tracking.jl`) follow the display rule; the DCAM4 one also took
+  `dcambuf_getlastframe`'s frame as an `(err, data)` pair.
+
+Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answers". The camera entries are for
+`DCAM4Camera`.
+
+- `getlastframe` is safe to run in a thread while another task calls `abort`, `live`, `sequence`, `capture` or
+  `shutdown`. Each frame wait is registered with the camera; a stop, a start or `shutdown` first aborts the waits in
+  progress and waits for them to end, and only then stops the capture, releases the buffer or closes the device, so
+  no wait is inside the library, and no wait handle is open, when they go. A `getlastframe` whose capture was stopped
+  or replaced returns `nothing`, reads no frame and leaves `last_error` as it was (one warning per session). Starts
+  stay whole: a start drains first and then holds the camera's lock to its end, so two starts on different tasks
+  cannot leave the camera's mode and the SDK's disagreeing. (Answers: "Stop any threaded `getlastframe` loop before calling `abort`, `live`,
+  `sequence` or `capture` from another task".)
+- `capture` no longer stops a live view or sequence that another task started while it waited for its frame: it reads
+  its frame and cleans up only while its capture is still the current one, and otherwise returns `nothing` after one
+  warning, as `getdata` does. A stale cleanup (a `getdata` or `capture` whose capture was replaced) aborts nobody's
+  wait and stops nothing. `getdata` in LIVE mode likewise reads only while its capture is current, and a `getdata`
+  poll resolves its readout and records its timeout only while its capture is current, so it never calls the camera
+  after `shutdown` or overwrites a newer capture's `last_error`. A loop of `capture` calls cannot keep a stop from
+  finishing: `capture` waits for a stop in progress before it starts.
+- A stop that failed (`stop_and_release!`, and so `abort`) no longer moves the capture on to a new owner: the capture
+  may still be running, and the `sequence` task or `getdata` that owned it keeps owning it, so a sequence that ends later
+  still clears `is_running`. A stop that worked, or that found nothing running, does as before. The waits in progress
+  are aborted either way. A `capture` whose wait that stop aborted does not own the capture: if the stop failed,
+  `last_error` says so and the capture stays as a leftover that the next `capture`, start or `abort` stops and
+  releases, as after any failed capture.
+- Two `DCAM4Camera`s in one process: shutting one down no longer uninitializes the DCAM API under the other. The API
+  is initialized by the first camera and uninitialized by the last `shutdown`, and never before the device close has
+  returned; a constructor that fails gives back only its own hold; `showdevicelist` borrows a hold rather than
+  initializing and uninitializing around a camera that is open, and returns what it did before (the `dcamapi_uninit` code, or `DCAMERR_SUCCESS` while
+  another camera holds the API). A camera built positionally (not public) adopts a hold without initializing, so its
+  `shutdown` uninitializes when it is the last, as before.
+- `DCAM4Camera` `shutdown` is one coordinated step: it aborts and joins any frame wait (no `abort` first is needed,
+  which answers 0.2.6's "stop any threaded `getlastframe` loop" advice for `shutdown`), stops and releases any capture,
+  makes any `sequence` task and `getdata` in progress stale, closes the device, and then gives back the camera's hold on
+  the API. A second `shutdown`, at once or later, waits for the first and touches nothing; one interrupted before it
+  finishes is resumed by the next `shutdown`, or by the concurrent one that was waiting for it: a step that never
+  began runs, a finished step is skipped, and the device close or `dcamapi_uninit`, if interrupted mid-call, is logged
+  once as of unknown outcome and not repeated, so neither runs twice (an interrupt before the call was entered, in the
+  trace wrapper's lock, therefore leaves the device open or the API initialized, with that error logged). After it, `getlastframe` and
+  `getdata` return `nothing`, `capture` throws, `live` and `sequence` log an error and return, and none makes a DCAM
+  call. It returns what it did before: the code of `dcamapi_uninit` when it uninitialized the API, and `DCAMERR_SUCCESS`
+  when another camera keeps the API up.
+- The camera's live display (`gui(camera)`, `start_live`) no longer waits for a frame on the thread that draws. The
+  blocking `getlastframe` runs on its own thread (`Threads.@spawn`) and hands frames to a task that alone updates the
+  display; a `nothing` frame (a timeout) no longer ends the display with an error, and an all-zero frame no longer
+  fails to scale. With one Julia thread it behaves as before. Closing the window stops the reader, then the camera.
+- The DCAM frame wait lets Julia's garbage collector run on Julia 1.12 and later (`gc_safe`). Before, a collection on
+  any other thread stalled for the rest of the wait, seconds at long exposures, which froze whatever else the
+  process was doing. Julia 1.11 is unchanged.
+- `MCLStage.initialize` reads the stage's position into `targ_x`, `targ_y` and `targ_z`. They stayed at 0.0, so the
+  3D stage panel's first X step drove Y and Z to 0, a focus jump on the Z piezo.
+- `DCAM4Camera`: one internal lock per camera serializes the starts (`live`, `sequence`, `capture`) with
+  `stop_and_release!` and `abort`, and covers `getdata`'s check that its capture is still current, its frame reads
+  and its final stop and release, and the `sequence` task's stop. No frame wait and no sleep runs under it. So a
+  `getdata` whose capture a newer one replaced, from another task, never reads the newer capture's frames or
+  releases its buffer, including a live view started during `getdata`'s cleanup; it logs one warning and returns
+  `nothing`, with `last_error` unchanged. (Answers: "A frame read waiting in `getdata` can stop and release a newer
+  live view's buffer".)
+- `DCAM4Camera` `stop_and_release!` checks the stop and release return codes; on failure it records `last_error`
+  and leaves `is_running` as it was, since the capture may still be running. (Answers: "A failed stop or buffer
+  release is not recorded".)
+- `DCAM4Camera` `sequence` and `live` free their buffer (`stop_and_release!`) when the capture fails to start,
+  instead of leaving it until the next start. (Answers: "A sequence or live view that fails to start leaves its
+  buffer allocated".)
+- `DCAM4Camera` `getdata` in SEQUENCE mode: a failed `dcamcap_transferinfo` sets `last_error` and returns
+  `nothing`, instead of reading frames with a success code. (Answers: "If the frame-count query fails, a sequence
+  can return frames without checking that all arrived".)
+- The two `TCubeLaser` known issues in 0.2.6 (a zero sent after a failed enable counting as landed, and the
+  `CALIBRATION.md` example's `light_off` not running) were already fixed in the 0.2.6 code, as its Fixed list
+  says; the "Known issues" list was not updated.
+- `PIStage.initialize` reads the position after the reference move, the travel range and the velocity, and starts
+  `real_x`/`real_y` and the targets `targ_x`/`targ_y` there, so the stage panel's first X step no longer moves Y to
+  the 12.5 default. A failed position read fails `initialize` like the other checked steps (the connection is closed
+  and it throws). (`MCLStage` had the same gap, fixed above; `MCS2Stage` reads its position at `initialize`.)
+- `DCAM4Camera` property setters and getters (`setvalue`, `settriggermode!`, `setexposuretime!`, `setroi!`,
+  `readout_time`, `showproperties`, `extract_properties`, `gui_param`) make no library call after `shutdown`, where they
+  passed the nulled handle. Each runs its check and its library calls (`gui_param`: its reads, not building the panel) under the camera's acquisition lock, so a
+  concurrent `shutdown` waits for it. They log an error and set `last_error` to `DCAMERR_INVALIDHANDLE`, as `live` and `sequence` do; the setters return
+  `(DCAMERR_INVALIDHANDLE, value)` (`setroi!`, `showproperties` and `gui_param` return `nothing`),
+  `extract_properties` returns an empty `Dict`, and `readout_time` returns `READOUT_FALLBACK_S` without caching it.
+- `Meadowlark.initializesdk` passes `Create_SDK`'s last argument, `char* static_regional_lut_file`, as a NULL
+  `Ptr{Cchar}`. It passed `0::Cuint`, a 4-byte integer where the header declares a pointer: on Windows x64 that
+  argument goes on the stack, the SDK read 8 bytes, took 4 bytes of garbage as part of the pointer and the process
+  died with no Julia traceback. `constructed_ok` and the four `int` flags now use `Cint`, as the header declares.
+  `initializesdk` takes the vendor parameters as keywords (defaults unchanged; `regional_lut` = a file path or
+  `nothing`), still prints the board count and the constructor's flag, and now also returns them as
+  `(; n_boards_found, constructed_ok)`. Checked without the DLL against the binding's lowered `foreigncall`.
+
+### Changed
+
+- Compat entries for the dependencies that had none: `TOML = "1"` (#86; TOML is 1.0.3 on Julia 1.13), `LibSerialPort = "0.5"` (#82) and
+  `SHA = "0.7, 1"` (#77; SHA is a standard library, 0.7.0 on Julia 1.11 and 1.0.0 on 1.13, so a
+  bound of `"0.7"` alone was ignored with a warning on 1.13).
+- CI: `actions/checkout` v7 (#79) and `codecov/codecov-action` v7 (#78). Not shipped; no effect on
+  the package.
+- `DCAM4Camera` `getlastframe` returns `nothing` at once, with one warning per session, while a stop is under way or
+  after `shutdown`, where it used to wait out its timeout. With no live view running it still waits and reads, as before.
+- `save_h5` and `save_attributes_and_data` write `dimension_order = "y,x"` (two dimensions) or `"y,x,frame"` (more) on
+  a dataset, where they wrote `"HW"` and `"HWN"` from 2026-01-29, and add
+  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`. `dimension_labels` and
+  `memory_layout` are kept and the array is written unpermuted, as before, so only the attribute value changes. This
+  package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
+  layout.
+
+### Known issues
+
+- Camera (`DCAM4Camera`):
+  - One hang inside a camera library call, on several cores after GPU code had loaded (0.2.6's summary), and the
+    NOTREADY, TIMEOUT and NOTSTABLE errors the rig logs during GUI use, are not fixed here. `DCAM4.dcam_trace!` records
+    the library calls to find them.
+- `DCAM4Camera`: a property call (`setvalue`, `setexposuretime!`, `setroi!`, `readout_time`, `showproperties`,
+  `extract_properties`, and the read in `gui_param`) holds the acquisition lock, so a slow or hung camera property call
+  delays a frame read, a stop and `shutdown` until it returns. The guard fixes the handle's lifetime, not stop latency.
+- `ThorCamCSCCamera` copies `camera_format.x_pixels * camera_format.y_pixels` pixels from the SDK's buffer on every
+  frame, and does not check that against the SDK. `camera_format` must state the sensor the camera delivers (the default,
+  1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
+  image. The fix is to ask the SDK for the image size (`tl_camera_get_image_width` and `_height`), which needs the
+  Thorlabs camera SDK header; none is archived yet.
+
 ## [0.2.6] - 2026-10-01
 
 A non-breaking release in three parts. Only the DCAM4 part has run on hardware so

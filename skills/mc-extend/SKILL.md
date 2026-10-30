@@ -76,7 +76,7 @@ is in `references/rig-causes.md`; the short form:
 | Symptom | Usually | Check |
 |---|---|---|
 | `initialize(::PIStage)` logs `@error` and returns, `connectionstatus` stays `false` (it does not throw) | controller unpowered, USB, or **held by another process** (PIMikroMove, a second Julia) | close the others; re-run; if it connects it was contention |
-| `MLSLM` does nothing | board claimed elsewhere, or SDK found 0 boards (`n_boards_found` is a default of 0 and never updated) | read what `initializesdk()` prints; close the vendor GUI; reboot if a dead process holds it |
+| `MLSLM` does nothing | board claimed elsewhere, or SDK found 0 boards (`n_boards_found` is a default of 0 and never updated) | read what `initializesdk()` prints or returns (`n_boards_found`, `constructed_ok`); close the vendor GUI; reboot if a dead process holds it |
 | serial timeouts / "port busy" (`Triggerscope4`, and `LCC1620` through it) | wrong COM number (Windows renumbers), or port open elsewhere; **two `Triggerscope4` objects on one port** | `LibSerialPort.list_ports()`; one scope object per port, shared (`mc-system-design`) |
 | `CrystaLaser`/`VortranLaser`/`DaqTrLight` `@warn` at construction, then `setpower` does nothing | NI-DAQ discovery picked the wrong device (`devs[1]`, or `device_index`), runtime missing, or partial AO/DO discovery | inspect `light.channelsAO`/`channelsDO` after construction; `NIDAQcard.showdevices(NIdaq())` |
 | a method throws `not implemented for <Type>` or does nothing | a contract stub, not a broken `ccall` (`mc-api-map`: resolving is not implementing) | `which(f, Tuple{typeof(dev)}).sig` names the interface or `AbstractInstrument` |
@@ -255,6 +255,50 @@ with a helper (`enter_mode!(regulation_mode(l), l)`), as `TCubeLaser` does.
 **[policy]** carry the fields rather than writing your own panel: the fields are
 what make the Sim-for-hardware swap in `mc-testing` work.
 
+### A light that takes a modulator
+
+A light whose level can go out as a voltage on an analogue input (a TLD001's rear MOD IN, driven by a DAQ output; a
+Triggerscope DAC modulator follows in a later release) carries `modulator::Union{Nothing,AbstractModulationControl}`, keyword `modulator = nothing`.
+**[guarantee]** `TCubeLaser`, `SimDiodeLaser` and `SimLight` do; with `nothing` every method runs the code it always
+did. **[limitation]** `CrystaLaser`, `VortranLaser` and `DaqTrLight` take none: their native level path is already a DAQ
+voltage. The modulator holds the scale: `NIDAQModulator(; channel, v_range, per_volt, daq)` converts `setpower(modulator, p)`, with `p` in the light's own unit
+(`per_volt` is that unit per volt), to a voltage; `p = 0` is 0 V; an `ArgumentError` means out of reach and nothing was
+written. A modulator is not an `AbstractInstrument` (no panel). It defines `setpower(mc, ::Float64)`,
+`initialize(mc)`, `shutdown(mc)` and `output_id(mc)`; the contract test checks all four on its own type, and
+`output_id` is in the shadowed-generics list, so `import` it to extend it.
+
+**[policy]** A driver that takes one keeps this convention (the `LightSource` docstring has it in full):
+
+1. a `const modulator` field, default `nothing`; `initialize` ends with `LightSourceInterface.open_modulator!(light)`,
+   the output off (it claims `output_id`, so a second light object cannot drive the same output, then opens at 0 V);
+   `shutdown` calls `close_modulator!(light)` after switching off (a failed `shutdown(mc)` keeps the claim for a retry);
+2. `light_on` writes level 0 before the enable (a throw enables nothing), runs its own steps, then
+   `setpower(modulator, request)`; any throw after the enable, an `ArgumentError` included, switches the light off;
+3. `light_off` writes 0 first, logging a failure, and always switches off, even when the write is interrupted
+   (`LightSourceInterface.propagate_interrupt` passes the interrupt on after the switch-off);
+4. a level setter validates as it did, then writes `setpower(modulator, p)` only while the light is on, so the output
+   holds 0 V while off; an `ArgumentError` changes nothing, any other throw tries level 0, switches off and rethrows
+   (`LightSourceInterface.apply_level!` does that);
+5. never use the native level path while there is a modulator;
+6. **[guarantee]** for `TCubeLaser`: a per-light lock serializes the writes and state changes, a short `usb_lock` only the
+   Kinesis enable and disable calls; `light_on` arms under the first, sleeps and polls unlocked, and applies the current
+   request under it, so a setter, `light_off`, `initialize`, `shutdown` or a second `light_on` landing anywhere in between
+   ends consistent (a setter while arming only records). `light_off` and `shutdown` disable at once, never waiting for
+   a stalled modulator write. A new driver that sleeps inside `light_on` should follow the same split.
+
+**[guarantee]** `MicroscopeControl.modulation_violations(light; set!, expect)` checks 1 to 5 on an initialized light
+whose `modulator` is a `MicroscopeControl.RecordingModulator` (it writes nothing, records everything, and can be made to
+fail or to refuse a level), and returns the list of violations. A downstream package, with its native side faked, adds
+
+```julia
+@test isempty(MicroscopeControl.modulation_violations(light; set! = l -> setpower(l, 2.0), expect = 2.0))
+```
+
+`set!` sets a level in the light's unit and `expect` is what the modulator should then be asked for; pass
+`RecordingModulator(sink = p -> ...)` to drive the faked device from each accepted level. The TCube's own part of the
+convention (control source 3, the 1.3 s settle wait, the confirm at each `light_on`) is in its docstring and
+`CALIBRATION.md`.
+
 ### Behavioural obligations beyond method names
 
 **[policy]** for a new driver; the third column names the upstream driver that
@@ -262,7 +306,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 
 | Obligation | Do this | Because |
 |---|---|---|
-| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.2.1:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths *attempts* to uninitialize the SDK first (`dcamapi_uninit()` logs an `@error` if that fails, but the constructor ignores its return and throws anyway); an exception after a successful open has no such guard |
+| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.2.1:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths *attempts* to uninitialize the SDK first (`dcamapi_uninit()` logs an `@error` if that fails, but the constructor ignores its return and throws anyway); **[existing guarantee, 0.2.7]** the API is reference-counted per process (initialized by the first camera, uninitialized by the last `shutdown`), a constructor that fails gives back only its own count, and an exception after a successful open closes the device and gives the count back before it propagates (tested against a fake SDK, not on a rig) |
 | Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | `CrystaLaser()` builds its own `NIdaq()`, first device, first channel; cannot be shared or configured |
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
 | Failure visibility | throw, or set `last_error` and return `nothing`, and document which | the DAQ-backed lights `@warn` and return on an empty channel list: "initialized" and inert |
@@ -271,7 +315,7 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 | Units | a `units`/`power_unit` field and the docstring; convert at the SDK boundary | PI millimetres, MCL micrometres, Sims unitless 0..100 |
 | Calibration | table in the device (`AttenuatorProperties.cal_*`); values from the rig | `LCC1620.settransmission` `@error`s and returns when uncalibrated |
 | Cached versus measured | name it (`power_requested`); update `real_*` only from a readback | Sim stages copy `targ_*` into `real_*`; `getposition(::SimStage3d)` returns a scalar, not the documented tuple (executed) |
-| Image axis convention | `(H, W)` per frame, `(H, W, N)` per stack; at a row-major SDK boundary `permutedims(reshape(buf, (W, H)), (2, 1))` | DCAM4 does this in `dcambuf.jl`; `SimCamera` returns `(roi.height, roi.width[, N])` (executed); `save_h5` stamps `dimension_order` assuming it |
+| Image axis convention | `[y, x]`: `(H, W)` per frame, `(H, W, N)` per stack, `[1, 1]` top left (lab decision 0040, `docs/src/conventions.md`); at a row-major SDK boundary call `CameraInterface.rowmajor_to_yx(buf, W, H; stride)` once and permute nothing afterwards | DCAM4, DCx and CSC call it (executed through fakes); `SimCamera` returns `(roi.height, roi.width[, N])` (executed); `save_h5` stamps `dimension_order = "y,x[,frame]"` assuming it |
 | `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `Triggerscope4` has none (`MethodError`). `TCubeLaser` had only a 2-arg method until **v0.2.3**, so the contract call threw; the 1-arg method was added there, the 2-arg one kept as a deprecated forwarder, and **0.2.5 removed the forwarder** (contract test asserts `!hasmethod(export_state, Tuple{TCubeLaser,Any})`) |
 | Unsupported operations | do not define the method; let the throwing stub answer | `stopmotion(::MCLStage)` is a concrete method whose body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed), so `hasmethod` and the API map count it as implemented |
 
@@ -382,6 +426,10 @@ assertions, executed):
    `initialize`, closed link is an error, failed open leaves nothing to clean);
 6. `export_state` serialises: write it with `save_attributes_and_data` and read
    the attributes back.
+
+A light with a `modulator` field also runs `modulation_violations` on its fake (see "A light that takes a modulator"
+above): **[guarantee]** it is the only check of the five-part modulator convention, and `test/contract.jl` checks the
+field (`Nothing` in its type, keyword default `nothing`) on `TCubeLaser`, `SimDiodeLaser` and `SimLight` only.
 
 | Simulation or fake transport establishes | Only hardware acceptance establishes |
 |---|---|

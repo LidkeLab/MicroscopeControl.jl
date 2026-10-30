@@ -1,5 +1,33 @@
 """
 `LightSource` is an abstract type that defines the interface for a light source.
+
+# A light that takes a modulator
+
+`[guarantee]` `TCubeLaser`, `SimDiodeLaser` and `SimLight` carry
+`modulator::Union{Nothing,AbstractModulationControl}` (keyword `modulator = nothing`). With `nothing` every method
+runs the code it always did. With a modulator the light's level goes out as a voltage on an analogue input, through
+`setpower(modulator, p)` in the light's own unit; the modulator holds the scale (`per_volt`).
+`[limitation]` `CrystaLaser`, `VortranLaser` and `DaqTrLight` take none: their native path is already a DAQ voltage.
+
+A light with a modulator follows this convention, and a new driver that takes one must:
+
+1. end `initialize` with [`open_modulator!`](@ref MicroscopeControl.open_modulator!), the output off (it claims the
+   modulator's `output_id`, so a second light object cannot drive the same output, then opens it at 0 V); call
+   `close_modulator!` from `shutdown`, after switching off;
+2. `light_on`: write level 0 BEFORE the enable (a throw enables nothing), do its own steps, then
+   `setpower(modulator, request)`; every throw after the enable, an `ArgumentError` included, switches the light off;
+3. `light_off`: write level 0 first, logging a failure, and always switch off, even for an `InterruptException` in the
+   write (switch off, then pass the interrupt on);
+4. a level setter validates as it always did, then, only while the light is on, calls `setpower(modulator, p)`: the
+   output holds 0 V while the light is off. An `ArgumentError` (the modulator refused before writing) changes
+   nothing; any other throw leaves the output unknown, so level 0 is tried, the light is switched off, and the error
+   is rethrown;
+5. never use its native level path while it has a modulator.
+
+`MicroscopeControl.modulation_violations(light; set!, expect)` checks 1 to 5 against a
+`MicroscopeControl.RecordingModulator`; a downstream package runs
+`@test isempty(MicroscopeControl.modulation_violations(light; set! = l -> setpower(l, 2.0), expect = 2.0))` on an
+initialized light with its native side faked. See [`AbstractModulationControl`](@ref) for what a modulator defines.
 """
 abstract type LightSource <: AbstractInstrument end
 

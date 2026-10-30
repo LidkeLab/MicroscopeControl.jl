@@ -37,6 +37,13 @@ survives a copy against released buffers in every case is **not** established by
 the source. Treat a hard crash of the Julia process as a possible outcome, not a
 certainty, and do not rely on either.
 
+**[existing guarantee]** From 0.2.7 the DCAM4 driver registers every frame wait (`getlastframe`, `capture`) with the
+camera, and `abort`, every start (`live`, `sequence`, `capture`) and `shutdown` first abort the waits in progress and
+wait for them to end before they stop the capture, release the buffer or close the device; a `getlastframe` whose
+capture was stopped meanwhile returns `nothing` and reads no frame, and after `shutdown` it returns `nothing` without
+a DCAM call. This is tested against a fake SDK (`test/dcam4_fake_paths.jl`), not on a rig. It holds for DCAM4 only, so
+the policy below stays the requirement for every driver.
+
 **[policy]** The requirement, on every driver:
 
 1. Clear `cam.is_running` so every reader loop exits at its next check.
@@ -99,7 +106,7 @@ from each driver's `interface_methods.jl`; only the Sim row was executed.
 | `SimCamera` | the enum, not a frame | the frame. This is the only driver where this is the right call. |
 | `DCAM4Camera` | the frame `(H, W)`, after allocating one buffer, snapping, reading, and **releasing** the buffer | waits on a cycle-end event for an acquisition that no longer exists, then copies from released buffers. Do not call it. |
 | `ThorcamDCXCamera` | the frame, then frees the image memory | in any mode reads `sequence_length` frames from `pImage_Mem` and calls `abort`; only valid after `sequence`. |
-| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch references an undefined variable `sequence_frames` and hard-codes 1080 x 1440; it will error. |
+| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch loops `getlastframe` `sequence_length` times, so it has the same limit. |
 
 So on every hardware driver in the package, the frame is the **return value of
 `capture`**, and `getdata` is for sequences. **[policy]** Put the difference in one place in your
@@ -117,7 +124,7 @@ value differs:
 |---|---|
 | `DCAM4Camera` | logs `@error`, sets `cam.last_error`, returns `nothing` (or the copy step returns `nothing` with `@error "DCAM Failed to Copy Frame"`) |
 | `ThorcamDCXCamera` | logs `@error`, returns `nothing` |
-| `ThorCamCSCCamera` | **returns `zeros(UInt16, 1080, 1440)`**. `getlastframe` substitutes an all-zero image whenever the frame fetch yields nothing, and that happens on two paths (`thorcamcsc_camcontrol.jl`): the SDK call fails (logged, `@error "Frame not collected"`), or the SDK call succeeds but hands back a null buffer (**not logged at all**). So the placeholder can arrive silently. A `=== nothing` check passes it as valid data, and the log cannot be relied on. The only detection is `all(iszero, frame)`, and that is a heuristic: a genuinely black frame is indistinguishable from the placeholder. Treat an all-zero CSC frame as suspect, not as data. |
+| `ThorCamCSCCamera` | **returns `zeros(UInt16, roi.height, roi.width)`**. `getlastframe` substitutes an all-zero image whenever the frame fetch yields nothing, and that happens on two paths (`thorcamcsc_camcontrol.jl`): the SDK call fails (logged, `@error "Frame not collected"`), or the SDK call succeeds but hands back a null buffer (**not logged at all**). So the placeholder can arrive silently. A `=== nothing` check passes it as valid data, and the log cannot be relied on. The only detection is `all(iszero, frame)`, and that is a heuristic: a genuinely black frame is indistinguishable from the placeholder. Treat an all-zero CSC frame as suspect, not as data. |
 | `SimCamera` | cannot fail |
 
 A zero-filled frame in a z-stack is a worse failure than a thrown error, because it
@@ -161,10 +168,10 @@ is per driver**:
 | `SimCamera` | `(roi.height, roi.width)` (executed) |
 | `DCAM4Camera` | the SDK's current sub-array, `(height, width)` from `dcamprop_getsize`, which is the ROI as the SDK accepted it (the driver `@warn`s if the SDK rounded your offsets) |
 | `ThorcamDCXCamera` | `(roi.height, roi.width)`; `capture` allocates image memory of exactly that size |
-| `ThorCamCSCCamera` | **always `(1080, 1440)`**. The driver never forwards `roi` to the SDK and hard-codes the full sensor in `getlastframe`, so `cam.roi = CameraROI(1, 1, 512, 256)` changes nothing and preallocation sized from `roi` fails on assignment. |
+| `ThorCamCSCCamera` | `(roi.height, roi.width)` (tested through a replaced `getlastframeornothing`). **[limitation]** The driver never forwards `roi` to the SDK, which always delivers the full sensor (`camera_format`, default 1440 x 1080): the driver converts the full frame and crops it to `roi` in software (`x_start`, `y_start` 1-based), so a small `roi` is no faster, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `camera_format` must state the sensor the camera delivers: the driver does not ask the SDK, so a larger value reads past the SDK's buffer. |
 
 Preallocate from the first returned frame (`similar(frame, size(frame)..., N)`)
-rather than from `roi`, or the CSC path breaks. Whether `x_start = 1` means the
+rather than from `roi` where the driver is not known to honour it. Whether `x_start = 1` means the
 first column or the second depends on the SDK the driver forwards it to; the
 interface does not define a 1-based origin. Keep the `(H, W[, N])` storage convention (below) separate
 from SDK coordinate conventions: the first is enforced by the drivers at the DLL
@@ -252,19 +259,47 @@ Do the check before the first move on a new rig. Settling time is the driver's b
 instantly, so on hardware poll `getposition` until the position field is within
 tolerance before exposing.
 
+## Modulated light sources during an acquisition
+
+**[guarantee]** A light built with `modulator = ...` (`TCubeLaser`, `SimDiodeLaser`, `SimLight`) puts its level on an
+analogue input through `setpower(modulator, p)`, `p` in the light's own unit. The calls that cost time and the calls
+that do not:
+
+- `light_on` is slow on a `TCubeLaser` with a modulator: it writes 0 V, enables, waits `MOD_SETTLE_S` (1.3 s), puts the
+  request on the input and confirms the controller's setpoint register shows it (refusing, off and at 0 V, if not).
+  Switch the light on before the acquisition, not between frames. **[limitation]** One more second and a read-back per
+  `light_on` than without a modulator.
+- A level change while the light is on (`setcurrent!`, `setoutputpower!`, `setlevel!`) is one analogue write: no USB
+  call, no lock check. **[limitation]** Nothing watches the level between `light_on`s; poll `loop_status`.
+- While the light is off a level change writes nothing; the output holds 0 V, and `light_on` applies the recorded level.
+- `light_off` writes 0 V first and always switches off, even if that write fails (it logs).
+- An `ArgumentError` from a level change means the level is out of reach (or out of range) and nothing changed; any
+  other error means the light was switched off.
+
+**[policy]** A system that sets a level per frame sets it through the unit-true setter with the light on, and treats a
+thrown non-`ArgumentError` as "the light is off now". To check a driver or a faked light against this, a test runs
+`MicroscopeControl.modulation_violations(light; set! = l -> setpower(l, 2.0), expect = 2.0)` on an initialized light with
+`modulator = RecordingModulator()`; an empty result means it keeps the convention (`mc-extend`).
+
 ## Array conventions
 
-Restated from the upstream `CLAUDE.md`. **[guarantee]** for `SimCamera` (executed) and `DCAM4Camera` (`permutedims` in `dcambuf.jl`, traced); **[policy]** for any driver you write. These are storage
+Restated from the upstream `CLAUDE.md` and `docs/src/conventions.md`; the lab rule is decision 0040
+(`conventions/image-layout.md` in the admiral repo). **[guarantee]** for `SimCamera` (executed), and for `DCAM4Camera`,
+`ThorcamDCXCamera` and `ThorCamCSCCamera` (the conversion `CameraInterface.rowmajor_to_yx`, executed through fakes
+for all three); **[policy]** for any driver you write. These are storage
 conventions enforced by the drivers at the DLL boundary; they say nothing about SDK
 coordinate origins or exposure units (see above).
 
-- **Storage:** frames are column-major `(H, W)`; stacks are `(H, W, N)`.
-  `data[row, col] == data[y, x]`. `save_h5` writes `(H, W, N)` directly and tags
-  the dataset `dimension_order = "HWN"`.
-- **DLL boundary:** C SDKs hand back row-major buffers. The driver reshapes to
-  `(W, H)` and permutes: `permutedims(reshape(buffer, (W, H)), (2, 1))` gives
-  `(H, W)`. `reshape(buffer, (W, H))` alone is transposed. If you read raw buffers
-  in your own code, apply the same rule.
+- **Storage:** an image is column-major `[y, x]`, `(H, W)`; stacks are `(H, W, N)`; `[1, 1]` is the top-left pixel.
+  `data[row, col] == data[y, x]`. `save_h5` writes `(H, W, N)` directly, unpermuted, and tags
+  the dataset `dimension_order = "y,x,frame"` (`"y,x"` for a frame) and
+  `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`. Files from
+  2026-01-29 until this change carry `"HW"` / `"HWN"`; a reader elsewhere keeps accepting both.
+- **DLL boundary:** C SDKs hand back row-major buffers, with padded rows on some cameras. The driver converts once,
+  with `CameraInterface.rowmajor_to_yx(buffer, W, H; stride)`, which returns `(H, W)` and drops the padding;
+  `stride` is the row length in elements (`rowbytes` over the bytes per pixel). `reshape(buffer, (W, H))` alone is
+  transposed, and with padding it does not even fit. If you read raw buffers in your own code, apply the same rule.
+  These are the only transposes: nothing downstream permutes the frame.
 - **Display:** Makie `image` and `heatmap` map dim 1 to x and dim 2 to y, so pass
   the transpose and flip y for a top-left origin:
 
