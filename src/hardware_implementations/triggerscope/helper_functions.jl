@@ -16,27 +16,21 @@ end
     volttooutput(scope, dacchannel, voltage) -> Int
 
 The 16-bit DAC code for `voltage` in the range the driver last set on `dacchannel`
-(`scope.dacranges`). Throws `ArgumentError` when `voltage` is not finite or lies outside that
-range; the code used to be sent anyway, so a value off the end of the range wrapped or was
-clipped by the device.
+(`scope.dacranges`). Throws `ArgumentError` when `voltage` is not finite or its rounded code
+falls outside 0-65535; such a code used to be sent anyway, and the device wrapped or clipped it.
+Every voltage that gave a valid code before still gives the same one, including a value a hair
+past an end that rounds to the end code (`nextfloat(5.0)` on 0-5 V gives 65535).
+
+Call it with `scope.lock` held, in the same transaction as the command that sends the code: the
+range it reads must still be the board's range when the code arrives.
 """
 function volttooutput(scope::Triggerscope4,  dacchannel::Int,voltage::Float64)
-    lo, hi = dac_range_volts(scope.dacranges[dacchannel])
-    (isfinite(voltage) && lo <= voltage <= hi) || throw(ArgumentError(
-        "Triggerscope DAC $dacchannel: $voltage V is outside its range [$lo, $hi] V ($(scope.dacranges[dacchannel]))"))
-    if scope.dacranges[dacchannel] == ZEROTOFIVE
-        return round(Int, voltage * 65535 / 5)
-    elseif scope.dacranges[dacchannel] == ZEROTOTEN
-        return round(Int, voltage * 65535 / 10)
-    elseif scope.dacranges[dacchannel] == PLUSMINUS5
-        return round(Int, (voltage + 5) * 65535 / 10)
-    elseif scope.dacranges[dacchannel] == PLUSMINUS10
-        return round(Int, (voltage + 10) * 65535 / 20)
-    elseif scope.dacranges[dacchannel] == PLUSMINUS2_5
-        return round(Int, (voltage + 2.5) * 65535 / 5)
-    else
-        @error "Invalid range"
-    end
+    range = scope.dacranges[dacchannel]
+    lo, hi = dac_range_volts(range)
+    code = isfinite(voltage) ? round((voltage - lo) * 65535 / (hi - lo)) : NaN
+    0 <= code <= 65535 || throw(ArgumentError(
+        "Triggerscope DAC $dacchannel: $voltage V gives a code outside 0-65535 on its range [$lo, $hi] V ($range)"))
+    return Int(code)
 end
 
 # LibSerialPort timeouts are a CUMULATIVE budget: every read call uses at least 1 ms of it, and once it is spent the
@@ -44,8 +38,10 @@ end
 # out after a few thousand commands, so one command in a few thousand failed and reset the port (rig, 2026-10-15,
 # 1 in 2500-5000 at 400 Hz). It is re-armed here for every command, so `rwtimeout` is the limit of ONE command.
 #
-# The serial calls go through the four one-line wrappers below, so the tests can replace them with a recorder
-# (`test/triggerscope.jl`) and run `writecommand`, `readresponse` and the command functions unmodified.
+# The serial calls go through the five one-line wrappers below, so the tests can replace them with a recorder
+# (`test/triggerscope.jl`) and run the constructor, `writecommand`, `readresponse` and the command functions
+# unmodified, without touching the host's serial layer on any platform.
+_new_port(portname) = LibSerialPort.SerialPort(portname)   # the constructor's port object, not yet opened
 _arm_timeouts!(sp, seconds) = (set_write_timeout(sp, seconds); set_read_timeout(sp, seconds); nothing)
 _flush_port!(sp) = (sp_flush(sp, SP_BUF_BOTH); nothing)
 _send!(sp, commandstring) = (write(sp, commandstring); nothing)

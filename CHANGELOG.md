@@ -169,11 +169,17 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   command in 2,500 to 5,000; after the fix 0 in 10,000). `rwtimeout` is now the limit of one command.
 - `Triggerscope4` has a per-scope lock (`scope.lock`, a `ReentrantLock`), held by every command function across its
   write and its reply read, so tasks sharing one scope (two attenuators on different DACs, say) can no longer take
-  each other's replies. The positional constructor without the lock still works.
+  each other's replies. `setdac`, `progdac`, `progwave`, `setrange` and the DAC output and range setters also read
+  or update the cached range and encode the voltage inside that transaction: a range change by another task can no
+  longer land between a code's encoding and its write (5 V encoded on 0-5 V, then `RANGE` to 0-10 V, put out 10 V).
+  The positional constructor without the lock still works.
 - `volttooutput` (and so `setdac`, `progdac`, `progwave` and the DAC output setter) throws an `ArgumentError` for a
-  voltage that is not finite or lies outside the DAC's range, before anything is sent; the out-of-range code used
-  to be sent. New exported `dac_range_volts(range)` gives a range's span. A failed serial command's error names the
-  port and the cause.
+  voltage that is not finite or whose rounded code falls outside 0-65535, before anything is sent; such a code used
+  to be sent. Every voltage that gave a valid code before gives the same code (a value a hair past an end still
+  rounds to the end code). New exported `dac_range_volts(range)` gives a range's span. A failed serial command's
+  error names the port and the cause.
+- `progttl` no longer throws a `MethodError` after sending its command: it wrote the value into `ttloutputs` (the TTL
+  channel count); it now stores it in `ttlvalues`, after the reply.
 
 ### Changed
 

@@ -88,7 +88,7 @@ function Triggerscope4(;
     ) 
     
     #Create a SerialPort object, unopened
-    sp = LibSerialPort.SerialPort(portname)
+    sp = _new_port(portname)
 
     #Create the necessary GUI fields
     outputs = Vector{Output}(undef, 2) #DAC and TTL outputs

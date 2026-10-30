@@ -16,14 +16,16 @@ end
 Recieves a DAC number and a voltage value and sets the DAC to that value after converting the voltage to a 16 bit integer value
 """
 function setdac(scope::Triggerscope4, dacnum::Int, voltvalue::Float64)
-    #convert the voltage value to a 16 bit integer value depending on range
-    dacoutput = volttooutput(scope, dacnum, voltvalue)
+    # the range lookup, the encoding, the write and its reply in one transaction: a range change by another task
+    # cannot land between the encoding and the write (a 0-5 V code sent after RANGE..,0-10 V doubles the voltage)
+    return lock(scope.lock) do
+        #convert the voltage value to a 16 bit integer value depending on range
+        dacoutput = volttooutput(scope, dacnum, voltvalue)
 
-    #create the command string
-    commandstring = "DAC" * string(dacnum) * "," * string(dacoutput) * "\n"
+        #create the command string
+        commandstring = "DAC" * string(dacnum) * "," * string(dacoutput) * "\n"
 
-    #write the command to the serial port
-    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        #write the command to the serial port
         writecommand(scope, commandstring)
         readresponse(scope)
     end
@@ -50,12 +52,14 @@ function setttl(scope::Triggerscope4, channel::Int, ttlval::Bool)
 end
 
 function setrange(scope::Triggerscope4, dacchannel::Int, range::Range)
-    #create the command string
-    scope.dacranges[dacchannel] = range  # Update the range in the scope object
-    commandstring = "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
+    # the range-cache update, the write and its reply in one transaction, so no DAC code is encoded against a
+    # range the board does not have
+    return lock(scope.lock) do
+        #create the command string
+        scope.dacranges[dacchannel] = range  # Update the range in the scope object
+        commandstring = "RANGE" * string(dacchannel) * "," * string(Int(scope.dacranges[dacchannel])) * "\n"
 
-    #write the command to the serial port
-    return lock(scope.lock) do   # the write and its reply together: several devices and tasks may share one scope
+        #write the command to the serial port
         writecommand(scope, commandstring)
         readresponse(scope)
     end
