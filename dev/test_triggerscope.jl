@@ -5,16 +5,16 @@ using Revise
 using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
 
-scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
+scope = Triggerscope4(portname = "COM5")
 
 # ── Ranges and step size (no hardware needed) ───────────────────────────────
 # The DAC is 16 bit over the selected range, so the finest step it can address is
 # range_span / 65535. A narrower range gives finer steps for free.
-rangelimits(PLUSMINUS10)                                            # (-10.0, 10.0)
-rangelimits(PLUSMINUS2_5)                                           # (-2.5, 2.5)
+MicroscopeControl.rangelimits(PLUSMINUS10)                                            # (-10.0, 10.0)
+MicroscopeControl.rangelimits(PLUSMINUS2_5)                                           # (-2.5, 2.5)
 
-min_voltage_step(TriggerscopeBackend(scope; range = PLUSMINUS10))   # ~305 uV
-min_voltage_step(TriggerscopeBackend(scope; range = PLUSMINUS2_5))  # ~76 uV
+MicroscopeControl.min_voltage_step(TriggerscopeBackend(scope; range = PLUSMINUS10))   # ~305 uV
+MicroscopeControl.min_voltage_step(TriggerscopeBackend(scope; range = PLUSMINUS2_5))  # ~76 uV
 
 # ── One device on its own board ─────────────────────────────────────────────
 # owns_device defaults to true: initialize(galvo) opens the serial port and
@@ -30,7 +30,7 @@ shutdown(galvo)
 # ── Two devices sharing one board ───────────────────────────────────────────
 # Pass owns_device = false to both and open the port yourself, otherwise whichever
 # device you shut down first closes the port out from under the other.
-scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
+scope = Triggerscope4(portname = "COM5")
 
 galvo = Galvo(TriggerscopeBackend(scope; x_channel = 1, y_channel = 2,
         range = PLUSMINUS10, owns_device = false);
@@ -38,7 +38,7 @@ galvo = Galvo(TriggerscopeBackend(scope; x_channel = 1, y_channel = 2,
 
 eod = EOD(TriggerscopeBackend(scope; x_channel = 3, y_channel = 4,
         range = PLUSMINUS10, owns_device = false);
-    amplifier_gain = 20.0, invert = true,
+    amplifier_gain = 20.0, invert = true, max_crystal_volts = 150.0,
     xlimits = (-7.5, 7.5), ylimits = (-7.5, 7.5), unique_id = "EOD (shared)")
 
 initialize(scope)        # you own the port now, not the devices

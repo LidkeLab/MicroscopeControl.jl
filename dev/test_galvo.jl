@@ -6,7 +6,7 @@ using MicroscopeControl
 using MicroscopeControl.HardwareImplementations.Triggerscope
 
 # ── Setup: galvo on Triggerscope DAC 1 (X) and DAC 2 (Y) ────────────────────
-scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
+scope = Triggerscope4(portname = "COM5")
 
 backend = TriggerscopeBackend(scope; x_channel = 1, y_channel = 2, range = PLUSMINUS10)
 

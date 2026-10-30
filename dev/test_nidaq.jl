@@ -74,7 +74,7 @@ shutdown(galvo)          # parks at 0 V, then stops and clears both tasks
 
 # ── The same two channels driving an EOD through the HVA200s ────────────────
 # eod = EOD(DAQmxBackend("Dev2/ao0", "Dev2/ao1");
-#     amplifier_gain = 20.0, invert = true,
+#     amplifier_gain = 20.0, invert = true, max_crystal_volts = 150.0,
 #     xlimits = (-7.5, 7.5), ylimits = (-7.5, 7.5), unique_id = "EOD (NI)")
 # initialize(eod)
 # setcrystalvoltage(eod, 100.0, 0.0)   # 100 V on the crystal -> -5 V out of the card

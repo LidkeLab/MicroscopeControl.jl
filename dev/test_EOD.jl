@@ -17,6 +17,7 @@ backend = DAQmxBackend("Dev2/ao0", "Dev2/ao1"; vmin = -10.0, vmax = 10.0)
 eod = EOD(backend;
     amplifier_gain = 20.0,
     invert = true,
+    max_crystal_volts = 150.0,     # the crystal rating; the DAQ limits may not exceed 150 / 20 = 7.5 V
     xlimits = (-7.5, 7.5),
     ylimits = (-7.5, 7.5),
     unique_id = "test EOD")
@@ -33,8 +34,8 @@ setcrystalvoltage(eod, 100.0, 0.0)   # 100 V across the crystal
 getvoltage(eod)                      # (-5.0, 0.0) -- what the card is actually putting out
 getcrystalvoltage(eod)               # (100.0, 0.0)
 
-crystal_limits(eod)              # the DAQ limits expressed across the crystal, +/-150 V
-amplifier_factor(eod)            # -20.0 crystal volts per DAQ volt
+MicroscopeControl.crystal_limits(eod)            # the DAQ limits expressed across the crystal, +/-150 V
+MicroscopeControl.amplifier_factor(eod)          # -20.0 crystal volts per DAQ volt
 
 zeroaxes(eod)
 getvoltage(eod)
@@ -62,9 +63,9 @@ shutdown(eod)                    # parks at 0 V, stops and clears the tasks
 # ── The same EOD on the Triggerscope ────────────────────────────────────────
 # Only the backend differs; every call above is unchanged.
 #
-# scope = Triggerscope4(portname = "COM5", protocol = MM_PROTOCOL)
+# scope = Triggerscope4(portname = "COM5")
 # eod = EOD(TriggerscopeBackend(scope; x_channel = 3, y_channel = 4, range = PLUSMINUS10);
-#     amplifier_gain = 20.0, invert = true,
+#     amplifier_gain = 20.0, invert = true, max_crystal_volts = 150.0,
 #     xlimits = (-7.5, 7.5), ylimits = (-7.5, 7.5), unique_id = "test EOD (Triggerscope)")
 # initialize(eod)
 # setcrystalvoltage(eod, 100.0, 0.0)
