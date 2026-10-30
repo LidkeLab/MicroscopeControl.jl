@@ -6,8 +6,8 @@ description: Points at the generated per-version list of which methods each Micr
 # mc-api-map
 
 The file `references/api-map.md`, in this skill's directory, is a **dispatch
-inventory**: for every device type under the seven inventoried interfaces
-(`Stage`, `Camera`, `LightSource`, `DAQ`, `Attenuator`, `SLM`, `TRIG`; `XEM`
+inventory**: for every device type under the eight inventoried interfaces
+(`Stage`, `Camera`, `LightSource`, `DAQ`, `Attenuator`, `SLM`, `TRIG`, `BeamSteerer`; `XEM`
 and `XEM_dac` sit outside them and are absent) at the installed version it lists which
 exported generics have a method on that type, which land on a shared interface
 implementation, and which land on an interface fallback. It is not hand-written.
@@ -46,12 +46,12 @@ so you find out before the call, not on the rig.
 
 Each device section (`### SimCamera`, `### DCAM4Camera`, ...) under its interface
 heading (`## Camera`, `## Stage`, `## LightSource`, `## DAQ`, `## Attenuator`,
-`## SLM`, `## TRIG`) lists exported generics in up to three groups:
+`## SLM`, `## TRIG`, `## BeamSteerer`) lists exported generics in up to three groups:
 
 | Group | Meaning | Example (SimCamera, v0.2.0) |
 |---|---|---|
 | **Device-specific** | A method whose first argument is this concrete type. Real driver code. Each signature is listed, so `sequence(DCAM4Camera, Real)` and `sequence(DCAM4Camera)` both appear. | `getdata(SimCamera)`, `initialize(SimCamera)` |
-| **Inherited (shared implementation)** | Dispatch lands on a method written against the interface type that does real work for every device. Today that is the interface `gui` and the camera GUI helpers. | `gui(Camera)`, `start_live(Camera)` |
+| **Inherited (shared implementation)** | Dispatch lands on a method written against the interface type that does real work for every device. Today that is the interface `gui`, the camera GUI helpers, and nearly all of a `BeamSteerer`'s API (`setvoltage`, `setangle`, `gridscan`, the lifecycle), written once against `BeamSteerer`. | `gui(Camera)`, `start_live(Camera)` |
 | **Interface fallback (not a device implementation)** | **[guarantee]** Dispatch lands on the package's own interface-level fallback, not on code written for this device. The map's own note says it: most such fallbacks raise an error naming the type, a few return silently. The label promises "not this device's code", not "throws". | `setexposuretime!(Camera)`, `setroi!(Camera)` |
 
 The third group is the reason the map exists: `setroi!(cam)` on a `SimCamera`

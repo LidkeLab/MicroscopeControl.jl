@@ -269,7 +269,7 @@ function _generate_api_map()
         println(io, "`$(canonical)` is also exported as $(also); they are the same function.")
     end
 
-    interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG)
+    interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG, MC.BeamSteerer)
 
     for iface in interfaces
         println(io)

@@ -108,6 +108,8 @@ Interfaces define method signatures with throwing `error("<name> not implemented
 
 **Attenuator**: `setdrivevoltage`, `getdrivevoltage`, `settransmission`, `gettransmission`, `set_calibration!`
 
+**BeamSteerer** (`Galvo`, `EOD`, each over a `SteeringBackend`: `TriggerscopeBackend` or `DAQmxBackend`): `setvoltage`, `getvoltage`, `setangle`, `getangle`, `zeroaxes`, `gridscan`; `EOD` adds `setcrystalvoltage`/`getcrystalvoltage` and requires `max_crystal_volts`. The device API, lifecycle and `gui` are written once against `BeamSteerer` in `shared_methods.jl` (not `interface_functions.jl`, which holds only the backend contract's throwing stubs), so the contract test accepts lifecycle methods on the interface type for this interface only. A backend implements `write_voltages!`, `openbackend!`, `closebackend!`, and optionally `backend_limits` and `snap_limits`.
+
 ### GUI Components
 
 Each interface has optional `gui.jl` with GLMakie-based control panels. Access via `gui(device)`.

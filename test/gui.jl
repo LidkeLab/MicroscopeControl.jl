@@ -249,6 +249,35 @@ end
         @test isempty(FakeKinesis.calls)
     end
 
+    # The beam-steering panel wires its sliders with `on`, so opening it writes nothing;
+    # moving a slider writes both axes, and Zero writes 0 V without the sliders' grid-rounded
+    # values following it out.
+    @testset "Beam steering panel" begin
+        b = RecordingBackend()
+        galvo = Galvo(b; xlimits = (-2.0, 2.0), ylimits = (-1.0, 3.0))
+        eod = EOD(RecordingBackend(); max_crystal_volts = 150.0)
+        for dev in (galvo, eod)
+            initialize(dev)
+            setvoltage(dev, 0.5, 0.25)
+        end
+        n = length(b.writes)
+        fig = gui(galvo)
+        @test length(b.writes) == n
+        @test occursin("crystal", MicroscopeControl.HardwareInterfaces.BeamSteeringInterface.panel_readout(eod))
+        gui(eod)
+
+        sliders = [c for c in fig.content if c isa Slider]
+        @test length(sliders) == 2
+        set_close_to!(sliders[1], 1.0)
+        @test length(b.writes) == n + 1
+        @test b.writes[end][1] ≈ 1.0 atol = 0.01
+        buttons = [c for c in fig.content if c isa Button]
+        buttons[1].clicks[] += 1
+        @test b.writes[end] == (0.0, 0.0)
+        @test getvoltage(galvo) == (0.0, 0.0)
+        GLMakie.closeall()
+    end
+
     # The toggle's label follows the driver's `is_on`, not the click: a
     # `light_off` that fails leaves the diode on, and the panel must say so.
     @testset "Output toggle reports the driver's state, not the click" begin

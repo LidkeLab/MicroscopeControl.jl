@@ -117,7 +117,18 @@ end
     no_shutdown = Set{Symbol}()
     no_export_state = Set([:MLSLM, :Triggerscope4, :ThorCamCSCCamera])
 
-    interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG)
+    interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG, MC.BeamSteerer)
+
+    # A BeamSteerer's lifecycle is written once, against `BeamSteerer`, from the fields
+    # every device carries (shared_methods.jl); `Galvo` defines none of its own. For those
+    # devices the method may land on the interface type, never on the AbstractInstrument
+    # stub. Every other interface still needs the method on the device itself.
+    shared_lifecycle = (MC.BeamSteerer,)
+    function has_lifecycle_method(f, T, iface)
+        has_specific_method(f, T) && return true
+        iface in shared_lifecycle || return false
+        return which(f, Tuple{T}).sig.parameters[2] === iface
+    end
 
     @testset "Core AbstractInstrument contract" begin
         for iface in interfaces
@@ -126,11 +137,11 @@ end
                 nameof(T) === :_ContractDummyStage && continue # test fixture, not a device
                 T === _ShadowFixture.S && continue # shadow-guard fixture, not a device
                 nameof(T) in no_core_methods && continue
-                nameof(T) in no_initialize || @test has_specific_method(MC.initialize, T)
-                nameof(T) in no_shutdown || @test has_specific_method(MC.shutdown, T)
+                nameof(T) in no_initialize || @test has_lifecycle_method(MC.initialize, T, iface)
+                nameof(T) in no_shutdown || @test has_lifecycle_method(MC.shutdown, T, iface)
                 @test has_working_gui(T)
                 nameof(T) in no_export_state && continue
-                @test has_specific_method(MC.export_state, T)
+                @test has_lifecycle_method(MC.export_state, T, iface)
             end
         end
     end
@@ -152,7 +163,8 @@ end
                     :capture, :getdata, :getlastframe, :abort, :live, :sequence, :setexposuretime!, :setroi!, :settriggermode!,
                     :setpower, :light_on, :light_off, :setcurrent!, :setoutputpower!, :setlevel!,
                     :measured_current, :measured_photocurrent, :indicated_output_power, :loop_status,
-                    :regulation_mode, :supported_modes, :output_id, :setdrivevoltage, :getdrivevoltage, :settransmission, :gettransmission)
+                    :regulation_mode, :supported_modes, :output_id, :setdrivevoltage, :getdrivevoltage, :settransmission, :gettransmission,
+                    :setvoltage, :getvoltage, :setangle, :getangle, :zeroaxes, :gridscan, :setcrystalvoltage, :getcrystalvoltage)
 
         # PI (pi_stage) deliberately names its low-level ccall wrappers
         # `move`, `getposition`, `getrange`, `stopmotion` and `servo` -- the
@@ -217,6 +229,30 @@ end
             # across all `move` methods rather than a single fixed signature.
             @test any(m -> m.sig.parameters[2] === T, methods(MC.move))
         end
+    end
+
+    @testset "BeamSteerer contract" begin
+        steerers = device_types(MC.BeamSteerer)
+        @test :Galvo in nameof.(steerers)
+        @test :EOD in nameof.(steerers)
+        # The shared methods read these fields, so a device without one fails at run time.
+        fields = (:unique_id, :backend, :calibration, :xlimits, :ylimits, :voltages, :isopen)
+        for T in steerers, f in fields
+            @test hasfield(T, f)
+        end
+        # Every backend implements the three required methods on its own type. The test
+        # fixture with none of them is the exception, and is what "stubs throw" uses.
+        backends = device_types(MC.SteeringBackend)
+        @test :TriggerscopeBackend in nameof.(backends)
+        @test :DAQmxBackend in nameof.(backends)
+        for B in backends
+            nameof(B) === :_BareBackend && continue
+            @test has_specific_method(MC.write_voltages!, B, Float64, Float64)
+            @test has_specific_method(MC.openbackend!, B)
+            @test has_specific_method(MC.closebackend!, B)
+        end
+        # A backend is held by a device, not used on its own: no panel, no shared stubs.
+        @test !(MC.SteeringBackend <: MC.AbstractInstrument)
     end
 
     @testset "Camera contract" begin
