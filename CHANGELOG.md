@@ -10,6 +10,13 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-02
+
+A non-breaking release: the DCAM4 camera work (#75, #85, #87, #88), the PI stage and DCAM4 guards (#89), light-source
+modulators (#90), and the laser safety fixes to the three DAQ voltage lights. None of the DAQ light changes has run on
+hardware: they ran against a recording fake DAQ, and a real failed write was read from DAQmx.jl's source, not observed.
+Hardware checks are owed at each instrument's repin, not at this tag.
+
 ### Fixed
 
 - Camera panel menus update their selected field.
@@ -238,6 +245,18 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 
 ### Known issues
 
+- Left open after a check against saved lab files, because none of these showed in real use. The tested fixes are on
+  the branch `fixes-0.2.7-drivers`.
+  - `DCAM4Camera`: a failed exposure or ROI read-back is not checked, and 0 is taken as the value (0 of 1,041 saved
+    files on two instruments show it).
+  - `ThorCamCSCCamera`: a poll timeout gives an all-zero frame, inside a `getdata` sequence too, and the poll timeout
+    does not follow the exposure (no current caller takes a CSC sequence).
+  - `PIStage`: a refused `PI_MOV` logs and records the target (0 of 244 recent files).
+  - `MCLStage`: a negative SDK return is stored as a position or range (0 of 3,372 saved values).
+  - `save_h5` shares the caller's arrays, overwrites an existing file, and leaves a partial file on failure.
+  - Stage panels: a negative or NaN step passes the panel's own range check; the controllers refuse the target.
+- A stage's `export_state` writes the position last read, not the position at save time: adaptive microscope files
+  from 2025-05 to 2026-05 record 12.5, 12.5 for the micro stage throughout.
 - Camera (`DCAM4Camera`):
   - One hang inside a camera library call, on several cores after GPU code had loaded (0.2.6's summary), and the
     NOTREADY, TIMEOUT and NOTSTABLE errors the rig logs during GUI use, are not fixed here. `DCAM4.dcam_trace!` records

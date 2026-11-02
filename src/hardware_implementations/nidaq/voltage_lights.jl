@@ -80,7 +80,7 @@ function _single_line_setpower!(light, voltage::Float64)
             end
         end
         _record_level!(light, voltage)
-        light.properties.is_on || (light.level_staged = true)
+        light.level_staged = !light.properties.is_on
     end
     return nothing
 end

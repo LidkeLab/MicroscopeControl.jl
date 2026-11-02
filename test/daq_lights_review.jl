@@ -83,6 +83,20 @@
                 light_on(light)
                 @test daq.lines[AO] == 2.5 && !light.level_staged
             end
+            # A successful live change clears a stage left by a failed enable
+            # whose darkening attempt failed too.
+            light_off(light)
+            setpower(light, 2.0)
+            original = fail!(daq, :write, AO)
+            fail!(daq, :write, AO; voltage=0.0)
+            @test caught(() -> light_on(light)) === original
+            @test light.properties.is_on && light.level_staged
+            empty!(daq.failures)
+            setpower(light, 2.5)
+            @test light.properties.is_on && !light.level_staged
+            light_off(light)
+            light_on(light)
+            @test daq.lines[AO] == 1.0
             # The default itself must be recorded, including when clamped.
             for (lo, hi, expected) in ((1.2, 2.0, 1.2), (0.0, 0.5, 0.5))
                 c = make_light(T, daq; min_voltage=lo, max_voltage=hi)
