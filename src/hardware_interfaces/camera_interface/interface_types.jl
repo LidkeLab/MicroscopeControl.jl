@@ -24,6 +24,9 @@ abstract type Camera <: AbstractInstrument end
     CameraROI
 
 A mutable struct that represents the region of interest of a camera.
+Offsets are driver-specific: `DCAM4Camera` sends 0-based offsets to DCAM;
+`ThorCamCSCCamera` uses 1-based offsets when cropping the full sensor in Julia.
+No origin conversion is performed. Their `export_state` attributes include `roi_origin` (0 or 1).
 
 # Fields
 - `x_start::Int`: The x coordinate of the start of the ROI.

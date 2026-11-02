@@ -82,6 +82,8 @@ fallback group is:
 - `settriggermode!(Camera)`
 ```
 
+**[guarantee]** As of 0.2.7, `export_state(::ThorCamCSCCamera)` is concrete and no longer appears in this fallback group.
+
 So a name under the fallback heading means the device does not implement it, and the
 type in parentheses tells you which stub you will hit (for these two, both throw).
 `SimCamera`'s fallback group in the same file is `setexposuretime!(Camera)`,
@@ -123,7 +125,7 @@ enumerates lights with `subtypes(LightSource)` gets `DiodeLaser` in place of
 **[limitation]** `MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy (`SLM`
 and `TRIG` are `abstract type ... end` with no supertype). A lifecycle name missing
 from their sections is a plain `MethodError`, not a fallback: `MLSLM` has no
-`initialize`, `shutdown`, `export_state` or `gui`; `Triggerscope4` has `initialize`
+`initialize`, `shutdown` or `gui`; **[guarantee]** its `export_state` returns cached configuration attributes only. **[limitation]** `Triggerscope4` has `initialize`
 and `shutdown` but no `export_state`.
 
 One entry where the fallback neither throws nor implements anything, both

@@ -61,9 +61,9 @@ Each is confirmed by the exception sets in upstream `test/contract.jl`
 
 | Device | Missing | What the call does |
 |---|---|---|
-| `ThorCamCSCCamera` | `initialize`, `export_state` | throws (`AbstractInstrument`/`Camera` stub, `ErrorException("... not implemented ...")`) |
+| `ThorCamCSCCamera` | `initialize` | throws (`AbstractInstrument` stub, `ErrorException("... not implemented ...")`); **[guarantee]** `export_state` returns cached settings without SDK calls |
 | `Triggerscope4` | `export_state` | `TRIG` is outside `AbstractInstrument`, so there is no fallback at all: plain `MethodError` (executed: `hasmethod(export_state, Tuple{Triggerscope4})` is `false`) |
-| `MLSLM` | `initialize`, `shutdown`, `export_state`, `gui` | `MethodError` for all four (executed) |
+| `MLSLM` | `initialize`, `shutdown`, `gui` | `MethodError` for all three; **[guarantee]** `export_state` returns cached configuration attributes only, without SDK calls |
 
 `TCubeLaser` was in this table up to v0.2.2: its only `export_state` was
 `export_state(::TCubeLaser, sth)`, with an unused second positional argument, so

@@ -1,7 +1,7 @@
-function create_menu(figure, row, column, options, default)
+function create_menu(figure, row, column, options, default, camera, field::Symbol)
     menu = Menu(figure[row, column], options=options, default=default, width=350, height=30)
     on(menu.selection) do mode
-        camera.capture_mode = mode
+        setfield!(camera, field, mode)
     end
     return menu
 end
@@ -128,7 +128,7 @@ function gui(camera::Camera)
     modes = ["capture", "trigger"]
     for (index, mode) in enumerate(modes)
         options = [(string(m), m) for m in instances(typeof(getfield(camera, Symbol(mode * "_mode"))))]
-        create_menu(control_fig, 2, index, options, string(getfield(camera, Symbol(mode * "_mode"))))
+        create_menu(control_fig, 2, index, options, string(getfield(camera, Symbol(mode * "_mode"))), camera, Symbol(mode * "_mode"))
     end
 
     # label, textbox, and callback for each property

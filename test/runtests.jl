@@ -1852,12 +1852,14 @@ lab_summary("Core") do
 
     include("dcam4_pure.jl")
     include("image_layout.jl")
+    include("h5_saving.jl")
 
     include("meadowlark_binding.jl")
 
     include("contract.jl")
     include("skills.jl")
     include("gui.jl")
+    include("driver_panels.jl")
     include("lightsource_modulation.jl")
     include("daq_lights.jl")
 

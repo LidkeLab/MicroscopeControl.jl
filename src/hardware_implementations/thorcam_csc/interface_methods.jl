@@ -145,3 +145,25 @@ function CameraInterface.getdata(camera::ThorCamCSCCamera)
         return data
     end
 end
+
+"""
+    export_state(camera::ThorCamCSCCamera)
+
+Settings only, with exposure in microseconds and 1-based software ROI offsets. No SDK calls or image reads.
+"""
+function export_state(camera::ThorCamCSCCamera)
+    attributes = Dict{String,Any}(
+        "unique_id" => copy(camera.unique_id),
+        "camera_format_x_pixels" => camera.camera_format.x_pixels,
+        "camera_format_y_pixels" => camera.camera_format.y_pixels,
+        "exposure_time" => camera.exposure_time,
+        "exposure_time_unit" => "us",
+        "poll_timeout_ms" => camera.poll_timeout,
+        "roi_x" => camera.roi.x_start, "roi_y" => camera.roi.y_start,
+        "roi_width" => camera.roi.width, "roi_height" => camera.roi.height,
+        "roi_origin" => 1,
+        "capture_mode" => Int(camera.capture_mode), "trigger_mode" => Int(camera.trigger_mode),
+        "sequence_length" => camera.sequence_length, "last_error" => camera.last_error,
+        "is_running" => camera.is_running, "camera_state" => camera.camera_state)
+    return attributes, nothing, Dict{String,Any}()
+end

@@ -10,6 +10,12 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Fixed
+
+- Camera panel menus update their selected field.
+- CSC and MLSLM export cached settings without SDK calls; MLSLM saves attributes only.
+- DCAM4 and CSC exports identify their respective 0-based and 1-based ROI origins.
+
 ### Added
 
 - `lights_off(lights)` and `lights_off(l1, l2, ...)` attempt every light even
