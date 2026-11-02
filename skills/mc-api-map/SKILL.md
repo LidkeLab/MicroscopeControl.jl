@@ -214,7 +214,9 @@ per device.
 - **[guarantee]** `light_on` takes the light only. Up to v0.2.4 the interface
   declared `light_on(::LightSource, ipower::Float64)`, which no driver implemented
   and which threw for every light; 0.2.5 replaced it with a 1-arg stub, so the 2-arg
-  call is now a plain `MethodError`. Set the level first, then `light_on`.
+  call is now a plain `MethodError`. Off `setpower` stages the next enable on
+  `CrystaLaser` and `DaqTrLight`; without a stage, `light_on` uses the clamped
+  1.0 V default. Live level changes do not stage the next enable.
 - **[guarantee]** `setpower` on a `DiodeLaser` (`TCubeLaser`, `SimDiodeLaser`)
   resolves to the `DiodeLaser` method: on a `ConstantCurrent` laser it forwards to
   `setcurrent!` (mA) with a deprecation warning; on a `ConstantPhotocurrent` laser it

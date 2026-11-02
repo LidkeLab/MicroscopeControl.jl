@@ -95,9 +95,10 @@ end
 """
     _attach_setpoint!(fig, laser, range, startvalue, command!, describe)
 
-The slider and textbox both panels share. A slider change calls `command!(x)`
-once. The textbox only moves the slider, so an entry issues one command, not
-two, and lands on the slider's grid. The "commanded" line is refreshed from
+The slider and textbox share one guarded command path. A slider change calls
+`command!(x)` once. A textbox submission moves the slider under a guard and
+then commands once, even when the selected value did not change. The textbox
+follows slider changes. The "commanded" line is refreshed from
 `describe()` only after the command returned, so a refused request shows as
 refused instead of as a value the device does not hold.
 
@@ -115,19 +116,37 @@ function _attach_setpoint!(fig, laser::LightSource, range, startvalue, command!,
                       bordercolor_focused_invalid=:red)
     commanded = Label(fig[3, 1:3], describe(); halign=:left, tellwidth=false)
     message = Label(fig[4, 1:3], ""; halign=:left, color=:firebrick, tellwidth=false)
-
-    on(textbox.stored_string) do s
-        set_close_to!(slider, parse(Float64, s))
-    end
-    # on (not lift): a hardware command must fire on a change, never at construction.
-    on(slider.value) do x
+    moving_slider = Ref(false)
+    function command(x)
         try
             command!(x)
             message.text = ""
         catch e
             message.text = "refused: " * _panel_message(e)
         end
-        commanded.text = describe()
+        return nothing
+    end
+    # Both setpoint and output commands publish their result to message.text.
+    # An enable can select a default level, so refresh after toggles too.
+    on(_ -> (commanded.text = describe()), message.text)
+    on(textbox.stored_string) do s
+        if !in_range(s)
+            message.text = "refused: expected a level between $lo and $hi"
+            return
+        end
+        moving_slider[] = true
+        try
+            set_close_to!(slider, parse(Float64, s))
+        finally
+            moving_slider[] = false
+        end
+        textbox.displayed_string[] = string(slider.value[])
+        command(Float64(slider.value[]))
+    end
+    # on (not lift): construction must issue no hardware command.
+    on(slider.value) do x
+        textbox.displayed_string[] = string(x)
+        moving_slider[] || command(Float64(x))
     end
     return message
 end
@@ -179,9 +198,15 @@ function _attach_output_toggle!(fig, row, laser::LightSource, message)
     return (; toggle, status)
 end
 
-function _show_panel(fig, laser::LightSource)
+function _display_panel(fig, laser::LightSource)
     GLMakie.activate!(title=laser.unique_id)
-    display(GLMakie.Screen(), fig)
+    return display(GLMakie.Screen(), fig)
+end
+
+_show_panel(fig, light::LightSource) = _display_panel(fig, light)
+
+function _show_panel(fig, laser::DiodeLaser)
+    _display_panel(fig, laser)
     return fig
 end
 

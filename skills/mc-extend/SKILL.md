@@ -301,10 +301,13 @@ convention (control source 3, the 1.3 s settle wait, the confirm at each `light_
 
 **[guarantee]** (0.2.7) The DAQ voltage lights take `setpower(light, ::Float64)`
 in volts, retain `level_requested`, and export that request in V. No command
-reads `properties.power`; `setpower` updates it only for readers. Crysta and
-DaqTrLight cache while off and restore the retained level on enable; Vortran
-writes AO regardless of DO state. **[policy]** set the level first, then
-`light_on`, since enabling first briefly applies the previous level.
+reads `properties.power`; accepted commands update it only when its unit is
+"V". Supplied properties objects are preserved at construction without warning.
+Crysta and DaqTrLight stage off requests and consume the stage only after a
+successful enable. With no stage they enable at 1.0 V clamped to the voltage
+range and record that default. Live level changes do not stage another enable;
+off/initialize/shutdown keep the saved level and staging flag. Vortran writes
+AO regardless of DO state.
 **[guarantee]** Each light locks its write-and-record operations; a failed
 live level/enable write attempts to darken, with `is_on = true` if that fails
 too. Failed off commands throw and retain `is_on`. Vortran shutdown attempts

@@ -6,12 +6,16 @@ _power_settings(light::LightSource) = (lo=light.properties.min_power, hi=light.p
 """
     gui(light::LightSource)
 
-Open a panel in the light's own unit and range, without issuing a command.
-Text entries move the slider and issue one command; invalid entries are
+Open a panel in the light's own unit and range, without issuing a command,
+and return its `GLMakie.Screen`. Text submissions issue one command even
+when the slider position does not change; invalid entries are
 refused at the box. Command failures are shown in the panel and the toggle
 follows the driver's state. Closing the panel does not switch off the light.
 """
-function gui(light::LightSource)
+gui(light::LightSource) = _show_panel(_light_panel(light), light)
+
+# Build without displaying so tests can reach the figure and its controls.
+function _light_panel(light::LightSource)
     settings = _power_settings(light)
     lo, hi, unit = settings.lo, settings.hi, settings.unit
     fig = Figure(size=(760, 260))
@@ -22,5 +26,5 @@ function gui(light::LightSource)
     values = range(lo, hi; length=max(2, ceil(Int, (hi - lo) / 0.1) + 1))
     message = _attach_setpoint!(fig, light, values, settings.requested, x -> setpower(light, x), describe)
     _attach_output_toggle!(fig, 5, light, message)
-    return _show_panel(fig, light)
+    return fig
 end

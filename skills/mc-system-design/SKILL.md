@@ -137,10 +137,14 @@ field `::DiodeLaser` when the system needs readback (`loop_status`,
 `measured_current`) and `::LightSource` when on/off is all it uses; test
 `isa DiodeLaser`, not a driver name, to choose the setter.
 
-**[guarantee]** (0.2.7) `CrystaLaser` and `DaqTrLight` cache volts while off,
-write that request on `light_on`, and retain it across `light_off`. Set the
-level first, then enable: enabling first momentarily applies the last level,
-not 1.0 V. A new object defaults to 1.0 V clamped to its voltage range.
+**[guarantee]** (0.2.7) `CrystaLaser` and `DaqTrLight` stage volts in
+`setpower` while off, writing nothing. The next successful `light_on` uses
+that request and clears `level_staged`; otherwise it writes and records 1.0 V
+clamped to the voltage range. Live level changes do not stage the next enable.
+Off, initialize and shutdown preserve `level_requested` and `level_staged`, so
+exports after off still report the prior level. Both call orders remain
+supported: an off staged request selects the next enable level, while
+`light_on; setpower` starts at the default when no request is staged.
 Vortran writes AO in `setpower` even while off; DO controls emission, and its
 request is `NaN` until the first accepted level. `initialize` disables DO only;
 `shutdown` attempts DO 0 and AO 0 independently and reports both failures.
@@ -226,7 +230,7 @@ Each is stated as what the code does today; the label says how far to trust it.
 
 | Kind | Lives in | Example | Trust |
 |---|---|---|---|
-| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.level_requested` (DAQ volts) | what you asked for. **[guarantee]** (0.2.7) `CrystaLaser`, `VortranLaser` and `DaqTrLight` retain accepted volts in `level_requested`; `setpower` also updates `properties.power` for readers, but no command reads that field. Their exports report `power` and `power_requested` from `level_requested`, with `power_unit = "V"` and voltage bounds. These are requests, not optical measurements. **[guarantee]** (0.2.5) `properties.power` is deprecated on a `DiodeLaser`: `SimDiodeLaser` and any `ConstantPhotocurrent` laser never write it, and an open-loop `TCubeLaser` still writes 0.2.4's uncalibrated linear guess (not in `power_unit`'s unit; read `drive_current` instead). Its requested state splits by mode: in `ConstantCurrent`, `laser.drive_current` is the mA `setcurrent!` last accepted (`NaN` before the first); in `ConstantPhotocurrent`, `drive_current` stays `NaN` for the life of the laser (the loop owns the current) and the request lives in `laser.pd.output_power_requested` (mW at the laser output) and `laser.pd.photocurrent_requested` (A, the decoded setpoint the loop was given). What the controller reports is measured state, next row. **[policy]** retain the instrument request separately: `Bench` below keeps its last `BenchState` in `sys.requested`; `get_state` returns that. `measured_power` returns `NaN` for a plain light, which has no optical readback, including the DAQ-like example. |
+| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.level_requested` (DAQ volts) | what you asked for. **[guarantee]** (0.2.7) `CrystaLaser`, `VortranLaser` and `DaqTrLight` retain accepted volts in `level_requested`; Accepted commands also update `properties.power` when its unit is "V"; caller-supplied properties are preserved at construction and no command reads that field. Their exports report `power` and `power_requested` from `level_requested`, with `power_unit = "V"` and voltage bounds. These are requests, not optical measurements. **[guarantee]** (0.2.5) `properties.power` is deprecated on a `DiodeLaser`: `SimDiodeLaser` and any `ConstantPhotocurrent` laser never write it, and an open-loop `TCubeLaser` still writes 0.2.4's uncalibrated linear guess (not in `power_unit`'s unit; read `drive_current` instead). Its requested state splits by mode: in `ConstantCurrent`, `laser.drive_current` is the mA `setcurrent!` last accepted (`NaN` before the first); in `ConstantPhotocurrent`, `drive_current` stays `NaN` for the life of the laser (the loop owns the current) and the request lives in `laser.pd.output_power_requested` (mW at the laser output) and `laser.pd.photocurrent_requested` (A, the decoded setpoint the loop was given). What the controller reports is measured state, next row. **[policy]** retain the instrument request separately: `Bench` below keeps its last `BenchState` in `sys.requested`; `get_state` returns that. `measured_power` returns `NaN` for a plain light, which has no optical readback, including the DAQ-like example. |
 | **Measured hardware state** | whatever the driver reads back | `stage.real_x` after `getposition`; a frame; `connectionstatus` | what the hardware said, at the moment you asked. **[limitation]** the Sim stages copy `targ_*` into `real_*`, so measured equals requested there by construction. On a `DiodeLaser`: `measured_current` (mA), `measured_photocurrent` (A) and `loop_status` are readings; `indicated_output_power` (mW, `ConstantPhotocurrent` only) is a conversion of the photocurrent reading through a bench calibration, not a measurement of light. **[limitation]** on `TCubeLaser` these read Kinesis caches that `initialize` sets polling (50 ms); that polling refreshes them is not hardware-verified. |
 | **Saved metadata** | the `export_state` tree in the HDF5 file | `attrs["Main/camera"]["exposure_time"]` | a record of the above at snapshot time, plus whatever the system adds (which is missing, which is requested versus measured). |
 
@@ -372,19 +376,28 @@ mutable struct DaqLikeLight <: LightSource
     unique_id::String
     properties::LightSourceProperties
     level_requested::Float64
+    level_staged::Bool
     line_voltage::Float64
 end
-DaqLikeLight() = DaqLikeLight("DAQ example", LightSourceProperties("V", 0.0, false, 0.0, 5.0), 1.0, 0.0)
+DaqLikeLight() = DaqLikeLight("DAQ example", LightSourceProperties("V", 0.0, false, 0.0, 5.0), 1.0, false, 0.0)
 function MC.setpower(l::DaqLikeLight, v::Float64)
     !(0.0 <= v <= 5.0) && throw(ArgumentError("expected 0..5 V"))
-    l.properties.is_on && (l.line_voltage = v)
+    if l.properties.is_on
+        l.line_voltage = v
+    else
+        l.level_staged = true
+    end
     l.level_requested = v
-    l.properties.power = v
+    l.properties.power_unit == "V" && (l.properties.power = v)
     return nothing
 end
 function MC.light_on(l::DaqLikeLight)
-    l.line_voltage = l.level_requested
+    v = l.level_staged ? l.level_requested : 1.0
+    l.line_voltage = v
+    l.level_requested = v
+    l.properties.power_unit == "V" && (l.properties.power = v)
     l.properties.is_on = true
+    l.level_staged = false
     return nothing
 end
 function MC.light_off(l::DaqLikeLight)

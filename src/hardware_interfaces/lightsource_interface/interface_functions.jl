@@ -20,14 +20,18 @@ Turn on the light source.
 
 The stub used to take a second `ipower::Float64` argument that no driver
 implemented. It was removed in 0.2.5 rather than implemented: "on at a power"
-has no definable unit across lights, so it is two checkable calls -- set the
-level, then `light_on`.
+has no definable unit across lights. Level setting and enabling remain
+separate operations with driver-specific units.
 
-For `CrystaLaser` and `DaqTrLight`, set the level in volts first, then call
-`light_on`. After `light_off`, `light_on` applies the last requested level,
-not 1.0 V. Only a new object with no prior `setpower` starts with 1.0 V
-(clamped to its voltage range). `VortranLaser` enables its DO line and leaves
-the AO level unchanged; set that level first too.
+On `CrystaLaser` and `DaqTrLight`, `setpower` while off stages a voltage for
+the next successful `light_on`, which then clears `level_staged`. Without a
+staged request, `light_on` writes 1.0 V clamped to the voltage range, recording
+that default in `level_requested` and in `properties.power` when its unit is
+"V". A live `setpower` does not stage the next enable. `light_off`, `shutdown`
+and `initialize` preserve the requested level and staging flag: after a live
+2.5 V command and switch-off, the export still reports 2.5 V, while the next
+unstaged enable writes 1.0 V. `VortranLaser` only enables DO and leaves AO
+unchanged.
 
 # Arguments
 - `lightsource::LightSource`: A LightSource type.
@@ -44,7 +48,8 @@ Turn off the light source.
 
 The DAQ voltage lights write before recording off; a failed switch-off throws
 and retains the previous `is_on`. `CrystaLaser` and `DaqTrLight` keep the
-requested level for the next `light_on`. On a failed Vortran DO switch-off,
+requested level for metadata and any staged request for a later enable.
+On a failed Vortran DO switch-off,
 AO 0 is also attempted, but the DO failure still throws. Use `lights_off` to
 attempt every light during teardown even when one fails. Closing a control
 panel does not switch off its light.

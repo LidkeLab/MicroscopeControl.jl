@@ -10,14 +10,6 @@ function _write_voltage(daq::DAQ, kind::String, channel::String, voltage::Float6
     return nothing
 end
 
-function _voltage_properties!(properties, lo, hi, name)
-    properties.power_unit == "V" || @warn "$name: properties.power_unit changed to V (setpower takes volts)"
-    properties.power_unit = "V"
-    properties.min_power = lo
-    properties.max_power = hi
-    return properties
-end
-
 # Keep the legacy discovery order, including a partially discovered AO list.
 # A supplied channel bypasses discovery for that kind of output.
 function _light_channels(daq::DAQ, name, device_index; ao=nothing, do_line=nothing)
@@ -56,7 +48,9 @@ end
 
 function _record_level!(light, voltage)
     light.level_requested = voltage
-    light.properties.power = voltage # compatibility for readers; never a command source
+    # A caller can use its properties object for a percentage or a calibrated
+    # optical display. Only a voltage display can receive this voltage value.
+    light.properties.power_unit == "V" && (light.properties.power = voltage)
     return nothing
 end
 
@@ -86,6 +80,7 @@ function _single_line_setpower!(light, voltage::Float64)
             end
         end
         _record_level!(light, voltage)
+        light.properties.is_on || (light.level_staged = true)
     end
     return nothing
 end
@@ -93,13 +88,16 @@ end
 function _single_line_on!(light)
     lock(light.lock) do
         channel = _light_channel(light, :channel)
+        voltage = light.level_staged ? light.level_requested : clamp(1.0, light.min_voltage, light.max_voltage)
         try
-            _write_voltage(light.daq, "AO", channel, light.level_requested)
+            _write_voltage(light.daq, "AO", channel, voltage)
         catch
             _darken_after_failure!(light, "AO", channel)
             rethrow()
         end
+        _record_level!(light, voltage)
         light.properties.is_on = true
+        light.level_staged = false
     end
     return nothing
 end
@@ -117,7 +115,7 @@ _voltage_panel_settings(light) = (lo=light.min_voltage, hi=light.max_voltage,
     requested=light.level_requested, unit="V")
 
 function _voltage_light_state(light; separate_enable=false)
-    lock(light.lock) do
+    attributes, daq = lock(light.lock) do
         attributes = Dict{String,Any}(
             "unique_id" => light.unique_id,
             "power_unit" => "V",
@@ -140,6 +138,7 @@ function _voltage_light_state(light; separate_enable=false)
             attributes["channels_DO"] = copy(light.channelsDO)
             attributes["channel"] = light.channel
         end
-        return attributes, nothing, Dict{String,Any}("daq" => export_state(light.daq))
+        return attributes, light.daq
     end
+    return attributes, nothing, Dict{String,Any}("daq" => export_state(daq))
 end

@@ -18,9 +18,10 @@ mutable struct RecordingDAQ <: DAQ
     failures::Vector{Tuple{Symbol,String,Any,Union{Nothing,Float64}}}
     next_id::Int
     pause::Any
+    export_hook::Any
     devices::Vector{String}
 end
-RecordingDAQ(; devices=["Fake1", "Fake2"]) = RecordingDAQ("recording DAQ", Dict(), [], Set(), [], 0, nothing, devices)
+RecordingDAQ(; devices=["Fake1", "Fake2"]) = RecordingDAQ("recording DAQ", Dict(), [], Set(), [], 0, nothing, nothing, devices)
 function fail!(daq, stage, channel, error=ErrorException("$stage failed on $channel"); voltage=nothing)
     push!(daq.failures, (stage, channel, error, voltage))
     return error
@@ -63,14 +64,24 @@ function MC.deletetask(daq::RecordingDAQ, task::RecordedTask)
     maybe_fail!(daq, :delete, task.channel)
     return nothing
 end
-MC.export_state(daq::RecordingDAQ) = (Dict("unique_id" => daq.unique_id), nothing, Dict())
+function MC.export_state(daq::RecordingDAQ)
+    daq.export_hook === nothing || daq.export_hook()
+    return Dict("unique_id" => daq.unique_id), nothing, Dict()
+end
 
 const AO = "Named/ao0"
 const DO = "Named/port0/line7"
 const TYPES = (CrystaLaser, DaqTrLight, VortranLaser)
-# Existing panel seam: build the real controls and callbacks without opening
-# a display window. This affects only the concrete types exercised here.
-LI._show_panel(fig, light::Union{SimLight,CrystaLaser,VortranLaser}) = fig
+# Replace only window display, so the real gui return path remains tested.
+struct PanelScreen
+    figure::Figure
+end
+const displayed = Ref{Union{Nothing,PanelScreen}}(nothing)
+function LI._display_panel(fig, light::Union{SimLight,SimDiodeLaser,CrystaLaser,DaqTrLight,VortranLaser})
+    displayed[] = PanelScreen(fig)
+    return displayed[]
+end
+panel_figure(result) = result isa PanelScreen ? result.figure : result
 make_light(T, daq=RecordingDAQ(); kwargs...) = T === VortranLaser ?
     T(; daq, ao_channel=AO, do_channel=DO, kwargs...) : T(; daq, channel=AO, kwargs...)
 enable_channel(T) = T === VortranLaser ? DO : AO
@@ -108,10 +119,10 @@ end
             @test (light.properties.min_power, light.properties.max_power) == (light.min_voltage, light.max_voltage)
             @test T === VortranLaser ? isnan(light.level_requested) : light.level_requested == 1.0
             properties = LightSourceProperties("mW", 45.0, false, 0.0, 100.0)
-            @test_logs (:warn, r"changed to V") make_light(T; properties)
-            light = make_light(T; properties)
+            light = @test_logs make_light(T; properties)
             @test light.properties === properties
-            @test properties.power_unit == "V"
+            @test properties.power_unit == "mW"
+            @test properties.power == 45.0 && properties.max_power == 100.0
             # Default DAQ construction with named channels is pure too.
             default_daq = T === VortranLaser ? T(; ao_channel=AO, do_channel=DO) : T(; channel=AO)
             @test default_daq.daq isa NIdaq
@@ -160,14 +171,14 @@ end
             @test !light.properties.is_on && daq.lines[AO] == 0.0
             @test light.level_requested == 2.5
             light_on(light)
-            @test light.properties.is_on && daq.lines[AO] == 2.5
+            @test light.properties.is_on && daq.lines[AO] == 1.0
             setpower(light, 2.0)
             @test daq.lines[AO] == light.level_requested == 2.0
             shutdown(light)
             @test !light.properties.is_on && daq.lines[AO] == 0.0 && light.level_requested == 2.0
             light_on(light)
             initialize(light)
-            @test !light.properties.is_on && daq.lines[AO] == 0.0 && light.level_requested == 2.0
+            @test !light.properties.is_on && daq.lines[AO] == 0.0 && light.level_requested == 1.0
             fresh = make_light(T, daq)
             light_on(fresh)
             @test daq.lines[AO] == 1.0
@@ -204,7 +215,8 @@ end
             light_off(light)
             light.properties.power = NaN
             light_on(light)
-            @test daq.lines[AO] == 2.5
+            expected_level = T === VortranLaser ? 2.5 : 1.0
+            @test daq.lines[AO] == expected_level
             @test all(w -> w[4] != 90.0 && !isnan(w[4]), writes(daq))
             for on in (true, false)
                 on || light_off(light)
@@ -218,7 +230,7 @@ end
             light.properties.max_power = 90.0
             light.properties.power_unit = "%"
             attrs, data, children = export_state(light)
-            @test attrs["power"] == attrs["power_requested"] == 2.5
+            @test attrs["power"] == attrs["power_requested"] == expected_level
             @test attrs["power_unit"] == "V"
             @test (attrs["min_power"], attrs["max_power"]) == (light.min_voltage, light.max_voltage)
             @test data === nothing && haskey(children, "daq")
@@ -407,7 +419,7 @@ end
                 light.properties.power = 90.0 # the slider must use level_requested
             end
             before = export_state(light)[1]
-            fig = gui(light)
+            fig = panel_figure(gui(light))
             try
                 @test isequal(export_state(light)[1], before)
                 daq = light isa SimLight ? nothing : light.daq
@@ -456,4 +468,5 @@ end
         end
     end
 end
+include("daq_lights_review.jl")
 end # module

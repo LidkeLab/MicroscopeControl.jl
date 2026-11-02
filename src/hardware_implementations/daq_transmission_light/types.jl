@@ -2,13 +2,16 @@
     DaqTrLight(; daq=NIdaq(), channel=nothing, properties, ...)
 
 A single AO line controls both level and emission. `setpower` takes volts and
-stores the request while off; `light_on` applies it. The initial request is
-1.0 V clamped to the voltage range. `initialize`, `light_off` and `shutdown`
-write 0 V before recording off, retaining the request for the next enable.
+stages the request while off; the next successful `light_on` applies it and
+clears `level_staged`. With no staged request, `light_on` writes 1.0 V clamped
+to the voltage range and records that default. `initialize`, `light_off` and
+`shutdown` write 0 V before recording off, preserving the requested level and
+staging flag for metadata and any pending request.
 
 A named `channel` skips discovery. Otherwise the legacy device/channel
-selection applies. A supplied `properties` object is kept and its unit and
-bounds are changed to volts (with a warning when its unit was not "V").
+selection applies. Default properties use volts and the voltage bounds. A
+supplied `properties` object is kept unchanged; accepted commands update its
+`power` only when its unit is "V".
 """
 mutable struct DaqTrLight <: LightSource
     unique_id::String
@@ -20,6 +23,7 @@ mutable struct DaqTrLight <: LightSource
     channelsDO::Array{String}
     channel::String
     level_requested::Float64
+    level_staged::Bool
     lock::ReentrantLock
 end
 
@@ -35,7 +39,6 @@ function DaqTrLight(;
     else
         channelsAO, channelsDO = [channel], String[]
     end
-    NIDAQcard._voltage_properties!(properties, min_voltage, max_voltage, unique_id)
     return DaqTrLight(unique_id, properties, daq, min_voltage, max_voltage,
-        channelsAO, channelsDO, channel, clamp(1.0, min_voltage, max_voltage), ReentrantLock())
+        channelsAO, channelsDO, channel, clamp(1.0, min_voltage, max_voltage), false, ReentrantLock())
 end

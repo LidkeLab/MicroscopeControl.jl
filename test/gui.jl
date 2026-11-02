@@ -150,7 +150,9 @@ end
     @testset "Simulated Light Source" begin
         light = SimLight()
         before = state_snapshot(light)
-        gui(light)
+        screen = gui(light)
+        @test screen isa GLMakie.Screen
+        close(screen)
         GLMakie.closeall()
         @test state_snapshot(light) == before
         # Belt-and-suspenders check naming the exact fields item 1 was about.

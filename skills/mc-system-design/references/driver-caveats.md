@@ -172,15 +172,18 @@ on open **[guarantee]**.
 
 ## DAQ voltage-light state (0.2.7)
 
-**[guarantee]** `CrystaLaser` and `DaqTrLight` store `setpower` requests while
-off and write them only while on. `light_on` restores the last requested volts,
-including after `light_off`; only a new object starts with 1.0 V clamped to its
-range. **[policy]** set the level first, then enable. Vortran writes AO even
-while off and enables through DO; its initial requested level is `NaN`.
+**[guarantee]** `CrystaLaser` and `DaqTrLight` stage an off `setpower` request
+without writing. The next successful `light_on` uses it and clears
+`level_staged`; with no staged request it writes and records 1.0 V clamped to
+the voltage range. Live changes do not stage the next enable. `light_off`,
+`initialize` and `shutdown` preserve both the last requested level and staging
+flag; exports after off keep that level. Vortran writes AO even while off and
+enables through DO; its initial requested level is `NaN`.
 **[guarantee]** `export_state` reports `power` and `power_requested` from
 `level_requested`, unit `V`, voltage bounds and the selected channels. A supplied
-`properties` object is retained, its unit/bounds changed to volts (warning on a
-non-V unit); `setpower` updates `properties.power`, but commands never read it.
+`properties` object is retained unchanged, without warning; default properties
+are in volts. Accepted commands update `properties.power` only when its unit
+is "V", and commands never read that field.
 
 **[guarantee]** All writes use task cleanup in `finally`. State changes follow
 successful writes and cleanup. Failed off/initialize commands throw and retain
@@ -190,3 +193,5 @@ outputs independently and reports both failures in one error. **[limitation]**
 these are commanded states, with no optical measurement or readback.
 **[policy]** teardown uses `lights_off(lights)` to attempt every light; catch
 `MicroscopeControl.LightsOffError` to inspect its `failures` name/error pairs.
+
+**[limitation]** After a failed task deletion the channel can stay reserved, so `light_off` keeps throwing and `is_on` stays true until the process restarts.

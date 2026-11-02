@@ -89,17 +89,20 @@ the next version with `-DEV`).
 - `CrystaLaser`, `VortranLaser` and `DaqTrLight` write before recording state,
   throw on missing channels or failed commands, and always attempt task cleanup
   after a write. A per-light lock serializes each write and state update.
-  Crysta and DaqTrLight cache `setpower` while off; `light_on` applies the
-  retained request and off/initialize/shutdown write 0 V before recording off.
-  **Set the level first, then `light_on`: after `light_off`, `light_on` applies
-  the last level, not 1.0 V.** Only a new single-line object defaults to 1.0 V,
-  clamped to its voltage range. Vortran still writes AO in `setpower`, enables
+  Crysta and DaqTrLight stage `setpower` while off without writing; the next
+  successful `light_on` applies that request and clears `level_staged`.
+  Without a staged request, each enable writes and records 1.0 V clamped to
+  the voltage range, preserving the existing `light_on; setpower` call order.
+  Live level changes do not stage the next enable. Off/initialize/shutdown
+  write 0 V before recording off and preserve both the saved level and any
+  pending stage; exports after off still report the level that was in use.
+  Vortran still writes AO in `setpower`, enables
   through DO, and starts with an unknown (`NaN`) requested AO level.
 - The three DAQ lights keep accepted volts in `level_requested`; commands never
   read `properties.power` (MicroscopeAdapt writes a percentage there).
-  `setpower` updates that field for readers on success. Constructor properties
-  use V and voltage bounds, retaining a supplied object and warning if its unit
-  was not V. Exports keep existing keys and add `power_requested` and selected
+  Accepted commands update `properties.power` only when its unit is V.
+  Default constructor properties use V and voltage bounds; a caller-supplied
+  properties object is kept unchanged, with no warning. Exports keep existing keys and add `power_requested` and selected
   channels; `power`/`power_requested` and range metadata come from voltage state.
   NaN and out-of-range requests throw before writing or changing state.
 - Failed DAQ off/initialize commands retain `is_on`. Failed enable/live level
@@ -108,9 +111,15 @@ the next version with `-DEV`).
   independently, records each success, and reports both failures in one error.
 - The generic light panel reuses the diode panel's bounded textbox, slider and
   output toggle. It uses each light's own unit/range, guards invalid starting
-  values, sends one command per textbox change, shows command errors, and
-  corrects its toggle to the driver's state. Opening issues no command;
-  closing a panel leaves the light as it was.
+  values, sends exactly one guarded command per textbox submission (including
+  repeats and retries), follows slider changes in the textbox, shows command
+  errors, and corrects its toggle to the driver's state. The requested line
+  refreshes after toggle commands. Generic `gui` keeps returning the displayed
+  `GLMakie.Screen`; diode panels keep returning their figure. Opening issues
+  no command; closing a panel leaves the light as it was.
+- DAQ light exports snapshot attributes and the DAQ reference under the light
+  lock, then export the child after releasing it, so a waiting child exporter
+  cannot block switch-off.
 
 - `DCAM4Camera` frames from a camera that pads its rows (`rowbytes` larger than `width` pixels) are read by the row
   stride and the padding dropped; the buffer was allocated for `rowbytes` but reshaped to `(width, height)`, which

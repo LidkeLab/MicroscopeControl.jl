@@ -7,8 +7,9 @@ legacy selection: device 1, AO index 2, DO index 12. The initial AO request is
 `NaN` (unknown); `initialize` only disables DO. `shutdown` attempts both DO 0
 and AO 0, recording each successful command and reporting every failure.
 
-A supplied `properties` object is kept and its unit and bounds are changed to
-volts, with a warning when its unit was not "V".
+Default properties use volts and the voltage bounds. A supplied `properties`
+object is kept unchanged; accepted commands update its `power` only when its
+unit is "V".
 """
 mutable struct VortranLaser <: LightSource
     unique_id::String
@@ -34,7 +35,6 @@ function VortranLaser(;
     channelsAO, channelsDO = NIDAQcard._light_channels(daq, unique_id, 1; ao=ao_channel, do_line=do_channel)
     ao_channel === nothing && (ao_channel = NIDAQcard._discovered_channel(channelsAO, 2))
     do_channel === nothing && (do_channel = NIDAQcard._discovered_channel(channelsDO, 12))
-    NIDAQcard._voltage_properties!(properties, min_voltage, max_voltage, unique_id)
     return VortranLaser(unique_id, properties, laser_color, daq, min_voltage, max_voltage,
         channelsAO, channelsDO, ao_channel, do_channel, NaN, ReentrantLock())
 end

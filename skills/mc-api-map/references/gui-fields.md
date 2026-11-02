@@ -55,11 +55,11 @@ Methods called: `capture` (**its return value is used as the frame**),
 `start_live`/`start_sequence`. `DCAM4Camera`, `SimCamera`, `ThorCamCSCCamera`,
 `ThorcamDCXCamera` all carry every field (executed), but **presence is
 necessary, not sufficient**: the CSC types above break the panel even though
-`hasfield` passes for all seven. Check types, not just names. `[limitation]` the
-mode-dropdown callback assigns to a `camera` name outside its scope
-(`create_menu`), so the dropdowns are not a reliable way to change mode; and
-because `capture(::SimCamera)` returns an enum, "Start Capture" only works for
-cameras whose `capture` returns the frame.
+`hasfield` passes for all seven. Check types, not just names. **[guarantee]**
+the capture dropdown changes `capture_mode` and the trigger dropdown changes
+`trigger_mode`; each callback receives the camera and updates only its selected field.
+**[limitation]** because `capture(::SimCamera)` returns an enum, "Start Capture"
+only works for cameras whose `capture` returns the frame.
 
 ## `gui(::LightSource)` and `gui(::Attenuator)`
 
@@ -72,10 +72,15 @@ cameras whose `capture` returns the frame.
 
 **[guarantee]** Opening the light panel issues no command. The slider spans
 the full native range; a NaN or out-of-range start falls back to the bottom.
-The textbox accepts only numbers within those bounds and moves the slider,
-issuing one command. A refusal or transport failure appears in the panel,
+The textbox accepts only numbers within those bounds. Each submission issues
+one guarded command, including repeats of the displayed value and retries after
+failure; slider synchronization does not issue a second command. The textbox
+follows slider changes. A refusal or transport failure appears in the panel,
 with the output toggle corrected to the driver's state after level and output
-commands. **[limitation]** closing a panel leaves its light as it was.
+commands. The requested line refreshes after toggle commands, including when
+an unstaged single-line light enables at the clamped 1.0 V default.
+**[guarantee]** Generic `gui(::LightSource)` returns the displayed
+`GLMakie.Screen`; the diode panels return their figure. **[limitation]** closing a panel leaves its light as it was.
 **[policy]** call `lights_off(lights)` during teardown and report every named
 failure from `MicroscopeControl.LightsOffError.failures`.
 
@@ -118,8 +123,9 @@ shows "not read yet" until Read is pressed or Poll (off at construction) is
 turned on. On a `SimDiodeLaser` this is checkable: `laser.log` gains nothing when
 the panel opens. `[guarantee]` The textbox accepts only a number within the
 slider's range, the same bounds the driver enforces; anything else is not
-applied and the border turns red. An entry moves the slider, so it issues exactly
-one command. The "commanded" line is refreshed from the device's fields only after
+applied and the border turns red. Each submission issues exactly one guarded
+command, including when the slider position stays the same; the textbox follows
+slider changes. The "commanded" line is refreshed from the device's fields only after
 the command returns, and a refusal is shown in the panel as `refused: <message>`,
 not thrown out of the callback.
 

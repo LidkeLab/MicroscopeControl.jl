@@ -264,12 +264,14 @@ tolerance before exposing.
 **[guarantee]** (0.2.7) `CrystaLaser`, `VortranLaser` and `DaqTrLight` take
 volts in `setpower` and export `level_requested` as `power`/`power_requested`
 with unit `V`. A caller may update `properties.power` for its display without
-changing any future voltage command. Crysta and DaqTrLight cache levels while
-off and restore them when enabled; Vortran writes AO while off, with DO as
-enable. **[policy]** set the level first, then `light_on`: enabling first
-briefly applies the previous level retained across `light_off`, not 1.0 V.
-**[guarantee]** only a new single-line object defaults to 1.0 V clamped to
-its range; a new Vortran's AO request is `NaN` until `setpower` succeeds.
+changing any future voltage command. Supplied properties are preserved at
+construction, and accepted commands update their `power` only when the unit
+is "V". Crysta and DaqTrLight stage levels set while off; the next successful
+enable applies that request and clears `level_staged`. Without a stage they
+enable at 1.0 V clamped to the range and record the default. Live level changes
+do not stage the next enable. Off/initialize/shutdown preserve the saved level
+and staging flag, including metadata after off. Vortran writes AO while off,
+with DO as enable; its request is `NaN` until `setpower` succeeds.
 
 **[policy]** acquisition teardown calls `lights_off(lights)` in `finally`.
 **[guarantee]** it tries every light, interruptions included, then throws
