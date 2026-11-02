@@ -1,128 +1,87 @@
-"""
-    initialize(light::VortranLaser)
-"""
 function initialize(light::VortranLaser)
-    light.properties.is_on = false
-    if length(light.channelsDO) < 12
-        @warn "VortranLaser: insufficient DO channels for initialization"
-        return nothing
-    end
-    try
-        td = NIDAQcard.createtask(light.daq, "DO", light.channelsDO[12])
-        NIDAQcard.setvoltage(light.daq, td, 0.0)
-        NIDAQcard.deletetask(light.daq, td)
-    catch e
-        @warn "VortranLaser initialization failed: $e"
+    lock(light.lock) do
+        channel = NIDAQcard._light_channel(light, :do_channel)
+        NIDAQcard._write_voltage(light.daq, "DO", channel, 0.0)
+        light.properties.is_on = false
     end
     return nothing
 end
 
-"""
-    setpower(light::VortranLaser, voltage::Float64)
-"""
 function LightSourceInterface.setpower(light::VortranLaser, voltage::Float64)
-    if length(light.channelsAO) < 2
-        @warn "VortranLaser: insufficient AO channels for setpower"
-        return
+    lock(light.lock) do
+        channel = NIDAQcard._light_channel(light, :ao_channel)
+        NIDAQcard._check_voltage(light, voltage)
+        try
+            NIDAQcard._write_voltage(light.daq, "AO", channel, voltage)
+        catch
+            if light.properties.is_on
+                NIDAQcard._darken_after_failure!(light, "DO", light.do_channel)
+            end
+            rethrow()
+        end
+        NIDAQcard._record_level!(light, voltage)
     end
-    if voltage < light.min_voltage || voltage > light.max_voltage
-        @error "The voltage should be between $(light.min_voltage) and $(light.max_voltage)"
-        return
-    end
-    try
-        t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[2])
-        NIDAQcard.setvoltage(light.daq, t, voltage)
-        NIDAQcard.deletetask(light.daq, t)
-    catch e
-        @warn "VortranLaser setpower failed: $e"
-    end
+    return nothing
 end
 
-"""
-    light_on(light::VortranLaser)
-"""
 function LightSourceInterface.light_on(light::VortranLaser)
-    light.properties.is_on = true
-    if length(light.channelsDO) < 12
-        @warn "VortranLaser: insufficient DO channels for light_on"
-        return
+    lock(light.lock) do
+        channel = NIDAQcard._light_channel(light, :do_channel)
+        try
+            NIDAQcard._write_voltage(light.daq, "DO", channel, 1.0)
+        catch
+            NIDAQcard._darken_after_failure!(light, "DO", channel)
+            rethrow()
+        end
+        light.properties.is_on = true
     end
-    try
-        td = NIDAQcard.createtask(light.daq, "DO", light.channelsDO[12])
-        # 1.0, not 8.0: this is a DIGITAL line, so the value is a level, not
-        # a voltage -- the old 8.0 reads as someone thinking it was volts. It
-        # set bit 3 of the port word, so it drove this task's line only if that
-        # line happened to be line 3; `channelsDO[12]` is an ENUMERATION index,
-        # not a line number, so which line it is depends on the rig. On any rig
-        # where it is not line 3, `light_on` drove the intended line LOW and
-        # the laser did not come on. See `NIDAQcard.do_port_word`.
-        NIDAQcard.setvoltage(light.daq, td, 1.0)
-        NIDAQcard.deletetask(light.daq, td)
-    catch e
-        @warn "VortranLaser light_on failed: $e"
-    end
+    return nothing
 end
 
-"""
-    light_off(light::VortranLaser)
-"""
 function LightSourceInterface.light_off(light::VortranLaser)
-    light.properties.is_on = false
-    if length(light.channelsDO) < 12
-        @warn "VortranLaser: insufficient DO channels for light_off"
-        return
+    lock(light.lock) do
+        try
+            channel = NIDAQcard._light_channel(light, :do_channel)
+            NIDAQcard._write_voltage(light.daq, "DO", channel, 0.0)
+        catch
+            # DO is still enabled or unknown. Try the independent level line,
+            # but preserve both the recorded enable state and the DO error.
+            try
+                channel = NIDAQcard._light_channel(light, :ao_channel)
+                NIDAQcard._write_voltage(light.daq, "AO", channel, 0.0)
+                NIDAQcard._record_level!(light, 0.0)
+            catch
+                # The original switch-off failure must still reach the caller.
+            end
+            rethrow()
+        end
+        light.properties.is_on = false
     end
-    try
-        td = NIDAQcard.createtask(light.daq, "DO", light.channelsDO[12])
-        NIDAQcard.setvoltage(light.daq, td, 0.0)
-        NIDAQcard.deletetask(light.daq, td)
-    catch e
-        @warn "VortranLaser light_off failed: $e"
-    end
+    return nothing
 end
 
-"""
-    shutdown(light::VortranLaser)
-"""
 function shutdown(light::VortranLaser)
-    light.properties.is_on = false
-    try
-        if length(light.channelsDO) >= 12
-            td = NIDAQcard.createtask(light.daq, "DO", light.channelsDO[12])
-            NIDAQcard.setvoltage(light.daq, td, 0.0)
-            NIDAQcard.deletetask(light.daq, td)
+    lock(light.lock) do
+        failures = Pair{String,Any}[]
+        try
+            channel = NIDAQcard._light_channel(light, :do_channel)
+            NIDAQcard._write_voltage(light.daq, "DO", channel, 0.0)
+            light.properties.is_on = false
+        catch e
+            push!(failures, "DO" => e)
         end
-        if length(light.channelsAO) >= 2
-            t = NIDAQcard.createtask(light.daq, "AO", light.channelsAO[2])
-            NIDAQcard.setvoltage(light.daq, t, 0.0)
-            NIDAQcard.deletetask(light.daq, t)
+        try
+            channel = NIDAQcard._light_channel(light, :ao_channel)
+            NIDAQcard._write_voltage(light.daq, "AO", channel, 0.0)
+            NIDAQcard._record_level!(light, 0.0)
+        catch e
+            push!(failures, "AO" => e)
         end
-    catch e
-        @warn "VortranLaser shutdown failed: $e"
+        isempty(failures) || error("$(light.unique_id) shutdown failed: " *
+            join(("$line: $(sprint(showerror, cause))" for (line, cause) in failures), "; "))
     end
+    return nothing
 end
 
-"""
-    export_state(light::VortranLaser)
-"""
-function export_state(light::VortranLaser)
-    attributes = Dict(
-                     "unique_id" => light.unique_id, 
-                     "laser_color" => light.laser_color,
-                     "min_voltage" => light.min_voltage, 
-                     "max_voltage" => light.max_voltage,
-                     "power_unit" => light.properties.power_unit, 
-                     "power" => light.properties.power, 
-                     "is_on" => light.properties.is_on,
-                     "min_power" => light.properties.min_power, 
-                     "max_power" => light.properties.max_power,
-                     "channelsAO" => light.channelsAO,
-                     "channelsDO" => light.channelsDO
-                     )
-    data = nothing
-    children = Dict(
-        "daq" => export_state(light.daq)
-        )
-
-    return attributes, data, children
-end
+LightSourceInterface._power_settings(light::VortranLaser) = NIDAQcard._voltage_panel_settings(light)
+export_state(light::VortranLaser) = NIDAQcard._voltage_light_state(light; separate_enable=true)

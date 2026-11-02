@@ -23,6 +23,12 @@ implemented. It was removed in 0.2.5 rather than implemented: "on at a power"
 has no definable unit across lights, so it is two checkable calls -- set the
 level, then `light_on`.
 
+For `CrystaLaser` and `DaqTrLight`, set the level in volts first, then call
+`light_on`. After `light_off`, `light_on` applies the last requested level,
+not 1.0 V. Only a new object with no prior `setpower` starts with 1.0 V
+(clamped to its voltage range). `VortranLaser` enables its DO line and leaves
+the AO level unchanged; set that level first too.
+
 # Arguments
 - `lightsource::LightSource`: A LightSource type.
 """
@@ -36,6 +42,13 @@ end
 
 Turn off the light source.
 
+The DAQ voltage lights write before recording off; a failed switch-off throws
+and retains the previous `is_on`. `CrystaLaser` and `DaqTrLight` keep the
+requested level for the next `light_on`. On a failed Vortran DO switch-off,
+AO 0 is also attempted, but the DO failure still throws. Use `lights_off` to
+attempt every light during teardown even when one fails. Closing a control
+panel does not switch off its light.
+
 # Arguments
 - `lightsource::LightSource`: A LightSource type.
 """
@@ -43,6 +56,48 @@ function light_off(lightsource::LightSource)
     # turn off the lightsource
     error("light_off not implemented for $(typeof(lightsource))")
 end
+
+"""
+    LightsOffError(failures)
+
+Every failed switch-off, as `light name => caught exception` pairs in
+`failures`. `showerror` prints one line per failed light. Public as
+`MicroscopeControl.LightsOffError`, not exported.
+"""
+struct LightsOffError <: Exception
+    failures::Vector{Pair{String,Any}}
+end
+
+function Base.showerror(io::IO, error::LightsOffError)
+    for (index, (name, cause)) in enumerate(error.failures)
+        index == 1 || print(io, '\n')
+        print(io, name, ": ", replace(sprint(showerror, cause), '\n' => ' '))
+    end
+end
+
+"""
+    lights_off(lights)
+    lights_off(l1::LightSource, l2::LightSource, ...)
+
+Attempt `light_off` on every light, even after an exception (including an
+`InterruptException`). Return `nothing` on success; otherwise throw one
+[`LightsOffError`](@ref) retaining every named failure.
+"""
+function lights_off(lights)
+    failures = Pair{String,Any}[]
+    for light in lights
+        try
+            light_off(light)
+        catch e
+            name = hasproperty(light, :unique_id) ? string(light.unique_id) : string(typeof(light))
+            push!(failures, name => e)
+        end
+    end
+    isempty(failures) || throw(LightsOffError(failures))
+    return nothing
+end
+
+lights_off(lights::LightSource...) = lights_off(lights)
 
 """
     setpower(laser::DiodeLaser, x::Float64)
@@ -200,4 +255,3 @@ is set (`check_lock`, 0.2.6); after that check, nothing watches it.
 function loop_status(laser::DiodeLaser)
     error("loop_status not implemented for $(typeof(laser))")
 end
-

@@ -15,6 +15,7 @@ export NIDAQModulator
 
 include("types.jl")
 include("interface_methods.jl")
+include("voltage_lights.jl")
 include("modulator.jl")
 
 end

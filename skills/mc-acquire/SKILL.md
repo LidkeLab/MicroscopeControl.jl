@@ -259,6 +259,29 @@ Do the check before the first move on a new rig. Settling time is the driver's b
 instantly, so on hardware poll `getposition` until the position field is within
 tolerance before exposing.
 
+## DAQ voltage lights and teardown
+
+**[guarantee]** (0.2.7) `CrystaLaser`, `VortranLaser` and `DaqTrLight` take
+volts in `setpower` and export `level_requested` as `power`/`power_requested`
+with unit `V`. A caller may update `properties.power` for its display without
+changing any future voltage command. Crysta and DaqTrLight cache levels while
+off and restore them when enabled; Vortran writes AO while off, with DO as
+enable. **[policy]** set the level first, then `light_on`: enabling first
+briefly applies the previous level retained across `light_off`, not 1.0 V.
+**[guarantee]** only a new single-line object defaults to 1.0 V clamped to
+its range; a new Vortran's AO request is `NaN` until `setpower` succeeds.
+
+**[policy]** acquisition teardown calls `lights_off(lights)` in `finally`.
+**[guarantee]** it tries every light, interruptions included, then throws
+`MicroscopeControl.LightsOffError` containing all `light name => exception`
+pairs in `failures`, printed one per line. `lights_off(l1, l2, ...)` also works.
+A failed DAQ off/initialize throws and retains its previous `is_on`; a failed
+enable/live level command tries to darken and records off only on success.
+Vortran failed DO off also tries AO 0; shutdown always attempts both lines,
+records each success independently, and states both errors if both fail.
+**[limitation]** these DAQ states record commands, not optical measurements;
+closing a panel does not switch off the light.
+
 ## Modulated light sources during an acquisition
 
 **[guarantee]** A light built with `modulator = ...` (`TCubeLaser`, `SimDiodeLaser`, `SimLight`) puts its level on an

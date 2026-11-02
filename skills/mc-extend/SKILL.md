@@ -78,7 +78,7 @@ is in `references/rig-causes.md`; the short form:
 | `initialize(::PIStage)` logs `@error` and returns, `connectionstatus` stays `false` (it does not throw) | controller unpowered, USB, or **held by another process** (PIMikroMove, a second Julia) | close the others; re-run; if it connects it was contention |
 | `MLSLM` does nothing | board claimed elsewhere, or SDK found 0 boards (`n_boards_found` is a default of 0 and never updated) | read what `initializesdk()` prints or returns (`n_boards_found`, `constructed_ok`); close the vendor GUI; reboot if a dead process holds it |
 | serial timeouts / "port busy" (`Triggerscope4`, and `LCC1620` through it) | wrong COM number (Windows renumbers), or port open elsewhere; **two `Triggerscope4` objects on one port** | `LibSerialPort.list_ports()`; one scope object per port, shared (`mc-system-design`) |
-| `CrystaLaser`/`VortranLaser`/`DaqTrLight` `@warn` at construction, then `setpower` does nothing | NI-DAQ discovery picked the wrong device (`devs[1]`, or `device_index`), runtime missing, or partial AO/DO discovery | inspect `light.channelsAO`/`channelsDO` after construction; `NIDAQcard.showdevices(NIdaq())` |
+| DAQ voltage light warns at discovery or throws on a missing channel/write | **[limitation]** unnamed outputs still use enumeration; runtime missing or partial AO/DO discovery can leave channels absent. **[guarantee]** (0.2.7) commands throw on missing channels; a single-line off `setpower` records only. | **[policy]** inspect selected `channel` or `ao_channel`/`do_channel`; pass named outputs and `daq::DAQ`. |
 | a method throws `not implemented for <Type>` or does nothing | a contract stub, not a broken `ccall` (`mc-api-map`: resolving is not implementing) | `which(f, Tuple{typeof(dev)}).sig` names the interface or `AbstractInstrument` |
 
 A defect is what remains: a wrong argument type or size in a `ccall`, a wrong
@@ -299,6 +299,19 @@ fail or to refuse a level), and returns the list of violations. A downstream pac
 convention (control source 3, the 1.3 s settle wait, the confirm at each `light_on`) is in its docstring and
 `CALIBRATION.md`.
 
+**[guarantee]** (0.2.7) The DAQ voltage lights take `setpower(light, ::Float64)`
+in volts, retain `level_requested`, and export that request in V. No command
+reads `properties.power`; `setpower` updates it only for readers. Crysta and
+DaqTrLight cache while off and restore the retained level on enable; Vortran
+writes AO regardless of DO state. **[policy]** set the level first, then
+`light_on`, since enabling first briefly applies the previous level.
+**[guarantee]** Each light locks its write-and-record operations; a failed
+live level/enable write attempts to darken, with `is_on = true` if that fails
+too. Failed off commands throw and retain `is_on`. Vortran shutdown attempts
+DO 0 and AO 0 independently and reports both failures.
+**[policy]** use `lights_off(lights)` for teardown; it continues after every
+exception and raises `MicroscopeControl.LightsOffError` with all name/error pairs.
+
 ### Behavioural obligations beyond method names
 
 **[policy]** for a new driver; the third column names the upstream driver that
@@ -307,9 +320,9 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 | Obligation | Do this | Because |
 |---|---|---|
 | Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.2.1:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths *attempts* to uninitialize the SDK first (`dcamapi_uninit()` logs an `@error` if that fails, but the constructor ignores its return and throws anyway); **[existing guarantee, 0.2.7]** the API is reference-counted per process (initialized by the first camera, uninitialized by the last `shutdown`), a constructor that fails gives back only its own count, and an exception after a successful open closes the device and gives the count back before it propagates (tested against a fake SDK, not on a rig) |
-| Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | `CrystaLaser()` builds its own `NIdaq()`, first device, first channel; cannot be shared or configured |
+| Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | **[guarantee]** (0.2.7) DAQ lights accept `daq::DAQ` and named outputs; **[limitation]** omitted names retain discovery by enumeration |
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
-| Failure visibility | throw, or set `last_error` and return `nothing`, and document which | the DAQ-backed lights `@warn` and return on an empty channel list: "initialized" and inert |
+| Failure visibility | throw, or set `last_error` and return `nothing`, and document which | **[guarantee]** (0.2.7) DAQ voltage lights throw on missing outputs or failed commands, and record state only after a successful write and cleanup |
 | Buffer lifetime | copy out of SDK buffers before releasing them | `DCAM4Camera.getdata` releases its buffers; `getlastframe` afterwards reads released memory (`mc-acquire`) |
 | Acquisition completion | expose a completion signal (`is_running`, a `Task`, or a blocking call) | `sequence(::SimCamera)` spawns an `@async` task that flips `is_running`; DCAM4 blocks in `dcamwait_event` |
 | Units | a `units`/`power_unit` field and the docstring; convert at the SDK boundary | PI millimetres, MCL micrometres, Sims unitless 0..100 |

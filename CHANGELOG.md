@@ -12,6 +12,14 @@ the next version with `-DEV`).
 
 ### Added
 
+- `lights_off(lights)` and `lights_off(l1, l2, ...)` attempt every light even
+  after an exception or interruption. Failures throw `MicroscopeControl.LightsOffError`
+  (public, not exported), retaining every light name and caught exception in
+  `failures`; its display prints one line per failed light.
+- DAQ voltage lights accept `daq::DAQ=NIdaq()` and named outputs: `channel`
+  for `CrystaLaser`/`DaqTrLight`, `ao_channel`/`do_channel` for `VortranLaser`.
+  Named outputs skip discovery; no-argument construction retains legacy enumeration.
+
 - **Light-source modulators**: a light can put its level on an analogue input through an `AbstractModulationControl`,
   which holds the scale. `TCubeLaser`, `SimDiodeLaser` and `SimLight` take `modulator::Union{Nothing,AbstractModulationControl}`
   (keyword `modulator = nothing`; with `nothing` every method runs the code it always did). A modulator defines
@@ -71,6 +79,32 @@ the next version with `-DEV`).
   without padding, and through the DCAM4 fake SDK, replaced ThorCam DCx and CSC SDK calls, and `SimCamera`.
 
 ### Fixed
+
+- `CrystaLaser`, `VortranLaser` and `DaqTrLight` write before recording state,
+  throw on missing channels or failed commands, and always attempt task cleanup
+  after a write. A per-light lock serializes each write and state update.
+  Crysta and DaqTrLight cache `setpower` while off; `light_on` applies the
+  retained request and off/initialize/shutdown write 0 V before recording off.
+  **Set the level first, then `light_on`: after `light_off`, `light_on` applies
+  the last level, not 1.0 V.** Only a new single-line object defaults to 1.0 V,
+  clamped to its voltage range. Vortran still writes AO in `setpower`, enables
+  through DO, and starts with an unknown (`NaN`) requested AO level.
+- The three DAQ lights keep accepted volts in `level_requested`; commands never
+  read `properties.power` (MicroscopeAdapt writes a percentage there).
+  `setpower` updates that field for readers on success. Constructor properties
+  use V and voltage bounds, retaining a supplied object and warning if its unit
+  was not V. Exports keep existing keys and add `power_requested` and selected
+  channels; `power`/`power_requested` and range metadata come from voltage state.
+  NaN and out-of-range requests throw before writing or changing state.
+- Failed DAQ off/initialize commands retain `is_on`. Failed enable/live level
+  commands attempt to darken; `is_on` is false only if that succeeds. A failed
+  Vortran DO off also attempts AO 0. Vortran shutdown attempts both outputs
+  independently, records each success, and reports both failures in one error.
+- The generic light panel reuses the diode panel's bounded textbox, slider and
+  output toggle. It uses each light's own unit/range, guards invalid starting
+  values, sends one command per textbox change, shows command errors, and
+  corrects its toggle to the driver's state. Opening issues no command;
+  closing a panel leaves the light as it was.
 
 - `DCAM4Camera` frames from a camera that pads its rows (`rowbytes` larger than `width` pixels) are read by the row
   stride and the padding dropped; the buffer was allocated for `rowbytes` but reshaped to `(width, height)`, which

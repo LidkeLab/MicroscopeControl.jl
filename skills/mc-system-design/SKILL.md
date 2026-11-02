@@ -71,9 +71,9 @@ gives the assembled instrument its meaning. Neither can do the other's job.
 | Concern | The driver guarantees | The system must own or verify |
 |---|---|---|
 | **Physical connection** | which object holds the handle, and whether the constructor or `initialize` opens it. **[limitation]** this differs per driver: DCAM4 and ThorCam CSC open in the constructor; PI, MCL, N472, SmarAct, DCx, TCube and the Sims open in `initialize`; see `references/driver-caveats.md`. | one owner per physical port or SDK session; every other holder borrows. Construct the shared object once and pass it in. |
-| **Readiness** | `initialize` returns without throwing when its own steps ran. **[limitation]** a normal return is not readiness: `initialize(::CrystaLaser)` only sets `is_on = false` and succeeds with an empty channel list; `initialize(::DCAM4Camera)` is a no-op because the constructor did the work. | **[policy]** verify after `initialize`: read a position, check `connectionstatus`, inspect channel lists, or take one frame. Decide what "ready" means for each device and check it. |
+| **Readiness** | **[guarantee]** (0.2.7) a DAQ voltage light writes its off output before recording off, and throws on missing channels or failed writes. **[limitation]** a normal return does not establish general readiness: `initialize(::DCAM4Camera)` is a no-op because its constructor did the work. | **[policy]** verify after `initialize`: read a position, check `connectionstatus`, inspect channel lists, or take one frame. Decide what "ready" means for each device and check it. |
 | **Background tasks** | **[limitation]** a driver may start a task the caller never receives: `sequence(::DCAM4Camera)` spawns a poller on the camera handle and discards it with an explicit `return` (traced); `sequence(::SimCamera)` and `sequence(::ThorcamDCXCamera)` return theirs only because the `@async` is the last expression, and the interface promises `nothing`. Those tasks read mutable device state as they run: the Sim's timer rereads `camera.exposure_time` every iteration and writes `is_running`; DCAM4's and DCx's pollers reread `camera.camera_handle` through the SDK every iteration (DCAM4 writes `is_running = 0` once at the end; neither reads it). | **[policy]** treat the camera as single-owner and single-acquisition: one blocking acquisition at a time on one task, no cancellation, no configuration change in flight, and a process restart rather than recovery when an abort fails. This is a restriction the drivers impose, not a design preference (worked example, Decision 3). |
-| **State** | the device's own fields (`exposure_time`, `roi`, `targ_x`, `properties.power`) are the configuration the driver pushes to hardware; **[guarantee]** shared code reads those fields by name (see Principle 2). | the instrument-level configuration (`AbstractSystemState`), when it is captured, and which fields are requested values versus measured ones (see "Three kinds of state"). |
+| **State** | the device's own fields (`exposure_time`, `roi`, `targ_x`, `level_requested` on a DAQ light) are the configuration the driver pushes to hardware; **[guarantee]** shared code reads those fields by name (see Principle 2). | the instrument-level configuration (`AbstractSystemState`), when it is captured, and which fields are requested values versus measured ones (see "Three kinds of state"). |
 | **Failure recovery** | **[guarantee]** since v0.1.0 the stubs of the five `AbstractInstrument` interfaces (`Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator`) and the `AbstractInstrument` lifecycle stubs throw `ErrorException("... not implemented for T")` instead of returning `nothing`. **[limitation]** `SLM`'s `displayimage(::SLM)` has an empty body and returns `nothing`, and `SLM`/`TRIG` devices get `MethodError`, not the stub, for lifecycle calls (`references/driver-caveats.md`). Drivers mostly `@warn`/`@error` and return on hardware errors. **[limitation]** the `AbstractSystem` fallbacks still `@error` and return `nothing`. | **[policy]** rollback on partial initialization, a shutdown that reports what it could not close, and a saved record that says what is missing. All three are in the worked example below; none is provided by MC. |
 | **Units, axes, conventions** | its own: PI in millimetres, MCL in micrometres, Sim stages unitless (0..100); cameras return `(H, W)` / `(H, W, N)` arrays, `[y, x]` with `[1, 1]` top left (lab decision 0040, `docs/src/conventions.md`) **[guarantee]** for Sim, DCAM4, DCx and CSC (executed, through fakes for the drivers). | **[policy]** one normalisation layer in the system (a function per device, not a conversion at every call site). |
 | **Optical power at the sample** | **[guarantee]** (0.2.5, traced) a `DiodeLaser` in `ConstantPhotocurrent` mode commands and reports mW **at the laser output**, the plane its `wa_calibration` was measured at (`setoutputpower!`, `indicated_output_power`); no driver holds a field describing splitters, attenuators, fibres or objectives. In `ConstantCurrent` mode the driver has no optical number at all. | **[policy]** the path transmission from laser output to sample, its measurement and its drift belong to the system; convert in one place, and label saved values with the plane they refer to (the TCube export already writes `power_reference = "laser output"`). |
@@ -97,21 +97,14 @@ Two qualifications:
    table and its interpolation (`set_calibration!`, `settransmission`) are
    driver behaviour; the measurement procedure and the measured numbers are the
    rig's.
-2. **Current upstream drivers already cross this boundary. [limitation]**
-   `CrystaLaser()`, `VortranLaser()` and `DaqTrLight()` each construct their own
-   `NIdaq()` and hard-wire which device and channel they use: Crysta and Vortran
-   take the **first** discovered device (`devs[1]`); `DaqTrLight` takes
-   `devs[device_index]` with `device_index` a constructor keyword defaulting to
-   **2**; Crysta and DaqTr write **AO channel 1** (`channelsAO[1]`), Vortran
-   writes **AO channel 2** (`channelsAO[2]`). Those are wiring assumptions baked
-   into reusable implementations (traced from each driver's `types.jl` and
-   `interface_methods.jl`). Work around them (they cannot share a DAQ object and
-   you cannot choose the channel) and do **not** copy the pattern into a new
-   driver: take the dependency as a keyword argument and the channel as a field,
-   as `LCC1620(; scope, dac_channel)` and
-   `TCubeLaser(serialNo; daq, daq_device, ao_channel)` do (the latter two
-   keywords exist from v0.2.3; before that the DAQ device and AO channel were
-   hardcoded to the second of each).
+2. **[guarantee]** (0.2.7) `CrystaLaser`, `VortranLaser` and `DaqTrLight`
+   accept `daq::DAQ` (default `NIdaq()`) and named channels: `channel` for the
+   single-line lights, `ao_channel` and `do_channel` for Vortran. Named outputs
+   skip discovery. **[limitation]** without names the legacy enumeration still
+   applies: device 1 for Crysta/Vortran, `device_index=2` for DaqTrLight; AO
+   index 1 for the single-line lights, AO index 2 and DO index 12 for Vortran.
+   **[policy]** pass physical channel names and a shared dependency explicitly;
+   verify the instrument's wiring before enabling a light.
 
 Writing a driver downstream for a device you own, and extending MC's generics
 for **your own type**, is legitimate and is not type piracy. `mc-extend`
@@ -143,6 +136,18 @@ a voltage (`CrystaLaser`, `VortranLaser`, `DaqTrLight`, `SimLight`) is a plain
 field `::DiodeLaser` when the system needs readback (`loop_status`,
 `measured_current`) and `::LightSource` when on/off is all it uses; test
 `isa DiodeLaser`, not a driver name, to choose the setter.
+
+**[guarantee]** (0.2.7) `CrystaLaser` and `DaqTrLight` cache volts while off,
+write that request on `light_on`, and retain it across `light_off`. Set the
+level first, then enable: enabling first momentarily applies the last level,
+not 1.0 V. A new object defaults to 1.0 V clamped to its voltage range.
+Vortran writes AO in `setpower` even while off; DO controls emission, and its
+request is `NaN` until the first accepted level. `initialize` disables DO only;
+`shutdown` attempts DO 0 and AO 0 independently and reports both failures.
+**[guarantee]** These drivers write before recording state and serialize commands
+with one lock per light. After a failed enable or live level write they attempt
+to darken; `is_on` becomes false only if that succeeds. A failed Vortran DO off
+also attempts AO 0 and records level 0 only on success, while retaining `is_on`.
 
 ## Six design principles the source expresses
 
@@ -190,8 +195,8 @@ Each is stated as what the code does today; the label says how far to trust it.
    for the other attenuator (traced, `lcc1620_attenuator/interface_methods.jl`).
    So the caller owns the scope's closure. **[policy]** make ownership a field
    (`owns_port::Bool`) or a system rule, never an assumption.
-   **[limitation]** the three DAQ-backed lights build their own dependency and
-   cannot share it (Boundary test, qualification 2).
+   **[guarantee]** (0.2.7) the three DAQ voltage lights accept a shared `daq::DAQ`
+   and named outputs (Boundary test, qualification 2).
 
 5. **Persistence mirrors composition. [guarantee]** `export_state` returns
    `(attributes, data, children)`; children are further tuples keyed by name; `save_h5` walks the tree recursively under a root group
@@ -221,7 +226,7 @@ Each is stated as what the code does today; the label says how far to trust it.
 
 | Kind | Lives in | Example | Trust |
 |---|---|---|---|
-| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.properties.power` | what you asked for. **[limitation]** `properties.power` is only updated by `setpower` on `SimLight`; `CrystaLaser`, `VortranLaser` and `DaqTrLight` write the voltage to the DAQ and leave the field at its constructor value (traced). **[guarantee]** (0.2.5) `properties.power` is deprecated on a `DiodeLaser`: `SimDiodeLaser` and any `ConstantPhotocurrent` laser never write it, and an open-loop `TCubeLaser` still writes 0.2.4's uncalibrated linear guess (not in `power_unit`'s unit; read `drive_current` instead). Its requested state splits by mode: in `ConstantCurrent`, `laser.drive_current` is the mA `setcurrent!` last accepted (`NaN` before the first); in `ConstantPhotocurrent`, `drive_current` stays `NaN` for the life of the laser (the loop owns the current) and the request lives in `laser.pd.output_power_requested` (mW at the laser output) and `laser.pd.photocurrent_requested` (A, the decoded setpoint the loop was given). What the controller reports is measured state, next row. Where the driver does not track it, the system must record the requested power itself: `Bench` below retains the last `BenchState` in `sys.requested`, `get_state` returns that, and `measured_power` reads the field (executed against a DAQ-like fake: requested `3.5`, measured `0.0`). |
+| **Requested configuration** | device fields the driver pushes to hardware, and your `AbstractSystemState` | `cam.exposure_time = 0.02`; `stage.targ_z`; `light.level_requested` (DAQ volts) | what you asked for. **[guarantee]** (0.2.7) `CrystaLaser`, `VortranLaser` and `DaqTrLight` retain accepted volts in `level_requested`; `setpower` also updates `properties.power` for readers, but no command reads that field. Their exports report `power` and `power_requested` from `level_requested`, with `power_unit = "V"` and voltage bounds. These are requests, not optical measurements. **[guarantee]** (0.2.5) `properties.power` is deprecated on a `DiodeLaser`: `SimDiodeLaser` and any `ConstantPhotocurrent` laser never write it, and an open-loop `TCubeLaser` still writes 0.2.4's uncalibrated linear guess (not in `power_unit`'s unit; read `drive_current` instead). Its requested state splits by mode: in `ConstantCurrent`, `laser.drive_current` is the mA `setcurrent!` last accepted (`NaN` before the first); in `ConstantPhotocurrent`, `drive_current` stays `NaN` for the life of the laser (the loop owns the current) and the request lives in `laser.pd.output_power_requested` (mW at the laser output) and `laser.pd.photocurrent_requested` (A, the decoded setpoint the loop was given). What the controller reports is measured state, next row. **[policy]** retain the instrument request separately: `Bench` below keeps its last `BenchState` in `sys.requested`; `get_state` returns that. `measured_power` returns `NaN` for a plain light, which has no optical readback, including the DAQ-like example. |
 | **Measured hardware state** | whatever the driver reads back | `stage.real_x` after `getposition`; a frame; `connectionstatus` | what the hardware said, at the moment you asked. **[limitation]** the Sim stages copy `targ_*` into `real_*`, so measured equals requested there by construction. On a `DiodeLaser`: `measured_current` (mA), `measured_photocurrent` (A) and `loop_status` are readings; `indicated_output_power` (mW, `ConstantPhotocurrent` only) is a conversion of the photocurrent reading through a bench calibration, not a measurement of light. **[limitation]** on `TCubeLaser` these read Kinesis caches that `initialize` sets polling (50 ms); that polling refreshes them is not hardware-verified. |
 | **Saved metadata** | the `export_state` tree in the HDF5 file | `attrs["Main/camera"]["exposure_time"]` | a record of the above at snapshot time, plus whatever the system adds (which is missing, which is requested versus measured). |
 
@@ -291,10 +296,11 @@ next open (caveats file).
 
 ### Decisions 3 and 4, executed: manual control versus acquisition, and a failed export
 
-Everything in this block was executed against MC v0.2.0 under `xvfb-run -a`.
-`BrokenLight` stands in for any device whose lifecycle or export throws;
-`ClaimedAtConstruction` for `DCAM4Camera`; `DaqLikeLight` for the three
-DAQ-backed lights whose `setpower` does not cache the request.
+**[guarantee]** The original camera/system paths were executed against MC v0.2.0
+under `xvfb-run -a`. The voltage-light model below follows 0.2.7.
+`BrokenLight` stands in for a device whose lifecycle or export throws;
+`ClaimedAtConstruction` for `DCAM4Camera`; `DaqLikeLight` models the retained
+request and separate line value of `CrystaLaser` and `DaqTrLight`.
 
 **[limitation]** The camera drivers spawn background tasks that the caller
 never receives, and those tasks read mutable device fields as they run. Per
@@ -361,13 +367,35 @@ ClaimedAtConstruction() = ClaimedAtConstruction(true)
 MC.initialize(::ClaimedAtConstruction) = nothing               # like DCAM4: initialize is a no-op
 MC.shutdown(c::ClaimedAtConstruction) = (c.open = false; nothing)
 
-mutable struct DaqLikeLight <: LightSource       # stands in for CrystaLaser/VortranLaser/DaqTrLight: setpower does not cache
+# [guarantee] A hardware-free model of the single-line drivers' successful commands.
+mutable struct DaqLikeLight <: LightSource
+    unique_id::String
     properties::LightSourceProperties
+    level_requested::Float64
+    line_voltage::Float64
 end
-DaqLikeLight() = DaqLikeLight(LightSourceProperties("V", 0.0, false, 0.0, 5.0))
-MC.initialize(::DaqLikeLight) = nothing
-MC.shutdown(::DaqLikeLight) = nothing
-MC.setpower(::DaqLikeLight, v::Float64) = nothing              # writes the DAQ, leaves properties.power alone
+DaqLikeLight() = DaqLikeLight("DAQ example", LightSourceProperties("V", 0.0, false, 0.0, 5.0), 1.0, 0.0)
+function MC.setpower(l::DaqLikeLight, v::Float64)
+    !(0.0 <= v <= 5.0) && throw(ArgumentError("expected 0..5 V"))
+    l.properties.is_on && (l.line_voltage = v)
+    l.level_requested = v
+    l.properties.power = v
+    return nothing
+end
+function MC.light_on(l::DaqLikeLight)
+    l.line_voltage = l.level_requested
+    l.properties.is_on = true
+    return nothing
+end
+function MC.light_off(l::DaqLikeLight)
+    l.line_voltage = 0.0
+    l.properties.is_on = false
+    return nothing
+end
+MC.initialize(l::DaqLikeLight) = light_off(l)
+MC.shutdown(l::DaqLikeLight) = light_off(l)
+MC.export_state(l::DaqLikeLight) = (Dict{String,Any}("power" => l.level_requested,
+    "power_requested" => l.level_requested, "power_unit" => "V", "is_on" => l.properties.is_on), nothing, Dict())
 
 struct BenchState <: AbstractSystemState          # REQUESTED configuration, nothing measured. IMMUTABLE: a request is a
     exposure_time::Float64                        # value; get_state hands it back and nobody can edit the record in place
@@ -424,7 +452,7 @@ end
 # get_state returns what was REQUESTED; measured values are read from device fields separately.
 MC.get_state(sys::Bench) = sys.requested === nothing ? error("no configuration has been requested yet") : sys.requested
 measured_power(sys::Bench) = laser_reading(sys.laser)
-laser_reading(l::LightSource) = l.properties.power               # cached by SimLight only; stale on the DAQ lights
+laser_reading(l::LightSource) = NaN                              # no optical readback; cached requests are not measurements
 laser_reading(l::DiodeLaser) =                                   # 0.2.5: properties.power is deprecated on a DiodeLaser; do not read it
     regulation_mode(l) isa ConstantPhotocurrent ?
         indicated_output_power(l) :                              # mW at the laser OUTPUT: a conversion, not a meter
@@ -494,16 +522,17 @@ function acquire!(sys::Bench, n::Int)
 end
 ```
 
-What the run showed (`SimCamera(roi=CameraROI(1,1,64,32), exposure_time=0.01)`,
+**[guarantee]** What the run showed (`SimCamera(roi=CameraROI(1,1,64,32), exposure_time=0.01)`,
 `SimStage3d()`, `SimLight()` unless stated; the `DiodeLaser` methods of
 `laser_reading` and `set_laser!` were added for 0.2.5 and are traced from the
-source, not part of this run, which exercised the `LightSource` paths):
+source, not part of this run, which exercised the `LightSource` paths). The
+DAQ-like request/line distinction was rechecked with the 0.2.7 example:
 
 | Path | Result |
 |---|---|
 | **Rollback, first device fails**, camera claimed at construction | threw `initialize not implemented for BrokenLight`; `cam.open == false` afterwards, `owned` empty. |
 | **Rollback, last device fails** (`BrokenCam` third) | stage back to `connectionstatus == false`, laser back to `is_on == false`, `owned` empty. |
-| **Requested versus measured** with `DaqLikeLight`: `set_state(sys, BenchState(0.02, 1.0, 3.5))` | `get_state(sys).laser_power == 3.5`, `measured_power(sys) == 0.0`, export attribute `laser_power_requested == 3.5`. |
+| **Requested versus measured** with `DaqLikeLight`: `set_state(sys, BenchState(0.02, 1.0, 3.5))` | `get_state(sys).laser_power == 3.5`, `sys.laser.level_requested == 3.5`, `sys.laser.line_voltage == 0.0` while off, `isnan(measured_power(sys))`; export attribute `laser_power_requested == 3.5`. |
 | **Immutable requested state**: `get_state(sys).laser_power = 4.5` | refused: `setfield!: immutable struct of type BenchState cannot be changed`. |
 | **Sequential acquisitions**: `acquire!(sys, 5)` then `acquire!(sys, 3)` | `(32, 64, 5)` in 0.15 s, `in_flight == false` after; then `(32, 64, 3)`. |
 | **In-flight guards** (flag set by hand; the example never runs two tasks) | `set_state`, `acquire!` and `shutdown` each refused with a message naming the in-flight acquisition. |
@@ -565,28 +594,16 @@ stop; each is false at v0.2.0.
 
 ## Two more limitations that bear on design
 
-- **Fixed in 0.2.1.** `gui(::LightSource)` used to call `setpower(light, 0.5)`
-  the moment the panel opened: the slider's `lift` fired on creation with its
-  start value (traced from `lightsource_interface/gui.jl`; executed against a
-  fake-transport light, which threw from inside `gui`). The slider and toggle
-  are now wired with `on` (fires only on a later change) and initialised from
-  the device's current `properties.power`/`properties.is_on`, so constructing
-  the panel is observably read-only. **Caveat:** what `properties.power`
-  holds after a `setpower` differs by driver (traced). `SimLight` stores the
-  argument it was given. `CrystaLaser`,
-  `VortranLaser` and `DaqTrLight` never write the field at all, so the slider
-  can display a stale cached value on those three. This is not a new opening-time write -- it is
-  about what the widget shows. (Up to v0.2.4 `TCubeLaser` also went through this
-  panel, with a `setpower` that took **milliamps** and stored a calculated power
-  under a `"mW"` label. **[guarantee]** from 0.2.5 a `DiodeLaser` has its own
-  panel, `current_panel` in mA or `power_panel` in mW at the laser output, chosen
-  by mode; opening it issues no command and no read, the readout is filled only by
-  its Read button or the Poll toggle (off by default), and a refused command is
-  shown in the panel rather than thrown; `mc-api-map`'s `references/gui-fields.md`.)
-  If you're on an installed copy older
-  than 0.2.1, this was a real hazard on a laser, and a reason a system may
-  want its own panel, or to open the shared one only with the shutter closed
-  or the laser off.
+- **[guarantee]** (0.2.7) Opening `gui(::LightSource)` issues no command.
+  The generic panel uses the light's own unit and bounds; DAQ lights use
+  `level_requested` and their voltage fields, independent of `properties.power`.
+  A textbox entry moves the slider and issues one command; invalid entries
+  stay at the box, and command errors appear in the panel. The toggle follows
+  the driver after both level and output commands. **[limitation]** closing
+  the panel does not switch off the light. **[policy]** call `lights_off(lights)`
+  during teardown; it attempts every light and raises `MicroscopeControl.LightsOffError`
+  with every named failure, interruptions included. A failed DAQ off command
+  throws and retains `is_on`; never infer off from a caught exception.
 - **[limitation]** `getposition(::SimStage3d)` returns a scalar (`3.0` after
   `move(s, 1.0, 2.0, 3.0)`), the value of its last assignment, while the
   interface docstring promises an `(x, y, z)` tuple (executed). A system must

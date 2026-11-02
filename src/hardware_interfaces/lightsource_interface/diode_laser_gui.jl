@@ -105,8 +105,9 @@ The textbox accepts only a number within `[first(range), last(range)]`, the
 same bounds the driver enforces; anything else is not applied and the box's
 border turns red until it is corrected. The bounds are printed beside it.
 """
-function _attach_setpoint!(fig, laser::DiodeLaser, range, startvalue, command!, describe)
+function _attach_setpoint!(fig, laser::LightSource, range, startvalue, command!, describe)
     lo, hi = first(range), last(range)
+    startvalue = isfinite(startvalue) && lo <= startvalue <= hi ? startvalue : lo
     slider = Slider(fig[2, 1], range=range, startvalue=startvalue, width=460, linewidth=24,
                     color_active=:gray, halign=:left)
     in_range(s) = (x = tryparse(Float64, s); x !== nothing && lo <= x <= hi)
@@ -143,19 +144,13 @@ failed `light_off` leaves the diode on) the toggle is put back, under a guard
 that keeps the correction from firing `light_on`/`light_off` again. Returns
 `(; toggle, status)`, the `Toggle` and the label's `Observable{String}`.
 """
-function _attach_output_toggle!(fig, row, laser::DiodeLaser, message)
+function _attach_output_toggle!(fig, row, laser::LightSource, message)
     label(is_on) = is_on ? "output on" : "output off"
     toggle = Toggle(fig[row, 1], active=laser.properties.is_on, halign=:left)
     status = Observable(label(laser.properties.is_on))
     Label(fig[row, 2], status)
     correcting = Ref(false)
-    on(toggle.active) do x
-        correcting[] && return
-        try
-            x ? light_on(laser) : light_off(laser)
-        catch e
-            message.text = "refused: " * _panel_message(e)
-        end
+    function refresh()
         is_on = laser.properties.is_on
         status[] = label(is_on)
         if toggle.active[] != is_on
@@ -166,11 +161,25 @@ function _attach_output_toggle!(fig, row, laser::DiodeLaser, message)
                 correcting[] = false
             end
         end
+        return nothing
+    end
+    # A failed level command can darken the light too. Refresh when the
+    # setpoint callback publishes its result, without issuing another command.
+    on(_ -> refresh(), message.text)
+    on(toggle.active) do x
+        correcting[] && return
+        try
+            x ? light_on(laser) : light_off(laser)
+            message.text = ""
+        catch e
+            message.text = "refused: " * _panel_message(e)
+        end
+        refresh()
     end
     return (; toggle, status)
 end
 
-function _show_panel(fig, laser::DiodeLaser)
+function _show_panel(fig, laser::LightSource)
     GLMakie.activate!(title=laser.unique_id)
     display(GLMakie.Screen(), fig)
     return fig
