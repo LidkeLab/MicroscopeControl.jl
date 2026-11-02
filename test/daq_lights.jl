@@ -303,6 +303,19 @@ end
         @test !haskey(daq.lines, DO) && isempty(daq.open_tasks)
     end
 
+    @testset "A failed second light_on keeps level commands off the line" begin
+        for T in (CrystaLaser, DaqTrLight)
+            daq = RecordingDAQ()
+            light = make_light(T, daq)
+            light_on(light)
+            fail!(daq, :write, AO)
+            @test caught(() -> light_on(light)) !== nothing
+            setpower(light, 2.5)
+            @test daq.lines[AO] == 0.0
+            @test light.level_staged
+        end
+    end
+
     @testset "Vortran off fallback and independent shutdown attempts" begin
         for ao_fails in (false, true)
             daq = RecordingDAQ()
@@ -327,7 +340,7 @@ end
             ao_fails && fail!(daq, stage, AO)
             e = caught(() -> shutdown(light))
             @test (e === nothing) == !(do_fails || ao_fails)
-            @test light.properties.is_on == (do_fails || ao_fails)
+            @test light.properties.is_on == do_fails # DO low is dark, whatever AO did
             @test light.level_requested == (ao_fails ? 2.5 : 0.0)
             expected = Any[]
             !(stage === :create && do_fails) && push!(expected, (:write, "DO", DO, 0.0))
