@@ -74,6 +74,8 @@ const frame = Ref{Any}(nothing)
 
 "Property values written by `dcamprop_setvalue`, read back by `dcamprop_getvalue` (default 0, and a 2 x 2 MONO16 image)."
 const values = Dict{Int32,Float64}()
+"Per-property read failures, including the zero returned by a failed production SDK read."
+const read_codes = Dict{Int32,Any}()
 
 "Whether the API is initialized (`dcamapi_init` and not yet `dcamapi_uninit`)."
 const api_up = Ref(false)
@@ -153,6 +155,7 @@ function reset!()
     on_prop[] = op -> nothing
     null_handle_calls[] = 0
     empty!(values)
+    empty!(read_codes)
     frame[] = nothing
     status[] = nothing
     on_status[] = () -> nothing
@@ -255,7 +258,9 @@ end
                   iProp == Int32(DCAM_IDPROP_IMAGE_HEIGHT) ? 2.0 :
                   iProp == Int32(DCAM_IDPROP_IMAGE_ROWBYTES) ? 4.0 :
                   iProp == Int32(DCAM_IDPROP_IMAGE_PIXELTYPE) ? Float64(Int32(DCAM_PIXELTYPE_MONO16)) : 0.0
-        return Main.FakeDCAM.record!("dcamprop_getvalue", DCAMERR_SUCCESS), get(Main.FakeDCAM.values, iProp, default)
+        err = Main.FakeDCAM.record!("dcamprop_getvalue", DCAMERR_SUCCESS)
+        err = get(Main.FakeDCAM.read_codes, iProp, err)
+        return err, is_failed(err) ? 0.0 : get(Main.FakeDCAM.values, iProp, default)
     end
 
     function dcamapi_init()

@@ -71,8 +71,24 @@ function save_group_recursive(h5parent, group_name::String, attributes::Dict, da
     end
 end
 
+
+# Use the filesystem rename directly: Julia 1.11's Filesystem.rename falls back to copying on an error.
+# Both the mktemp stream and the HDF5 handle must be closed first, including on Windows.
+function publish_h5(temporary::String, filename::String, overwrite::Bool)
+    if overwrite
+        ispath(filename) && @warn "Replacing existing HDF5 file" filename
+        err = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), temporary, filename)
+        err < 0 && Base.uv_error("rename HDF5 file to $(repr(filename))", err)
+    else
+        # An exclusive directory entry also protects against a file created while the task was writing.
+        hardlink(temporary, filename)
+        rm(temporary)
+    end
+    return nothing
+end
+
 """
-    save_h5(filename::String, state_data)
+    save_h5(filename::String, state_data; overwrite::Bool = true)
 
 Save the state data to an HDF5 file.
 
@@ -80,20 +96,32 @@ Save the state data to an HDF5 file.
 - `filename::String`: Path to the HDF5 file
 - `state_data`: Tuple of dictionaries containing the attributes, data, and children of the instrument.
 
-Returns the `Task` that writes the file; `wait` it before reading. An image in `data` is stored as it is, `(y, x)` or
+Copies the entire state tree before scheduling the write and returns the `Task`; `wait` it before reading.
+Writes and closes a temporary HDF5 file in the destination directory, then publishes it by rename.
+A failed write or rename removes the temporary file and preserves an earlier destination.
+`overwrite = false` refuses an existing destination before writing; replacing one emits a warning.
+[limitation] The default remains overwrite for compatibility in 0.2.x; refusing by default waits for 0.3.
+The snapshot does not synchronize concurrent device changes while `export_state` is being assembled.
+
+An image in `data` is stored as it is, `(y, x)` or
 `(y, x, frame)`, with `dimension_order` and `dimension_order_convention` attributes (see
 `save_attributes_and_data`; lab decision 0040, `docs/src/conventions.md`). Files from 2026-01-29 until this change
 carry `dimension_order = "HW"` or `"HWN"`; a reader should keep accepting both.
 """
-function save_h5(filename::String, state_data)
+function save_h5(filename::String, state_data; overwrite::Bool = true)
+    !overwrite && ispath(filename) && throw(ArgumentError("HDF5 file already exists: $filename"))
+    snapshot = deepcopy(state_data)
     @async begin
-        # Name the startigng group as "Main"
-        group = "Main"
-        # Extract the attributes, data and children from each instrument using the export_state function
-        attributes, data, children = state_data
-        # Save the attributes and data to the hdf5 file
-        save_attributes_and_data(filename, group, attributes, data, children)
-        # Declare that the data and attributes have been saved to the file
-        println("Data and attributes successfully saved to $filename")
+        temporary, stream = mktemp(dirname(abspath(filename)))
+        try
+            close(stream)
+            attributes, data, children = snapshot
+            save_attributes_and_data(temporary, "Main", attributes, data, children)
+            publish_h5(temporary, filename, overwrite)
+            println("Data and attributes successfully saved to $filename")
+        finally
+            isopen(stream) && close(stream)
+            ispath(temporary) && rm(temporary)
+        end
     end
 end

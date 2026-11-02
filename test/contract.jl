@@ -112,10 +112,11 @@ end
     # and the exclusion is gone with it, which is what makes the generic
     # assertion below cover this type. The 2-arg form was a deprecated
     # forwarder, kept until the next breaking release.
+    # Export is checked before lifecycle/GUI exclusions, including MLSLM.
     no_core_methods = Set([:MLSLM])
     no_initialize = Set([:ThorCamCSCCamera])
     no_shutdown = Set{Symbol}()
-    no_export_state = Set([:MLSLM, :Triggerscope4, :ThorCamCSCCamera])
+    no_export_state = Set([:Triggerscope4])
 
     interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG)
 
@@ -125,12 +126,11 @@ end
                 nameof(T) === :StageFormat && continue # not a device, a config format
                 nameof(T) === :_ContractDummyStage && continue # test fixture, not a device
                 T === _ShadowFixture.S && continue # shadow-guard fixture, not a device
+                nameof(T) in no_export_state || @test has_specific_method(MC.export_state, T)
                 nameof(T) in no_core_methods && continue
                 nameof(T) in no_initialize || @test has_specific_method(MC.initialize, T)
                 nameof(T) in no_shutdown || @test has_specific_method(MC.shutdown, T)
                 @test has_working_gui(T)
-                nameof(T) in no_export_state && continue
-                @test has_specific_method(MC.export_state, T)
             end
         end
     end

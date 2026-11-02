@@ -337,8 +337,8 @@ interfaces; **[limitation]** `SLMInterface`'s `displayimage(::SLM)` has an empty
 body and returns `nothing`, the one interface stub that does not throw. The lifecycle generics come from
 `AbstractInstrument` and need no redeclaration. **[limitation]** `SLM` and `TRIG`
 are **not** the template: they sit outside `AbstractInstrument`, so `MLSLM` has
-no `initialize`/`shutdown`/`export_state`/`gui` at all (`MethodError`, not the
-"not implemented" error), `Triggerscope4` has no `export_state`, neither can sit
+no `initialize`/`shutdown`/`gui` at all (`MethodError`, not the
+"not implemented" error). **[guarantee]** 0.2.7 adds cached `MLSLM.export_state`. **[limitation]** `Triggerscope4` has no `export_state`; neither can sit
 in an `AbstractInstrument`-typed field or rollback list, and Meadowlark never
 `include`s its `interface_functions.jl` so `displayimage(::MLSLM)` resolves to
 an empty-bodied `displayimage(::SLM)` (executed). Full table, the executed

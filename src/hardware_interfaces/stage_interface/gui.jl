@@ -1,3 +1,39 @@
+# Shared by all three panels; pure so invalid steps and both bounds can be checked without a window.
+valid_step(text) = (value = tryparse(Float64, text); value !== nothing && isfinite(value) && value > 0)
+target_in_range(value, limits) = isfinite(value) && limits[1] <= value <= limits[2]
+
+function step_target(target, step, direction, limits)
+    isfinite(step) && step > 0 || throw(ArgumentError("Step must be finite and positive"))
+    value = target + direction * step
+    target_in_range(value, limits) || throw(ArgumentError("Target position out of range"))
+    return value
+end
+
+# Drivers own accepted targets. In particular, a multi-axis MCL move can succeed on X before Y refuses.
+# Refresh every displayed axis even after a partial move or a failed position read; never restore stale targets.
+function on_stage(callback, observable, stage, targets, positions)
+    return on(observable) do value
+        try
+            callback(value)
+        catch e
+            @error "Stage panel command failed" exception = (e, catch_backtrace())
+        finally
+            for (i, axis) in enumerate((:x, :y, :z)[1:length(targets)])
+                targets[i][] = getfield(stage, Symbol(:targ_, axis))
+                positions[i][] = getfield(stage, Symbol(:real_, axis))
+            end
+        end
+    end
+end
+
+function panel_move!(stage, values...)
+    for (axis, value) in zip((:x, :y, :z), values)
+        target_in_range(value, getfield(stage, Symbol(:range_, axis))) ||
+            throw(ArgumentError("Target position out of range for $axis"))
+    end
+    return move(stage, values...)
+end
+
 """
     # Arguments
     - `stage::Stage`: The stage for which the GUI is to be created. The stage must have a `dimensions` field that indicates the number of dimensions it operates in (1, 2, or 3).
@@ -40,9 +76,9 @@ function gui1d(stage::Stage)
     #Set up variables for motion that will be changed
     xstepsize = Observable(0.1)
 
-    xposition = Observable(0.0)
+    xposition = Observable(stage.real_x)
 
-    xtarget = Observable(0.0)
+    xtarget = Observable(stage.targ_x)
 
     #Creating observables for the labels of the target, current position, servo and drift correction status
     targetstring = @lift begin
@@ -60,7 +96,7 @@ function gui1d(stage::Stage)
     targettb = Textbox(stage_gui_fig[1, 2], placeholder="Enter X", width=220)
 
     #Callback function to change the target position
-    on(targettb.stored_string) do target_change
+    on_stage(targettb.stored_string, stage, (xtarget,), (xposition,)) do target_change
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -73,10 +109,7 @@ function gui1d(stage::Stage)
             return
         end
 
-        stage.targ_x = x
-        xtarget[] = x
-
-        move(stage, stage.targ_x)
+        panel_move!(stage, x)
     end
 
     Label(stage_gui_fig[1, 3], targetstring)
@@ -89,54 +122,43 @@ function gui1d(stage::Stage)
 
     x_arrow_buttons = x_arrow_grid[1, 1:3] = [Button(stage_gui_fig, label=xbuttonlabels[i], width=100) for i in 1:3]
 
-    xsteptb = Textbox(stage_gui_fig[2, 3], placeholder="0.1", validator=Float64)
+    xsteptb = Textbox(stage_gui_fig[2, 3], placeholder="0.1", validator=valid_step)
 
     #Callback functions to change the step size using the text boxes
-    on(xsteptb.stored_string) do xstep_change
+    on_stage(xsteptb.stored_string, stage, (xtarget,), (xposition,)) do xstep_change
+        valid_step(xstep_change) || throw(ArgumentError("Step must be finite and positive"))
         xstepsize[] = parse(Float64, xstep_change)
     end
 
     #Define the callback functions for the arrow buttons
-    on(x_arrow_buttons[1].clicks) do x_left_click
+    on_stage(x_arrow_buttons[1].clicks, stage, (xtarget,), (xposition,)) do x_left_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_x - xstepsize[] < stage.range_x[1]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_x -= xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x)
+        candidate = step_target(stage.targ_x, xstepsize[], -1, stage.range_x)
+        panel_move!(stage, candidate)
     end
-    on(x_arrow_buttons[2].clicks) do return_home_click
+    on_stage(x_arrow_buttons[2].clicks, stage, (xtarget,), (xposition,)) do return_home_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
         home(stage)
-        xtarget[], ytarget[] = stage.targ_x, stage.targ_y
+        xtarget[] = stage.targ_x
     end
 
 
-    on(x_arrow_buttons[3].clicks) do x_right_click
+    on_stage(x_arrow_buttons[3].clicks, stage, (xtarget,), (xposition,)) do x_right_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_x + xstepsize[] > stage.range_x[2]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_x += xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x)
+        candidate = step_target(stage.targ_x, xstepsize[], 1, stage.range_x)
+        panel_move!(stage, candidate)
     end
 
     #Create a button to query current position, initialize, shutdown, or stop motion 
@@ -146,7 +168,7 @@ function gui1d(stage::Stage)
     control_buttons = control_grid[1:2, 1:2] = [Button(stage_gui_fig, label=control_labels[i], width=150) for i in 1:4]
 
 
-    on(control_buttons[1].clicks) do query_position_click
+    on_stage(control_buttons[1].clicks, stage, (xtarget,), (xposition,)) do query_position_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -155,7 +177,7 @@ function gui1d(stage::Stage)
         getposition(stage)
         xposition[] = stage.real_x
     end
-    on(control_buttons[2].clicks) do stop_motion_click
+    on_stage(control_buttons[2].clicks, stage, (xtarget,), (xposition,)) do stop_motion_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -163,14 +185,14 @@ function gui1d(stage::Stage)
 
         stopmotion(stage)
     end
-    on(control_buttons[3].clicks) do initialize_click
+    on_stage(control_buttons[3].clicks, stage, (xtarget,), (xposition,)) do initialize_click
         MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[] = stage.real_x
         xtarget[] = stage.targ_x
 
     end
-    on(control_buttons[4].clicks) do shutdown_click
+    on_stage(control_buttons[4].clicks, stage, (xtarget,), (xposition,)) do shutdown_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -203,7 +225,7 @@ function gui1d(stage::Stage)
         stage_gui_fig[5, 2] = servo_control_button = Button(stage_gui_fig, label="Toggle Servo", width=200)
         Label(stage_gui_fig[5, 3], servostring)
 
-        on(servo_control_button.clicks) do servo_control_click
+        on_stage(servo_control_button.clicks, stage, (xtarget,), (xposition,)) do servo_control_click
             if stage.connectionstatus == false
                 @error "Stage not connected"
                 return
@@ -235,7 +257,7 @@ function gui1d(stage::Stage)
         stage_gui_fig[6, 2] = drift_control_button = Button(stage_gui_fig, label="Toggle Drift Correction", width=200)
         Label(stage_gui_fig[6, 3], driftstring)
 
-        on(drift_control_button.clicks) do drift_control_click
+        on_stage(drift_control_button.clicks, stage, (xtarget,), (xposition,)) do drift_control_click
             if stage.connectionstatus == false
                 @error "Stage not connected"
                 return
@@ -275,11 +297,11 @@ function gui2d(stage::Stage)
     xstepsize = Observable(0.1)
     ystepsize = Observable(0.1)
 
-    xposition = Observable(0.0)
-    yposition = Observable(0.0)
+    xposition = Observable(stage.real_x)
+    yposition = Observable(stage.real_y)
 
-    xtarget = Observable(0.0)
-    ytarget = Observable(0.0)
+    xtarget = Observable(stage.targ_x)
+    ytarget = Observable(stage.targ_y)
 
     #Creating observables for the labels of the target, current position, servo and drift correction status
     targetstring = @lift begin
@@ -300,7 +322,7 @@ function gui2d(stage::Stage)
     targettb = Textbox(stage_gui_fig[1, 2:3], placeholder="Enter (X,Y)", width=200)
 
     #Callback function to change the target position
-    on(targettb.stored_string) do target_change
+    on_stage(targettb.stored_string, stage, (xtarget, ytarget), (xposition, yposition)) do target_change
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -315,10 +337,7 @@ function gui2d(stage::Stage)
             return
         end
 
-        stage.targ_x, stage.targ_y = x, y
-        xtarget[], ytarget[] = x, y
-
-        move(stage, stage.targ_x, stage.targ_y)
+        panel_move!(stage, x, y)
     end
 
     Label(stage_gui_fig[1, 4], targetstring)
@@ -328,15 +347,17 @@ function gui2d(stage::Stage)
     Label(stage_gui_fig[2, 1], "X Axis Control")
     Label(stage_gui_fig[2, 3], "Y Axis Control")
 
-    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=Float64)
-    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=Float64)
+    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=valid_step)
+    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=valid_step)
 
     #Callback functions to change the step size using the text boxes
-    on(xsteptb.stored_string) do xstep_change
+    on_stage(xsteptb.stored_string, stage, (xtarget, ytarget), (xposition, yposition)) do xstep_change
+        valid_step(xstep_change) || throw(ArgumentError("Step must be finite and positive"))
         xstepsize[] = parse(Float64, xstep_change)
     end
 
-    on(ysteptb.stored_string) do ystep_change
+    on_stage(ysteptb.stored_string, stage, (xtarget, ytarget), (xposition, yposition)) do ystep_change
+        valid_step(ystep_change) || throw(ArgumentError("Step must be finite and positive"))
         ystepsize[] = parse(Float64, ystep_change)
     end
 
@@ -354,70 +375,46 @@ function gui2d(stage::Stage)
     homebutton = Button(arrow_grid[2, 2], label=homebuttonlabel, width=100)
 
     #Define the callback functions for the arrow buttons
-    on(x_left.clicks) do x_left_click
+    on_stage(x_left.clicks, stage, (xtarget, ytarget), (xposition, yposition)) do x_left_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_x - xstepsize[] < stage.range_x[1]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_x -= xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x, stage.targ_y)
+        candidate = step_target(stage.targ_x, xstepsize[], -1, stage.range_x)
+        panel_move!(stage, candidate, stage.targ_y)
     end
-    on(x_right.clicks) do x_right_click
+    on_stage(x_right.clicks, stage, (xtarget, ytarget), (xposition, yposition)) do x_right_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_x + xstepsize[] > stage.range_x[2]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_x += xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x, stage.targ_y)
+        candidate = step_target(stage.targ_x, xstepsize[], 1, stage.range_x)
+        panel_move!(stage, candidate, stage.targ_y)
     end
 
-    on(y_down.clicks) do y_down_click
+    on_stage(y_down.clicks, stage, (xtarget, ytarget), (xposition, yposition)) do y_down_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_y - ystepsize[] < stage.range_y[1]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_y -= ystepsize[]
-        ytarget[] = stage.targ_y
-        move(stage, stage.targ_x, stage.targ_y)
+        candidate = step_target(stage.targ_y, ystepsize[], -1, stage.range_y)
+        panel_move!(stage, stage.targ_x, candidate)
     end
 
-    on(y_up.clicks) do y_right_click
+    on_stage(y_up.clicks, stage, (xtarget, ytarget), (xposition, yposition)) do y_right_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_y + ystepsize[] > stage.range_y[2]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_y += ystepsize[]
-        ytarget[] = stage.targ_y
-        move(stage, stage.targ_x, stage.targ_y)
+        candidate = step_target(stage.targ_y, ystepsize[], 1, stage.range_y)
+        panel_move!(stage, stage.targ_x, candidate)
     end
 
-    on(homebutton.clicks) do return_home_click
+    on_stage(homebutton.clicks, stage, (xtarget, ytarget), (xposition, yposition)) do return_home_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -434,7 +431,7 @@ function gui2d(stage::Stage)
     control_buttons = control_grid[1:2, 1:2] = [Button(stage_gui_fig, label=control_labels[i], width=150) for i in 1:4]
 
 
-    on(control_buttons[1].clicks) do query_position_click
+    on_stage(control_buttons[1].clicks, stage, (xtarget, ytarget), (xposition, yposition)) do query_position_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -444,7 +441,7 @@ function gui2d(stage::Stage)
         xposition[] = stage.real_x
         yposition[] = stage.real_y
     end
-    on(control_buttons[2].clicks) do stop_motion_click
+    on_stage(control_buttons[2].clicks, stage, (xtarget, ytarget), (xposition, yposition)) do stop_motion_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -452,14 +449,14 @@ function gui2d(stage::Stage)
 
         stopmotion(stage)
     end
-    on(control_buttons[3].clicks) do initialize_click
+    on_stage(control_buttons[3].clicks, stage, (xtarget, ytarget), (xposition, yposition)) do initialize_click
         MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[], yposition[] = stage.real_x, stage.real_y
         xtarget[], ytarget[] = stage.targ_x, stage.targ_y
 
     end
-    on(control_buttons[4].clicks) do shutdown_click
+    on_stage(control_buttons[4].clicks, stage, (xtarget, ytarget), (xposition, yposition)) do shutdown_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -497,7 +494,7 @@ function gui2d(stage::Stage)
         stage_gui_fig[9, 2:3] = servo_control_button = Button(stage_gui_fig, label="Toggle Servo", width=200)
         Label(stage_gui_fig[9, 4], servostring)
 
-        on(servo_control_button.clicks) do servo_control_click
+        on_stage(servo_control_button.clicks, stage, (xtarget, ytarget), (xposition, yposition)) do servo_control_click
             if stage.connectionstatus == false
                 @error "Stage not connected"
                 return
@@ -529,7 +526,7 @@ function gui2d(stage::Stage)
         stage_gui_fig[10, 2:3] = drift_control_button = Button(stage_gui_fig, label="Toggle Drift Correction", width=200)
         Label(stage_gui_fig[10, 4], driftstring)
 
-        on(drift_control_button.clicks) do drift_control_click
+        on_stage(drift_control_button.clicks, stage, (xtarget, ytarget), (xposition, yposition)) do drift_control_click
             if stage.connectionstatus == false
                 @error "Stage not connected"
                 return
@@ -560,13 +557,13 @@ function gui3d(stage::Stage)
     ystepsize = Observable(0.1)
     zstepsize = Observable(0.1)
 
-    xposition = Observable(0.0)
-    yposition = Observable(0.0)
-    zposition = Observable(0.0)
+    xposition = Observable(stage.real_x)
+    yposition = Observable(stage.real_y)
+    zposition = Observable(stage.real_z)
 
-    xtarget = Observable(0.0)
-    ytarget = Observable(0.0)
-    ztarget = Observable(0.0)
+    xtarget = Observable(stage.targ_x)
+    ytarget = Observable(stage.targ_y)
+    ztarget = Observable(stage.targ_z)
 
     #Creating observables for the labels of the target, current position, servo and drift correction status
     targetstring = @lift begin
@@ -589,7 +586,7 @@ function gui3d(stage::Stage)
     targettb = Textbox(stage_gui_fig[1, 2:3], placeholder="Enter (X,Y,Z)", width=200)
 
     #Callback function to change the target position
-    on(targettb.stored_string) do target_change
+    on_stage(targettb.stored_string, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do target_change
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -605,10 +602,7 @@ function gui3d(stage::Stage)
             return
         end
 
-        stage.targ_x, stage.targ_y, stage.targ_z = x, y, z
-        xtarget[], ytarget[], ztarget[] = x, y, z
-
-        move(stage, stage.targ_x, stage.targ_y, stage.targ_z)
+        panel_move!(stage, x, y, z)
     end
 
     Label(stage_gui_fig[1, 4], targetstring)
@@ -619,20 +613,23 @@ function gui3d(stage::Stage)
     Label(stage_gui_fig[2, 3], "Y Axis Control")
     Label(stage_gui_fig[2, 5], "Z Axis Control")
 
-    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=Float64)
-    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=Float64)
-    zsteptb = Textbox(stage_gui_fig[2, 6], placeholder="0.1", validator=Float64)
+    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=valid_step)
+    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=valid_step)
+    zsteptb = Textbox(stage_gui_fig[2, 6], placeholder="0.1", validator=valid_step)
 
     #Callback functions to change the step size using the text boxes
-    on(xsteptb.stored_string) do xstep_change
+    on_stage(xsteptb.stored_string, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do xstep_change
+        valid_step(xstep_change) || throw(ArgumentError("Step must be finite and positive"))
         xstepsize[] = parse(Float64, xstep_change)
     end
 
-    on(ysteptb.stored_string) do ystep_change
+    on_stage(ysteptb.stored_string, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do ystep_change
+        valid_step(ystep_change) || throw(ArgumentError("Step must be finite and positive"))
         ystepsize[] = parse(Float64, ystep_change)
     end
 
-    on(zsteptb.stored_string) do zstep_change
+    on_stage(zsteptb.stored_string, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do zstep_change
+        valid_step(zstep_change) || throw(ArgumentError("Step must be finite and positive"))
         zstepsize[] = parse(Float64, zstep_change)
     end
 
@@ -650,70 +647,46 @@ function gui3d(stage::Stage)
     homebutton = Button(arrow_grid[2, 2], label=homebuttonlabel, width=100)
 
     #Define the callback functions for the arrow buttons
-    on(x_left.clicks) do x_left_click
+    on_stage(x_left.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do x_left_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_x - xstepsize[] < stage.range_x[1]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_x -= xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x, stage.targ_y, stage.targ_z)
+        candidate = step_target(stage.targ_x, xstepsize[], -1, stage.range_x)
+        panel_move!(stage, candidate, stage.targ_y, stage.targ_z)
     end
-    on(x_right.clicks) do x_right_click
+    on_stage(x_right.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do x_right_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_x + xstepsize[] > stage.range_x[2]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_x += xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x, stage.targ_y, stage.targ_z)
+        candidate = step_target(stage.targ_x, xstepsize[], 1, stage.range_x)
+        panel_move!(stage, candidate, stage.targ_y, stage.targ_z)
     end
 
-    on(y_down.clicks) do y_down_click
+    on_stage(y_down.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do y_down_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_y - ystepsize[] < stage.range_y[1]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_y -= ystepsize[]
-        ytarget[] = stage.targ_y
-        move(stage, stage.targ_x, stage.targ_y, stage.targ_z)
+        candidate = step_target(stage.targ_y, ystepsize[], -1, stage.range_y)
+        panel_move!(stage, stage.targ_x, candidate, stage.targ_z)
     end
 
-    on(y_up.clicks) do y_right_click
+    on_stage(y_up.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do y_right_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_y + ystepsize[] > stage.range_y[2]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_y += ystepsize[]
-        ytarget[] = stage.targ_y
-        move(stage, stage.targ_x, stage.targ_y, stage.targ_z)
+        candidate = step_target(stage.targ_y, ystepsize[], 1, stage.range_y)
+        panel_move!(stage, stage.targ_x, candidate, stage.targ_z)
     end
 
-    on(homebutton.clicks) do return_home_click
+    on_stage(homebutton.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do return_home_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -734,36 +707,24 @@ function gui3d(stage::Stage)
     z_down = Button(z_arrow_grid[2, 1], label=zbuttonlabels[2], width=50, height=80)
 
     #Define the callback functions for the arrow buttons
-    on(z_down.clicks) do z_down_click
+    on_stage(z_down.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do z_down_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_z - zstepsize[] < stage.range_z[1]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_z -= zstepsize[]
-        ztarget[] = stage.targ_z
-        move(stage, stage.targ_x, stage.targ_y, stage.targ_z)
+        candidate = step_target(stage.targ_z, zstepsize[], -1, stage.range_z)
+        panel_move!(stage, stage.targ_x, stage.targ_y, candidate)
     end
 
-    on(z_up.clicks) do z_up_click
+    on_stage(z_up.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do z_up_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
         end
 
-        if stage.targ_z + zstepsize[] > stage.range_z[2]
-            @error "Target position out of range"
-            return
-        end
-
-        stage.targ_z += zstepsize[]
-        ztarget[] = stage.targ_z
-        move(stage, stage.targ_x, stage.targ_y, stage.targ_z)
+        candidate = step_target(stage.targ_z, zstepsize[], 1, stage.range_z)
+        panel_move!(stage, stage.targ_x, stage.targ_y, candidate)
     end
 
     Label(stage_gui_fig[6, 5:6], "Z Axis Control")
@@ -775,7 +736,7 @@ function gui3d(stage::Stage)
     control_buttons = control_grid[1:2, 1:2] = [Button(stage_gui_fig, label=control_labels[i], width=150) for i in 1:4]
 
 
-    on(control_buttons[1].clicks) do query_position_click
+    on_stage(control_buttons[1].clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do query_position_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -786,7 +747,7 @@ function gui3d(stage::Stage)
         yposition[] = stage.real_y
         zposition[] = stage.real_z
     end
-    on(control_buttons[2].clicks) do stop_motion_click
+    on_stage(control_buttons[2].clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do stop_motion_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -794,14 +755,14 @@ function gui3d(stage::Stage)
 
         stopmotion(stage)
     end
-    on(control_buttons[3].clicks) do initialize_click
+    on_stage(control_buttons[3].clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do initialize_click
         MicroscopeControl.gui_initialize(stage, "stage") || return
         getposition(stage)
         xposition[], yposition[], zposition[] = stage.real_x, stage.real_y, stage.real_z
         xtarget[], ytarget[], ztarget[] = stage.targ_x, stage.targ_y, stage.targ_z
 
     end
-    on(control_buttons[4].clicks) do shutdown_click
+    on_stage(control_buttons[4].clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do shutdown_click
         if stage.connectionstatus == false
             @error "Stage not connected"
             return
@@ -839,7 +800,7 @@ function gui3d(stage::Stage)
         stage_gui_fig[10, 2:3] = servo_control_button = Button(stage_gui_fig, label="Toggle Servo", width=200)
         Label(stage_gui_fig[10, 4], servostring)
 
-        on(servo_control_button.clicks) do servo_control_click
+        on_stage(servo_control_button.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do servo_control_click
             if stage.connectionstatus == false
                 @error "Stage not connected"
                 return
@@ -871,7 +832,7 @@ function gui3d(stage::Stage)
         stage_gui_fig[11, 2:3] = drift_control_button = Button(stage_gui_fig, label="Toggle Drift Correction", width=200)
         Label(stage_gui_fig[11, 4], driftstring)
 
-        on(drift_control_button.clicks) do drift_control_click
+        on_stage(drift_control_button.clicks, stage, (xtarget, ytarget, ztarget), (xposition, yposition, zposition)) do drift_control_click
             if stage.connectionstatus == false
                 @error "Stage not connected"
                 return

@@ -55,11 +55,9 @@ Methods called: `capture` (**its return value is used as the frame**),
 `start_live`/`start_sequence`. `DCAM4Camera`, `SimCamera`, `ThorCamCSCCamera`,
 `ThorcamDCXCamera` all carry every field (executed), but **presence is
 necessary, not sufficient**: the CSC types above break the panel even though
-`hasfield` passes for all seven. Check types, not just names. `[limitation]` the
-mode-dropdown callback assigns to a `camera` name outside its scope
-(`create_menu`), so the dropdowns are not a reliable way to change mode; and
-because `capture(::SimCamera)` returns an enum, "Start Capture" only works for
-cameras whose `capture` returns the frame.
+`hasfield` passes for all seven. Check types, not just names. **[guarantee]** (0.2.7) each mode dropdown updates its own field on the supplied camera; camera action/setting callbacks log errors without letting them escape into Makie. **[limitation]** because `capture(::SimCamera)` returns an enum, "Start Capture" only works for cameras whose `capture` returns the frame.
+
+**[guarantee]** shared 1D/2D/3D stage panels accept only finite, positive steps, check both target limits, and send proposed coordinates before changing displayed targets. Callback errors are logged and displayed positions/targets are refreshed from the driver, including partial MCL moves.
 
 ## `gui(::LightSource)` and `gui(::Attenuator)`
 

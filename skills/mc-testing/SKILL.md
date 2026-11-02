@@ -173,8 +173,7 @@ end
 ```
 
 All 24 assertions pass for these six types (executed). Substitute your rig's
-types; today the same loop fails for `ThorCamCSCCamera` (`initialize`,
-`export_state`), naming the device that would throw during `shutdown` before it
+types; today the same loop fails for `ThorCamCSCCamera` (`initialize`; **[guarantee]** 0.2.7 implements its `export_state`), naming the device that would throw during `shutdown` before it
 does. `TCubeLaser` failed the `export_state` assertion too until **v0.2.3**, whose
 `export_state(::TCubeLaser)` is the 1-argument method that was missing; the old
 `export_state(::TCubeLaser, sth)` stays as a deprecated forwarder in
@@ -304,8 +303,7 @@ because nothing above touches it:
   state the next acquisition can use (the Sim cannot show this). (Opening a
   light panel no longer commands power as of 0.2.1, so that is no longer a
   hardware-acceptance item — see the GUI smoke test section above.)
-- SDK failure paths: what `capture` returns on failure per driver (`nothing`,
-  or `ThorCamCSCCamera`'s silent all-zero frame);
+- **[policy]** check SDK failure paths: **[guarantee]** (0.2.7) CSC `capture`/`getdata` throw with `last_error` set; **[limitation]** CSC `getlastframe` still returns a zero-frame fallback. DCAM setup read-back failures also throw; later DCAM acquisition failures may return `nothing` or throw.
 - shared-connection ownership: two attenuators on one `Triggerscope4`, and that
   `shutdown(att)` means 0 V, full transmission, on an LCC1620;
 - that saved attributes are readbacks where you assumed they were.

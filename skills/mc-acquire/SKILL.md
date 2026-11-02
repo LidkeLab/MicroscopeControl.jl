@@ -106,7 +106,7 @@ from each driver's `interface_methods.jl`; only the Sim row was executed.
 | `SimCamera` | the enum, not a frame | the frame. This is the only driver where this is the right call. |
 | `DCAM4Camera` | the frame `(H, W)`, after allocating one buffer, snapping, reading, and **releasing** the buffer | waits on a cycle-end event for an acquisition that no longer exists, then copies from released buffers. Do not call it. |
 | `ThorcamDCXCamera` | the frame, then frees the image memory | in any mode reads `sequence_length` frames from `pImage_Mem` and calls `abort`; only valid after `sequence`. |
-| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch loops `getlastframe` `sequence_length` times, so it has the same limit. |
+| `ThorCamCSCCamera` | **[guarantee]** the frame after arm and software trigger; throws on a failed read or timeout | **[guarantee]** polls for another frame; throws if none arrives. In `SEQUENCE`, throws naming the missing frame and never returns an incomplete stack. **[limitation]** does not cache the frame returned by `capture`. |
 
 So on every hardware driver in the package, the frame is the **return value of
 `capture`**, and `getdata` is for sequences. **[policy]** Put the difference in one place in your
@@ -124,7 +124,7 @@ value differs:
 |---|---|
 | `DCAM4Camera` | logs `@error`, sets `cam.last_error`, returns `nothing` (or the copy step returns `nothing` with `@error "DCAM Failed to Copy Frame"`) |
 | `ThorcamDCXCamera` | logs `@error`, returns `nothing` |
-| `ThorCamCSCCamera` | **returns `zeros(UInt16, roi.height, roi.width)`**. `getlastframe` substitutes an all-zero image whenever the frame fetch yields nothing, and that happens on two paths (`thorcamcsc_camcontrol.jl`): the SDK call fails (logged, `@error "Frame not collected"`), or the SDK call succeeds but hands back a null buffer (**not logged at all**). So the placeholder can arrive silently. A `=== nothing` check passes it as valid data, and the log cannot be relied on. The only detection is `all(iszero, frame)`, and that is a heuristic: a genuinely black frame is indistinguishable from the placeholder. Treat an all-zero CSC frame as suspect, not as data. |
+| `ThorCamCSCCamera` | **[guarantee]** `capture` and `getdata` throw on SDK read failure or poll timeout, with `last_error` set (SDK code, or driver sentinel `-1` for a null buffer). **[limitation]** only `getlastframe` keeps the zero-frame fallback in 0.2.x; inspect `last_error`, since a zero-valued image may also be a valid frame. |
 | `SimCamera` | cannot fail |
 
 A zero-filled frame in a z-stack is a worse failure than a thrown error, because it
@@ -145,9 +145,9 @@ type or unit of `exposure_time`, nor the ROI origin convention. Per driver (from
 | Driver | `exposure_time` field | Unit at the SDK | Pushing the field to hardware | ROI offsets |
 |---|---|---|---|---|
 | `SimCamera` | `Float64`, default `0.1` | seconds (used as a `sleep` in `getlastframe`) | not needed; read on every call. `setexposuretime!`/`setroi!`/`settriggermode!` **throw** | `x_start`/`y_start` ignored; only `width`/`height` matter |
-| `DCAM4Camera` | `Float64`, read from `DCAM_IDPROP_EXPOSURETIME` at construction | seconds (DCAM property) | `setexposuretime!(cam)`, `setroi!(cam)`, `settriggermode!(cam)` implemented, and called by `capture`/`live`/`sequence` themselves, so assigning the field before the acquisition call suffices | `x_start`/`y_start` forwarded unchanged to `DCAM_IDPROP_SUBARRAYHPOS`/`VPOS`; the SDK's origin convention applies, and the driver `@warn`s if the SDK rounds them |
+| `DCAM4Camera` | `Float64`, read from `DCAM_IDPROP_EXPOSURETIME` at construction | seconds (DCAM property) | `setexposuretime!(cam)`, `setroi!(cam)`, `settriggermode!(cam)` implemented, and called by `capture`/`live`/`sequence` themselves, so assigning the field before the acquisition call suffices | `x_start`/`y_start` forwarded unchanged to `DCAM_IDPROP_SUBARRAYHPOS`/`VPOS`; **[guarantee]** offsets are 0-based; a failed read-back throws without replacing the request with a failed read's zero; a rounded ROI is recorded before throwing |
 | `ThorcamDCXCamera` | `Float64`, default `0.01` | seconds in the field, multiplied by `1e3` to milliseconds at the SDK | `setexposuretime!`, `setroi!` implemented; `capture` calls both | `x_start` forwarded unchanged to `s32X`; SDK convention applies |
-| `ThorCamCSCCamera` | `Clonglong`, default `40` | forwarded to the SDK **unconverted**; the SDK's own unit applies | `setexposuretime!(cam, ::Int)` only; `capture` calls the internal setter | not forwarded by the driver |
+| `ThorCamCSCCamera` | `Clonglong`, default `40` | microseconds, forwarded unchanged | **[guarantee]** `setexposuretime!(cam, ::Int64)` records only after SDK success; acquisition re-applies it. Poll timeout is rounded up from `2 * exposure + 1 s`, bounded by `Cint` | **[guarantee]** 1-based software crop; not forwarded to the SDK |
 
 Consequences: `cam.exposure_time = 0.02` is correct for Sim, DCAM4 and DCX and is an
 `InexactError` on `ThorCamCSCCamera`, whose field is an integer. Do not write
@@ -166,13 +166,13 @@ is per driver**:
 | Driver | Frame size returned |
 |---|---|
 | `SimCamera` | `(roi.height, roi.width)` (executed) |
-| `DCAM4Camera` | the SDK's current sub-array, `(height, width)` from `dcamprop_getsize`, which is the ROI as the SDK accepted it (the driver `@warn`s if the SDK rounded your offsets) |
+| `DCAM4Camera` | the SDK's current sub-array, `(height, width)` from `dcamprop_getsize`, which is the ROI as the SDK accepted it (the driver records the accepted ROI and throws if it differs from the request) |
 | `ThorcamDCXCamera` | `(roi.height, roi.width)`; `capture` allocates image memory of exactly that size |
-| `ThorCamCSCCamera` | `(roi.height, roi.width)` (tested through a replaced `getlastframeornothing`). **[limitation]** The driver never forwards `roi` to the SDK, which always delivers the full sensor (`camera_format`, default 1440 x 1080): the driver converts the full frame and crops it to `roi` in software (`x_start`, `y_start` 1-based), so a small `roi` is no faster, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `camera_format` must state the sensor the camera delivers: the driver does not ask the SDK, so a larger value reads past the SDK's buffer. |
+| `ThorCamCSCCamera` | `(roi.height, roi.width)` (tested through a replaced raw pending-frame SDK call). **[limitation]** The driver never forwards `roi` to the SDK, which always delivers the full sensor (`camera_format`, default 1440 x 1080): the driver converts the full frame and crops it to `roi` in software (`x_start`, `y_start` 1-based), so a small `roi` is no faster, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `camera_format` must state the sensor the camera delivers: the driver does not ask the SDK, so a larger value reads past the SDK's buffer. |
 
 Preallocate from the first returned frame (`similar(frame, size(frame)..., N)`)
 rather than from `roi` where the driver is not known to honour it. Whether `x_start = 1` means the
-first column or the second depends on the SDK the driver forwards it to; the
+first column or the second depends on the driver: DCAM4 is 0-based and CSC is 1-based; their exports record `roi_origin`; the
 interface does not define a 1-based origin. Keep the `(H, W[, N])` storage convention (below) separate
 from SDK coordinate conventions: the first is enforced by the drivers at the DLL
 boundary, the second is not.
@@ -311,3 +311,5 @@ coordinate origins or exposure units (see above).
 - **SLM is the exception:** `MLSLM` holds `phase::Array{Float64,2}` allocated as
   `zeros(width, height)`, so for SLM patterns dim 1 is x. Do not feed a camera
   `(H, W)` frame to the SLM without `permutedims`.
+
+**[guarantee]** (0.2.7, fake SDK tests) `PIStage.move`, `moveandwait`, `movex`, and `movey` throw on a refused `PI_MOV` before recording targets. MCL negative position/calibration returns throw; writes record targets only on `MCL_SUCCESS`. **[limitation]** multi-axis MCL moves can partially succeed before an axis fails; inspect each accepted target. **[guarantee]** shared stage panels catch command errors, refresh displayed targets from the driver, and reject non-finite/non-positive steps and targets outside either limit.

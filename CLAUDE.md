@@ -84,7 +84,7 @@ Interfaces define method signatures with throwing `error("<name> not implemented
 
 ### Data Persistence
 
-`h5_file_saving.jl` provides `save_h5(filename, state_tuple)`, where `state_tuple` is the `(attributes, data, children)` tuple returned by `export_state` (not the device itself). It runs on an `@async` task and returns that `Task`; `wait` it before reading the file. The synchronous form is `save_attributes_and_data(filename, group, attributes, data, children)`; `save_h5` calls it with `group = "Main"`. Children are further `(attributes, data, children)` tuples, written recursively as HDF5 groups.
+`h5_file_saving.jl` provides `save_h5(filename, state_tuple)`, where `state_tuple` is the `(attributes, data, children)` tuple returned by `export_state` (not the device itself). It copies the full supplied tree before scheduling an `@async` task and returns that `Task`; `wait` it before reading the file. It writes/closes a temporary file in the destination directory and publishes only on success; failures preserve earlier files. `overwrite::Bool=true` stays the default for 0.2.x compatibility (replacement warns); `false` refuses an existing destination. The synchronous form is `save_attributes_and_data(filename, group, attributes, data, children)`; `save_h5` calls it with `group = "Main"`. Children are further `(attributes, data, children)` tuples, written recursively as HDF5 groups.
 
 ### Adding New Hardware
 

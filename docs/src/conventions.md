@@ -47,3 +47,9 @@ recognizes the missing attribute and converts data and maps together, once, at l
 ```@docs
 MicroscopeControl.HardwareInterfaces.CameraInterface.rowmajor_to_yx
 ```
+
+## Camera ROI and saved state
+
+`CameraROI` offsets remain driver-specific: DCAM4 uses 0-based SDK offsets; ThorCam CSC uses 1-based offsets for a software crop. Their `export_state` attributes record `roi_origin` as 0 and 1 respectively. No coordinate conversion is introduced in 0.2.7. CSC exposure is in microseconds; its poll timeout is rounded up from two exposures plus one second. `capture` and `getdata` throw when a CSC frame is missing; only `getlastframe` retains a zero-frame fallback, with `last_error` set.
+
+`save_h5(filename, state; overwrite=true)` snapshots the supplied state before scheduling its returned `Task`. It writes a temporary file in the destination directory, closes it, then publishes it. A failed write or publication removes the temporary file and leaves an earlier destination intact. Replacing an existing file warns; `overwrite=false` refuses one before any write. Overwrite remains the default for 0.2.x compatibility; changing the default waits for 0.3. This snapshot does not synchronize the device reads that assembled `state`.

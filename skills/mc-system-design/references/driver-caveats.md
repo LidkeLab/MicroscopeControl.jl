@@ -61,9 +61,9 @@ Each is confirmed by the exception sets in upstream `test/contract.jl`
 
 | Device | Missing | What the call does |
 |---|---|---|
-| `ThorCamCSCCamera` | `initialize`, `export_state` | throws (`AbstractInstrument`/`Camera` stub, `ErrorException("... not implemented ...")`) |
+| `ThorCamCSCCamera` | `initialize` | throws (`AbstractInstrument`/`Camera` stub, `ErrorException("... not implemented ...")`) |
 | `Triggerscope4` | `export_state` | `TRIG` is outside `AbstractInstrument`, so there is no fallback at all: plain `MethodError` (executed: `hasmethod(export_state, Tuple{Triggerscope4})` is `false`) |
-| `MLSLM` | `initialize`, `shutdown`, `export_state`, `gui` | `MethodError` for all four (executed) |
+| `MLSLM` | `initialize`, `shutdown`, `gui` | **[limitation]** `MethodError` for all three; **[guarantee]** 0.2.7 adds `export_state` for cached configuration, phase, offset, and sequence data without SDK calls. |
 
 `TCubeLaser` was in this table up to v0.2.2: its only `export_state` was
 `export_state(::TCubeLaser, sth)`, with an unused second positional argument, so
@@ -149,6 +149,8 @@ whole scope of the fix -- `gui(::DAQ)` still queries `showdevices` and
 (`current_panel` or `power_panel`, by mode), which issues no command and no read
 on open **[guarantee]**.
 
+**[guarantee]** (0.2.7) CSC exports exposure (microseconds), ROI, `roi_origin=1`, modes and acquisition state; DCAM4 exports `roi_origin=0`. These are cached settings, not synchronized hardware readbacks.
+
 ## `save_h5` facts
 
 - The root group is always `Main`. Device groups take the `children` keys you chose.
@@ -156,7 +158,8 @@ on open **[guarantee]**.
   returns a `Task` (`@async`). `wait` it before reading the file or exiting.
   `save_attributes_and_data(filename, "Main", attributes, data, children)` is
   the synchronous form.
-- The file is opened with `"w"`, so each save overwrites.
+- **[guarantee]** `save_h5` copies the full state tree before scheduling, writes and closes a temporary file in the destination directory, then publishes it. Failure removes the temporary file and preserves an earlier destination. Replacing a file warns.
+- **[limitation]** overwrite remains the default for 0.2.x compatibility; `overwrite=false` refuses an existing file before writing (also refuses a competing publication). Refusing by default waits for 0.3. The synchronous `save_attributes_and_data` still writes directly with `"w"`.
 - `data` goes to a dataset named `data` in the node's group. For 2-D and 3-D
   arrays it gets attributes `dimension_order` (`"y,x"` or `"y,x,frame"`),
   `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`,

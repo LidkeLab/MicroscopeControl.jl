@@ -199,8 +199,7 @@ Each is stated as what the code does today; the label says how far to trust it.
    strong boundary: drivers describe themselves, the system assembles a
    meaningful record, the writer persists it. It does **not** make
    `export_state` an inverse of `set_state`, promise a hardware readback, or
-   produce an atomic snapshot: `save_h5` is `@async` and opens the file with
-   `"w"`. **[policy]** decide when you snapshot and mark what is missing, and
+   synchronize a snapshot across devices. **[guarantee]** `save_h5` copies the supplied state tree before scheduling its `Task`, writes a temporary file, closes it, and publishes it in the same directory. A failed write preserves an earlier destination. **[limitation]** overwrite remains the default in 0.2.x for compatibility (with a warning); pass `overwrite=false` to refuse an existing file. Refusing by default waits for 0.3. **[policy]** decide when you snapshot and mark what is missing, and
    build your own dictionaries as `Dict{String,Any}`: the tuple and tree shape
    is the guarantee, the concrete `Dict` parameters are not (`export_state(NIdaq())`
    returns `Dict{String,String}` attributes and `Dict{Any,Any}` children;

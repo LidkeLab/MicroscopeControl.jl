@@ -109,10 +109,10 @@
         reads = Ref(0)
         rawref = Ref(raw)
         # The SDK's call is replaced, but not the copy: the SDK's pointer goes through `copy_sensor_frame`
-        @eval CSC function getlastframeornothing(camera::ThorCamCSCCamera)
+        @eval CSC function _sdk_pending_frame(handle, image, count, metadata, metadata_size)
             $reads[] += 1
-            r = $rawref[]
-            return GC.@preserve r copy_sensor_frame(camera, pointer(r))
+            image[] = pointer($rawref[])
+            return Cint(0)
         end
 
         # The copy takes the sensor's pixel count from camera_format, not from roi
@@ -143,14 +143,14 @@
         @test all(stack[:, :, i] == full[2:4, 3:6] for i in 1:3)
 
         # No frame yet: a zero frame of the ROI's shape
-        @eval CSC getlastframeornothing(camera::ThorCamCSCCamera) = Nothing
+        @eval CSC _sdk_pending_frame(handle, image, count, metadata, metadata_size) = (image[] = C_NULL; Cint(0))
         @test CameraInterface.getlastframe(cam) == zeros(UInt16, 3, 4)
 
         # An ROI outside the sensor (past an edge, or empty) throws before anything is read
-        @eval CSC function getlastframeornothing(camera::ThorCamCSCCamera)
+        @eval CSC function _sdk_pending_frame(handle, image, count, metadata, metadata_size)
             $reads[] += 1
-            r = $rawref[]
-            return GC.@preserve r copy_sensor_frame(camera, pointer(r))
+            image[] = pointer($rawref[])
+            return Cint(0)
         end
         reads[] = 0
         for roi in (CameraROI(1, 1, 9, 6), CameraROI(1, 1, 8, 7), CameraROI(6, 1, 4, 3), CameraROI(1, 5, 4, 3),

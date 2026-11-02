@@ -1,7 +1,7 @@
-function create_menu(figure, row, column, options, default)
+function create_menu(figure, row, column, options, default, camera, field::Symbol)
     menu = Menu(figure[row, column], options=options, default=default, width=350, height=30)
     on(menu.selection) do mode
-        camera.capture_mode = mode
+        setfield!(camera, field, mode)
     end
     return menu
 end
@@ -10,7 +10,11 @@ function create_label_textbox(figure, row, placeholder, callback)
     label = Label(figure[row, 1], placeholder)
     textbox = Textbox(figure[row, 2], placeholder=placeholder)
     on(textbox.stored_string) do text
-        callback(text)
+        try
+            callback(text)
+        catch e
+            @error "Camera panel setting failed" exception = (e, catch_backtrace())
+        end
     end
     return (label, textbox)
 end
@@ -19,7 +23,11 @@ end
 function create_button(figure, row, column, label, action, camera)
     button = Button(figure[row, column], label=label)
     on(button.clicks) do _
-        action(camera)
+        try
+            action(camera)
+        catch e
+            @error "Camera panel command failed" exception = (e, catch_backtrace())
+        end
     end
     return button
 end
@@ -63,6 +71,8 @@ function run_live_loop(show_frame, camera; fps = 60, stop = Threads.Atomic{Bool}
 end
 
 function create_display(camera, display_function; on_close=nothing)
+    # Configure first: a failed read-back must not leave an empty acquisition window behind.
+    display_function(camera)
     # Setup display
     # Camera data is (H, W) where data[row, col] = data[y, x]
     # Makie image() maps first dim → x, second dim → y
@@ -103,7 +113,6 @@ function create_display(camera, display_function; on_close=nothing)
 
     # Start live imaging or sequence based on display_function
     fps = 60
-    display_function(camera)
 
     _, display_task, _ = run_live_loop(camera, fps = fps, stop = stop) do framedata
         max_val = maximum(framedata)
@@ -128,7 +137,7 @@ function gui(camera::Camera)
     modes = ["capture", "trigger"]
     for (index, mode) in enumerate(modes)
         options = [(string(m), m) for m in instances(typeof(getfield(camera, Symbol(mode * "_mode"))))]
-        create_menu(control_fig, 2, index, options, string(getfield(camera, Symbol(mode * "_mode"))))
+        create_menu(control_fig, 2, index, options, string(getfield(camera, Symbol(mode * "_mode"))), camera, Symbol(mode * "_mode"))
     end
 
     # label, textbox, and callback for each property

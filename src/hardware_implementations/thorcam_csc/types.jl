@@ -39,7 +39,7 @@ function ThorCamCSCCamera(;
     unique_id::Vector{UInt8} = Vector{UInt8}(undef, 5),
     max_id_length::Cint = Cint(5),
     exposure_time::Clonglong = 40,
-    poll_timeout::Cint = Cint(1000),
+    poll_timeout::Cint = exposure_poll_timeout(exposure_time),
     camera_format::CameraFormat = CameraFormat(1440, 1080,1, 0, "CMOS"),
     number_of_frames_to_buffer::Cint = Cint(2),
     operation_mode::Cint = Cint(0),

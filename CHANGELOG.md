@@ -10,6 +10,13 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
+### Fixed — camera, stage, and persistence failures
+
+- DCAM4 exposure/ROI read-back failures throw without recording failed-read zeros; setup failures start no acquisition. CSC capture/sequence reads reject missing frames, and poll timeouts follow exposure; `getlastframe` keeps its zero fallback with `last_error` set.
+- Refused PI/MCL moves preserve accepted targets; negative MCL position/calibration returns throw. Stage panels validate steps and both limits, refresh accepted targets after failures, and contain command errors. Camera menus update the selected field and action callbacks contain errors.
+- `save_h5` snapshots buffers before scheduling, publishes a closed temporary file, and preserves earlier files on failure. `overwrite=false` refuses an existing file; the compatible default still replaces with a warning.
+- CSC and MLSLM export cached state. DCAM4/CSC exports identify their 0-based/1-based ROI origins.
+
 ### Added
 
 - **Light-source modulators**: a light can put its level on an analogue input through an `AbstractModulationControl`,
