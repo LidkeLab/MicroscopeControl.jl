@@ -74,6 +74,7 @@ function shutdown(light::VortranLaser)
             NIDAQcard._write_voltage(light.daq, "DO", channel, 0.0)
             light.properties.is_on = false
         catch e
+            light.properties.is_on = true
             push!(failures, "DO" => e)
         end
         try
@@ -84,7 +85,6 @@ function shutdown(light::VortranLaser)
             push!(failures, "AO" => e)
         end
         if !isempty(failures)
-            light.properties.is_on = true
             error("$(light.unique_id) shutdown failed: " *
                 join(("$line: $(sprint(showerror, cause))" for (line, cause) in failures), "; "))
         end
