@@ -260,7 +260,7 @@ end
         light_on(laser)
         fig = Figure()
         message = Label(fig[1, 1], "")
-        toggle, status = MicroscopeControl.LightSourceInterface._attach_output_toggle!(fig, 2, laser, message)
+        (; toggle, status, poll_task) = MicroscopeControl.LightSourceInterface._attach_output_toggle!(fig, 2, laser, message)
         @test toggle.active[] && status[] == "output on"
         FakeKinesis.fail!("LD_DisableOutput")
         toggle.active[] = false
@@ -273,6 +273,7 @@ end
         toggle.active[] = false
         @test !laser.properties.is_on && status[] == "output off" && !toggle.active[]
         fig.scene.events.window_open[] = false
+        @test timedwait(() -> istaskdone(poll_task), 1.5; pollint=0.01) === :ok
         GLMakie.closeall()
     end
 end

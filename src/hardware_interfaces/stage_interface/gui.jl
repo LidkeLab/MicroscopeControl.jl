@@ -36,11 +36,12 @@ end
 # Shared by all six step boxes; a parseable NaN or negative step is unsafe.
 _valid_step(s) = (x = tryparse(Float64, s); x !== nothing && isfinite(x) && x > 0)
 
-function _move_panel_target!(stage, xtarget, ytarget, x, y)
+# Coordinate entries, arrows and Home share the same refusal guard.
+function _move_panel_target!(command, stage, xtarget, ytarget)
     previous = (stage.targ_x, stage.targ_y)
     displayed = (xtarget[], ytarget[])
     try
-        move(stage, x, y)
+        command()
         xtarget[], ytarget[] = stage.targ_x, stage.targ_y
     catch e
         stage.targ_x, stage.targ_y = previous
@@ -49,6 +50,9 @@ function _move_panel_target!(stage, xtarget, ytarget, x, y)
     end
     return nothing
 end
+
+_move_panel_target!(stage, xtarget, ytarget, x, y) =
+    _move_panel_target!(() -> move(stage, x, y), stage, xtarget, ytarget)
 
 function gui1d(stage::Stage)
     #First we will create a figure to hold the GUI elements
@@ -428,8 +432,9 @@ function gui2d(stage::Stage)
             return
         end
 
-        home(stage)
-        xtarget[], ytarget[] = stage.targ_x, stage.targ_y
+        _move_panel_target!(stage, xtarget, ytarget) do
+            home(stage)
+        end
     end
 
     #Create a button to query current position, initialize, shutdown, or stop motion 

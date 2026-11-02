@@ -96,7 +96,7 @@ struct PanelScreen
 end
 const panels = Figure[]
 const displayed = Ref{Union{Nothing,PanelScreen}}(nothing)
-function LI._display_panel(fig, light::Union{SimLight,SimDiodeLaser,CrystaLaser,DaqTrLight,VortranLaser})
+function LI._display_figure(fig, light::Union{SimLight,SimDiodeLaser,CrystaLaser,DaqTrLight,VortranLaser})
     push!(panels, fig)
     displayed[] = PanelScreen(fig)
     return displayed[]

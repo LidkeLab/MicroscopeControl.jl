@@ -161,9 +161,10 @@ The label follows the driver, not the click: after every command it shows
 `properties.is_on`, whatever the command did, and if the toggle disagrees (a
 failed `light_off` leaves the diode on) the toggle is put back, under a guard
 that keeps the correction from firing `light_on`/`light_off` again. Returns
-`(; toggle, status)`, the `Toggle` and the label's `Observable{String}`.
-It also polls the driver's report every 0.5 s without commanding the light;
-closing the window stops that timer.
+`(; toggle, status, poll_task)`, including the label's `Observable{String}`
+and the polling task. Every 0.5 s that sticky task refreshes the driver's
+report on the thread that built the panel, without commanding the light.
+Refresh failures are logged and retried; closing the window stops polling.
 """
 function _attach_output_toggle!(fig, row, laser::LightSource, message)
     label(is_on) = is_on ? "output on" : "output off"
@@ -196,14 +197,34 @@ function _attach_output_toggle!(fig, row, laser::LightSource, message)
             message.text = "refused: " * _panel_message(e)
         end
     end
-    timer = Timer(_ -> refresh(), 0.5; interval=0.5)
-    on(fig.scene.events.window_open) do open
-        open || close(timer)
+    polling = Ref(true)
+    poll_task = @async begin
+        while polling[]
+            sleep(0.5)
+            polling[] || break
+            try
+                refresh()
+            catch e
+                @warn "Light output status refresh failed" exception=(e, catch_backtrace())
+            end
+        end
     end
-    return (; toggle, status)
+    on(fig.scene.events.window_open) do open
+        open || (polling[] = false)
+    end
+    return (; toggle, status, poll_task)
 end
 
 function _display_panel(fig, laser::LightSource)
+    try
+        return _display_figure(fig, laser)
+    catch
+        fig.scene.events.window_open[] = false
+        rethrow()
+    end
+end
+
+function _display_figure(fig, laser::LightSource)
     GLMakie.activate!(title=laser.unique_id)
     return display(GLMakie.Screen(), fig)
 end

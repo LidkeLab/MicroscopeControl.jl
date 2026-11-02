@@ -102,7 +102,8 @@ Hardware checks are owed at each instrument's repin, not at this tag.
   CSC `unique_id` is a name string.
 - DCAM4 and CSC exports identify their respective 0-based and 1-based ROI origins.
 - PI moves throw on a refused `PI_MOV` and preserve the previous target. The 2D
-  stage panel catches and logs refused moves and keeps its previous target.
+  stage panel catches and logs those refusals from the target box, arrows
+  and Home, restoring its previous target display.
   All stage step boxes accept only finite, positive numbers.
 - `CrystaLaser`, `VortranLaser` and `DaqTrLight` write before recording state,
   throw on missing channels or failed commands, and always attempt task cleanup
