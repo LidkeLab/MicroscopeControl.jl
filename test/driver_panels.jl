@@ -80,7 +80,7 @@ end
 end
 
 module LightPanelTaskTests
-using MicroscopeControl, Test, GLMakie, Logging
+using MicroscopeControl, Test, GLMakie
 const LI = MicroscopeControl.HardwareInterfaces.LightSourceInterface
 
 # Record the thread that reads the driver's cached report; fail one poll on
@@ -144,7 +144,7 @@ end
 
 @testset "Output polling stays on the panel thread and survives a refresh error" begin
     logger = Test.TestLogger()
-    result = with_logger(logger) do
+    result = Base.CoreLogging.with_logger(logger) do
         # This caller starts nonsticky on a worker, reproducing the review's
         # Timer migration case. The panel's @async poll must stay with it.
         fetch(Threads.@spawn poll_scenario())
