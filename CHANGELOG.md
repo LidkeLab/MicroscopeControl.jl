@@ -31,6 +31,16 @@ stage step validators, camera menus, CSC and SLM `export_state`, and `roi_origin
   1.0 V and now ends at 2.5 V. `setpower` without an enable previously moved
   the line and now only stages a request.
 
+### Known issues
+
+- Left open, as in 0.2.7. These are code defects that have not appeared in saved lab files.
+  - `DCAM4Camera`: a failed exposure or ROI read-back is not checked, and 0 is taken as the value.
+  - `ThorCamCSCCamera`: a poll timeout gives an all-zero frame, inside a `getdata` sequence too, and the poll timeout
+    does not follow the exposure.
+  - `MCLStage`: a negative SDK return is stored as a position or range.
+  - `save_h5` shares the caller's arrays, overwrites an existing file, and leaves a partial file on failure.
+- A stage's `export_state` writes the position last read, not the position at save time.
+
 ### Fixed
 
 - Backported the 0.2.7 DAQ light safety and driver panel fixes onto rc4, including
