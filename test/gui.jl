@@ -272,6 +272,7 @@ end
         delete!(FakeKinesis.status, "LD_DisableOutput")
         toggle.active[] = false
         @test !laser.properties.is_on && status[] == "output off" && !toggle.active[]
+        fig.scene.events.window_open[] = false
         GLMakie.closeall()
     end
 end

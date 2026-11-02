@@ -306,11 +306,15 @@ reads `properties.power`; accepted commands update it only when its unit is
 Crysta and DaqTrLight stage off requests and consume the stage only after a
 successful enable. With no stage they enable at 1.0 V clamped to the voltage
 range and record that default. Live level changes do not stage another enable;
-off/initialize/shutdown keep the saved level and staging flag. Vortran writes
-AO regardless of DO state.
+`light_off` keeps the saved level and staging flag; initialize and shutdown
+cancel the stage but retain the level. All three DAQ lights start with an
+unknown (`NaN`) requested level. Vortran writes AO regardless of DO state.
 **[guarantee]** Each light locks its write-and-record operations; a failed
 live level/enable write attempts to darken, with `is_on = true` if that fails
-too. Failed off commands throw and retain `is_on`. Vortran shutdown attempts
+too. Any failed off/initialize/shutdown throws and records `is_on = true`.
+Single-line level writes require `line_enabled`, set only by a successful
+enable and cleared by any off attempt, failed enable or failed live write.
+Otherwise `setpower` stages. Vortran shutdown attempts
 DO 0 and AO 0 independently and reports both failures.
 **[policy]** use `lights_off(lights)` for teardown; it continues after every
 exception and raises `MicroscopeControl.LightsOffError` with all name/error pairs.

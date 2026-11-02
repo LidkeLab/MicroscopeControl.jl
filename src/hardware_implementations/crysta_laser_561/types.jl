@@ -2,11 +2,13 @@
     CrystaLaser(; daq=NIdaq(), channel=nothing, properties, ...)
 
 A single AO line controls both level and emission. `setpower` takes volts and
-stages the request while off; the next successful `light_on` applies it and
-clears `level_staged`. With no staged request, `light_on` writes 1.0 V clamped
+stages the request unless `line_enabled` permits a write. The next successful
+`light_on` applies a staged request and clears `level_staged`. With no staged request, `light_on` writes 1.0 V clamped
 to the voltage range and records that default. `initialize`, `light_off` and
-`shutdown` write 0 V before recording off, preserving the requested level and
-staging flag for metadata and any pending request.
+`shutdown` write 0 V before recording off. All preserve the requested level
+(initially `NaN`); only `light_off` preserves a pending stage. A failed off
+records possible emission (`is_on = true`) but revokes permission to write
+levels (`line_enabled = false`).
 
 A named `channel` skips discovery. Otherwise the legacy device/channel
 selection applies. Default properties use volts and the voltage bounds. A
@@ -25,6 +27,7 @@ mutable struct CrystaLaser <: LightSource
     channel::String
     level_requested::Float64
     level_staged::Bool
+    line_enabled::Bool
     lock::ReentrantLock
 end
 
@@ -41,5 +44,5 @@ function CrystaLaser(;
         channelsAO, channelsDO = [channel], String[]
     end
     return CrystaLaser(unique_id, properties, laser_color, daq, min_voltage, max_voltage,
-        channelsAO, channelsDO, channel, clamp(1.0, min_voltage, max_voltage), false, ReentrantLock())
+        channelsAO, channelsDO, channel, NaN, false, false, ReentrantLock())
 end

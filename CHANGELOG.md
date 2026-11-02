@@ -12,16 +12,20 @@ the next version with `-DEV`).
 
 ## [0.2.7] - 2026-11-02
 
-A non-breaking release: the DCAM4 camera work (#75, #85, #87, #88), the PI stage and DCAM4 guards (#89), light-source
-modulators (#90), and the laser safety fixes to the three DAQ voltage lights. None of the DAQ light changes has run on
-hardware: they ran against a recording fake DAQ, and a real failed write was read from DAQmx.jl's source, not observed.
+This release adds DCAM4 camera fixes (#75, #85, #87, #88), PI stage and DCAM4 guards (#89), light-source
+modulators (#90), and changes DAQ light failure reporting, voltage metadata and off-state level writes.
+None of the DAQ light changes has run on hardware: they ran against a recording fake DAQ, and a real failed write was read from DAQmx.jl's source, not observed.
 Hardware checks are owed at each instrument's repin, not at this tag.
 
-### Fixed
+**Callers**
 
-- Camera panel menus update their selected field.
-- CSC and MLSLM export cached settings without SDK calls; MLSLM saves attributes only.
-- DCAM4 and CSC exports identify their respective 0-based and 1-based ROI origins.
+- DAQ `light_off`, `setpower` and `initialize` now throw on command failures; use
+  `lights_off(lights)` in teardown to attempt every light and report all failures.
+- Default DAQ light properties use V and the voltage range, replacing mW and
+  0–100. Saved `power`, `min_power` and `max_power` are volts.
+- On CrystaLaser and DaqTrLight, `setpower(2.5); light_on` previously ended at
+  1.0 V and now ends at 2.5 V. `setpower` without an enable previously moved
+  the line and now only stages a request.
 
 ### Added
 
@@ -93,6 +97,13 @@ Hardware checks are owed at each instrument's repin, not at this tag.
 
 ### Fixed
 
+- Camera panel menus update their selected field.
+- CSC and MLSLM export cached settings without SDK calls; MLSLM saves attributes only.
+  CSC `unique_id` is a name string.
+- DCAM4 and CSC exports identify their respective 0-based and 1-based ROI origins.
+- PI moves throw on a refused `PI_MOV` and preserve the previous target. The 2D
+  stage panel catches and logs refused moves and keeps its previous target.
+  All stage step boxes accept only finite, positive numbers.
 - `CrystaLaser`, `VortranLaser` and `DaqTrLight` write before recording state,
   throw on missing channels or failed commands, and always attempt task cleanup
   after a write. A per-light lock serializes each write and state update.
@@ -100,11 +111,11 @@ Hardware checks are owed at each instrument's repin, not at this tag.
   successful `light_on` applies that request and clears `level_staged`.
   Without a staged request, each enable writes and records 1.0 V clamped to
   the voltage range, preserving the existing `light_on; setpower` call order.
-  Live level changes do not stage the next enable. Off/initialize/shutdown
-  write 0 V before recording off and preserve both the saved level and any
-  pending stage; exports after off still report the level that was in use.
-  Vortran still writes AO in `setpower`, enables
-  through DO, and starts with an unknown (`NaN`) requested AO level.
+  Live level changes do not stage the next enable. `light_off` preserves a
+  pending stage; `initialize` and `shutdown` cancel it. All preserve the saved
+  requested level. Each off attempt writes 0 V before recording off. All three
+  lights start with an unknown (`NaN`) requested level. Vortran still writes AO
+  in `setpower` and enables through DO.
 - The three DAQ lights keep accepted volts in `level_requested`; commands never
   read `properties.power` (MicroscopeAdapt writes a percentage there).
   Accepted commands update `properties.power` only when its unit is V.
@@ -112,16 +123,21 @@ Hardware checks are owed at each instrument's repin, not at this tag.
   properties object is kept unchanged, with no warning. Exports keep existing keys and add `power_requested` and selected
   channels; `power`/`power_requested` and range metadata come from voltage state.
   NaN and out-of-range requests throw before writing or changing state.
-- Failed DAQ off/initialize commands retain `is_on`. Failed enable/live level
-  commands attempt to darken; `is_on` is false only if that succeeds. A failed
-  Vortran DO off also attempts AO 0. Vortran shutdown attempts both outputs
-  independently, records each success, and reports both failures in one error.
+- Any failed DAQ off, initialize or shutdown records `is_on = true`: emission
+  cannot be ruled out. Single-line lights separately track `line_enabled`, set
+  only by a successful enable and cleared by every off attempt, failed enable
+  or failed live write. `setpower` stages unless that flag permits a line write.
+  Failed enable/live level commands attempt to darken; `is_on` is false only
+  if that succeeds. A failed Vortran DO off also attempts AO 0, which lowers
+  output but does not extinguish it. Vortran shutdown attempts both outputs
+  independently and reports both failures in one error.
 - The generic light panel reuses the diode panel's bounded textbox, slider and
   output toggle. It uses each light's own unit/range, guards invalid starting
   values, sends exactly one guarded command per textbox submission (including
   repeats and retries), follows slider changes in the textbox, shows command
   errors, and corrects its toggle to the driver's state. The requested line
-  refreshes after toggle commands. Generic `gui` keeps returning the displayed
+  refreshes after toggle commands. Output status and toggle poll the driver
+  twice a second without commanding; polling stops on window close. Generic `gui` keeps returning the displayed
   `GLMakie.Screen`; diode panels keep returning their figure. Opening issues
   no command; closing a panel leaves the light as it was.
 - DAQ light exports snapshot attributes and the DAQ reference under the light
@@ -245,16 +261,14 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 
 ### Known issues
 
-- Left open after a check against saved lab files, because none of these showed in real use. The tested fixes are on
-  the branch `fixes-0.2.7-drivers`.
+- These defects remain open; their effects have not appeared in saved files
+  checked for this release. Candidate fixes are on `fixes-0.2.7-drivers`.
   - `DCAM4Camera`: a failed exposure or ROI read-back is not checked, and 0 is taken as the value (0 of 1,041 saved
     files on two instruments show it).
   - `ThorCamCSCCamera`: a poll timeout gives an all-zero frame, inside a `getdata` sequence too, and the poll timeout
     does not follow the exposure (no current caller takes a CSC sequence).
-  - `PIStage`: a refused `PI_MOV` logs and records the target (0 of 244 recent files).
   - `MCLStage`: a negative SDK return is stored as a position or range (0 of 3,372 saved values).
   - `save_h5` shares the caller's arrays, overwrites an existing file, and leaves a partial file on failure.
-  - Stage panels: a negative or NaN step passes the panel's own range check; the controllers refuse the target.
 - A stage's `export_state` writes the position last read, not the position at save time: adaptive microscope files
   from 2025-05 to 2026-05 record 12.5, 12.5 for the micro stage throughout.
 - Camera (`DCAM4Camera`):

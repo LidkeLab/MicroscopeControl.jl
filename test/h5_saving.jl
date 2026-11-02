@@ -25,7 +25,11 @@
     @test isempty(children)
 
     a, data, children = export_state(cam)
-    @test a["unique_id"] == cam.unique_id && a["unique_id"] !== cam.unique_id
+    @test a["unique_id"] isa String
+    @test a["unique_id"] == "1" && cam.unique_id == UInt8[0x31]
+    cam.unique_id = UInt8[0x31, 0x00, 0x00]
+    @test export_state(cam)[1]["unique_id"] == "1" # SDK name buffer may be NUL padded
+    @test cam.unique_id == UInt8[0x31, 0x00, 0x00]
     @test a["camera_format_x_pixels"] == 8 && a["camera_format_y_pixels"] == 6
     @test a["roi_origin"] == 1
     @test (a["roi_x"], a["roi_y"], a["roi_width"], a["roi_height"]) == (3, 2, 4, 3)

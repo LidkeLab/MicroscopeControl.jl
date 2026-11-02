@@ -175,10 +175,11 @@ on open **[guarantee]**.
 **[guarantee]** `CrystaLaser` and `DaqTrLight` stage an off `setpower` request
 without writing. The next successful `light_on` uses it and clears
 `level_staged`; with no staged request it writes and records 1.0 V clamped to
-the voltage range. Live changes do not stage the next enable. `light_off`,
-`initialize` and `shutdown` preserve both the last requested level and staging
-flag; exports after off keep that level. Vortran writes AO even while off and
-enables through DO; its initial requested level is `NaN`.
+the voltage range. Live changes do not stage the next enable. `initialize`
+and `shutdown` cancel a pending stage; `light_off` preserves it.
+All preserve the last requested level for metadata. All three lights start
+with `level_requested = NaN`. Vortran writes AO even while off and enables
+through DO.
 **[guarantee]** `export_state` reports `power` and `power_requested` from
 `level_requested`, unit `V`, voltage bounds and the selected channels. A supplied
 `properties` object is retained unchanged, without warning; default properties
@@ -186,12 +187,24 @@ are in volts. Accepted commands update `properties.power` only when its unit
 is "V", and commands never read that field.
 
 **[guarantee]** All writes use task cleanup in `finally`. State changes follow
-successful writes and cleanup. Failed off/initialize commands throw and retain
-`is_on`; failed enable/live level writes try to darken, recording off only if
-that succeeds. Vortran failed DO off also tries AO 0; its shutdown tries both
+successful writes and cleanup. Any failed off/initialize/shutdown throws and
+records `is_on = true`; failed enable/live level writes try to darken, recording off only if
+that succeeds. Single-line `setpower` writes only when `line_enabled` is true;
+a successful enable sets it, and any off attempt, failed enable or failed live
+write clears it. Vortran failed DO off also tries AO 0, which lowers output
+but does not extinguish it; its shutdown tries both
 outputs independently and reports both failures in one error. **[limitation]**
 these are commanded states, with no optical measurement or readback.
 **[policy]** teardown uses `lights_off(lights)` to attempt every light; catch
 `MicroscopeControl.LightsOffError` to inspect its `failures` name/error pairs.
 
-**[limitation]** After a failed task deletion the channel can stay reserved, so `light_off` keeps throwing and `is_on` stays true until the process restarts.
+**[limitation]** A failed task deletion may leave the channel reserved and
+`light_off` throwing with `is_on = true`. DAQmx.jl's explicit `clear!` keeps
+the handle on error, and its `Task` finalizer retries clear at garbage
+collection. Try `GC.gc()`, then `light_off`; if that still fails, restart Julia and call
+`initialize`, which writes 0. Whether a failed deletion actually leaves a
+channel reserved is untested on hardware.
+
+**[limitation]** Calling `initialize` in a second Julia beside a running
+experiment darkens that experiment's line while its first process still
+reports on.

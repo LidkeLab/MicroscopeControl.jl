@@ -1,7 +1,12 @@
 function initialize(light::VortranLaser)
     lock(light.lock) do
-        channel = NIDAQcard._light_channel(light, :do_channel)
-        NIDAQcard._write_voltage(light.daq, "DO", channel, 0.0)
+        try
+            channel = NIDAQcard._light_channel(light, :do_channel)
+            NIDAQcard._write_voltage(light.daq, "DO", channel, 0.0)
+        catch
+            light.properties.is_on = true
+            rethrow()
+        end
         light.properties.is_on = false
     end
     return nothing
@@ -44,8 +49,9 @@ function LightSourceInterface.light_off(light::VortranLaser)
             channel = NIDAQcard._light_channel(light, :do_channel)
             NIDAQcard._write_voltage(light.daq, "DO", channel, 0.0)
         catch
-            # DO is still enabled or unknown. Try the independent level line,
-            # but preserve both the recorded enable state and the DO error.
+            light.properties.is_on = true
+            # DO is enabled or unknown. AO 0 lowers output but does not
+            # extinguish it; preserve the DO error and possible-emission report.
             try
                 channel = NIDAQcard._light_channel(light, :ao_channel)
                 NIDAQcard._write_voltage(light.daq, "AO", channel, 0.0)
@@ -77,8 +83,11 @@ function shutdown(light::VortranLaser)
         catch e
             push!(failures, "AO" => e)
         end
-        isempty(failures) || error("$(light.unique_id) shutdown failed: " *
-            join(("$line: $(sprint(showerror, cause))" for (line, cause) in failures), "; "))
+        if !isempty(failures)
+            light.properties.is_on = true
+            error("$(light.unique_id) shutdown failed: " *
+                join(("$line: $(sprint(showerror, cause))" for (line, cause) in failures), "; "))
+        end
     end
     return nothing
 end

@@ -30,6 +30,9 @@ Methods called (arity follows `dimensions`): `initialize`, `shutdown`,
 follow `StageFormat` in `stage_interface/interface_types.jl`: positions
 `Float64`, ranges `Tuple{Float64,Float64}`.
 
+**[guarantee]** Step boxes accept only finite, positive numbers. The 2D panel
+catches and logs refused moves and restores its previous target display.
+
 | Device | Missing GUI fields | Panel opens (no hardware)? |
 |---|---|---|
 | `SimStage1d/2d/3d` | `stagelabel` (they have `label`) | **no: `FieldError` [limitation]** |
@@ -77,8 +80,10 @@ one guarded command, including repeats of the displayed value and retries after
 failure; slider synchronization does not issue a second command. The textbox
 follows slider changes. A refusal or transport failure appears in the panel,
 with the output toggle corrected to the driver's state after level and output
-commands. The requested line refreshes after toggle commands, including when
-an unstaged single-line light enables at the clamped 1.0 V default.
+commands and polls `properties.is_on` twice a second without issuing commands;
+window close stops the poll. The requested line refreshes after toggle
+commands, including when an unstaged single-line light enables at the
+clamped 1.0 V default.
 **[guarantee]** Generic `gui(::LightSource)` returns the displayed
 `GLMakie.Screen`; the diode panels return their figure. **[limitation]** closing a panel leaves its light as it was.
 **[policy]** call `lights_off(lights)` during teardown and report every named

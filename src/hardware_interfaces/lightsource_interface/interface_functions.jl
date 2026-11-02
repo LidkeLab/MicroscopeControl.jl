@@ -23,12 +23,14 @@ implemented. It was removed in 0.2.5 rather than implemented: "on at a power"
 has no definable unit across lights. Level setting and enabling remain
 separate operations with driver-specific units.
 
-On `CrystaLaser` and `DaqTrLight`, `setpower` while off stages a voltage for
+On `CrystaLaser` and `DaqTrLight`, `setpower` without a successful enable
+stages a voltage for
 the next successful `light_on`, which then clears `level_staged`. Without a
 staged request, `light_on` writes 1.0 V clamped to the voltage range, recording
 that default in `level_requested` and in `properties.power` when its unit is
-"V". A live `setpower` does not stage the next enable. `light_off`, `shutdown`
-and `initialize` preserve the requested level and staging flag: after a live
+"V". A live `setpower` does not stage the next enable. `light_off` preserves
+the requested level and staging flag; `shutdown` and `initialize` preserve
+the level but cancel the stage: after a live
 2.5 V command and switch-off, the export still reports 2.5 V, while the next
 unstaged enable writes 1.0 V. `VortranLaser` only enables DO and leaves AO
 unchanged.
@@ -47,10 +49,13 @@ end
 Turn off the light source.
 
 The DAQ voltage lights write before recording off; a failed switch-off throws
-and retains the previous `is_on`. `CrystaLaser` and `DaqTrLight` keep the
+and records `is_on = true` because emission cannot be ruled out. `CrystaLaser` and `DaqTrLight` keep the
 requested level for metadata and any staged request for a later enable.
 On a failed Vortran DO switch-off,
-AO 0 is also attempted, but the DO failure still throws. Use `lights_off` to
+AO 0 is also attempted, but the DO failure still throws and `is_on` stays true.
+AO 0 lowers the output rather than extinguishing it: measured output was
+0.964 mW with DO on at 0 V, versus 13.53 nW with DO off
+(MicroscopeAdapt `dev/test_laser.jl:25-26`). Use `lights_off` to
 attempt every light during teardown even when one fails. Closing a control
 panel does not switch off its light.
 
@@ -86,7 +91,9 @@ end
 
 Attempt `light_off` on every light, even after an exception (including an
 `InterruptException`). Return `nothing` on success; otherwise throw one
-[`LightsOffError`](@ref) retaining every named failure.
+[`LightsOffError`](@ref) retaining every named failure. Pass a tuple or vector
+of lights. An iterator or generator that throws during iteration stops the
+loop before its remaining lights can be attempted.
 """
 function lights_off(lights)
     failures = Pair{String,Any}[]

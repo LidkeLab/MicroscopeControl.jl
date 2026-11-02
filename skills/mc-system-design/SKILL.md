@@ -141,8 +141,9 @@ field `::DiodeLaser` when the system needs readback (`loop_status`,
 `setpower` while off, writing nothing. The next successful `light_on` uses
 that request and clears `level_staged`; otherwise it writes and records 1.0 V
 clamped to the voltage range. Live level changes do not stage the next enable.
-Off, initialize and shutdown preserve `level_requested` and `level_staged`, so
-exports after off still report the prior level. Both call orders remain
+`light_off` preserves `level_requested` and `level_staged`; initialize and
+shutdown cancel the stage but keep the level for metadata. All three DAQ lights
+start with an unknown (`NaN`) requested level. Both call orders remain
 supported: an off staged request selects the next enable level, while
 `light_on; setpower` starts at the default when no request is staged.
 Vortran writes AO in `setpower` even while off; DO controls emission, and its
@@ -151,7 +152,11 @@ request is `NaN` until the first accepted level. `initialize` disables DO only;
 **[guarantee]** These drivers write before recording state and serialize commands
 with one lock per light. After a failed enable or live level write they attempt
 to darken; `is_on` becomes false only if that succeeds. A failed Vortran DO off
-also attempts AO 0 and records level 0 only on success, while retaining `is_on`.
+also attempts AO 0 and records level 0 only on success; AO 0 lowers output
+but does not extinguish it. Every failed off/initialize/shutdown records
+`is_on = true`. Single-line `setpower` writes only after a successful enable
+sets `line_enabled`; any off attempt, failed enable or failed live write clears
+that flag, so a later level change stages without writing.
 
 ## Six design principles the source expresses
 
@@ -377,16 +382,16 @@ mutable struct DaqLikeLight <: LightSource
     properties::LightSourceProperties
     level_requested::Float64
     level_staged::Bool
+    line_enabled::Bool
     line_voltage::Float64
 end
-DaqLikeLight() = DaqLikeLight("DAQ example", LightSourceProperties("V", 0.0, false, 0.0, 5.0), 1.0, false, 0.0)
+DaqLikeLight() = DaqLikeLight("DAQ example", LightSourceProperties("V", 0.0, false, 0.0, 5.0), NaN, false, false, 0.0)
 function MC.setpower(l::DaqLikeLight, v::Float64)
     !(0.0 <= v <= 5.0) && throw(ArgumentError("expected 0..5 V"))
-    if l.properties.is_on
+    if l.line_enabled
         l.line_voltage = v
-    else
-        l.level_staged = true
     end
+    l.level_staged = !l.line_enabled
     l.level_requested = v
     l.properties.power_unit == "V" && (l.properties.power = v)
     return nothing
@@ -397,16 +402,18 @@ function MC.light_on(l::DaqLikeLight)
     l.level_requested = v
     l.properties.power_unit == "V" && (l.properties.power = v)
     l.properties.is_on = true
+    l.line_enabled = true
     l.level_staged = false
     return nothing
 end
 function MC.light_off(l::DaqLikeLight)
     l.line_voltage = 0.0
     l.properties.is_on = false
+    l.line_enabled = false
     return nothing
 end
-MC.initialize(l::DaqLikeLight) = light_off(l)
-MC.shutdown(l::DaqLikeLight) = light_off(l)
+MC.initialize(l::DaqLikeLight) = (l.level_staged = false; light_off(l))
+MC.shutdown(l::DaqLikeLight) = (l.level_staged = false; light_off(l))
 MC.export_state(l::DaqLikeLight) = (Dict{String,Any}("power" => l.level_requested,
     "power_requested" => l.level_requested, "power_unit" => "V", "is_on" => l.properties.is_on), nothing, Dict())
 
@@ -616,7 +623,7 @@ stop; each is false at v0.2.0.
   the panel does not switch off the light. **[policy]** call `lights_off(lights)`
   during teardown; it attempts every light and raises `MicroscopeControl.LightsOffError`
   with every named failure, interruptions included. A failed DAQ off command
-  throws and retains `is_on`; never infer off from a caught exception.
+  throws and records `is_on = true`; never infer off from a caught exception.
 - **[limitation]** `getposition(::SimStage3d)` returns a scalar (`3.0` after
   `move(s, 1.0, 2.0, 3.0)`), the value of its last assignment, while the
   interface docstring promises an `(x, y, z)` tuple (executed). A system must

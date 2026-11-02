@@ -153,7 +153,7 @@ Settings only, with exposure in microseconds and 1-based software ROI offsets. N
 """
 function export_state(camera::ThorCamCSCCamera)
     attributes = Dict{String,Any}(
-        "unique_id" => copy(camera.unique_id),
+        "unique_id" => String(first(split(String(copy(camera.unique_id)), '\0'))),
         "camera_format_x_pixels" => camera.camera_format.x_pixels,
         "camera_format_y_pixels" => camera.camera_format.y_pixels,
         "exposure_time" => camera.exposure_time,

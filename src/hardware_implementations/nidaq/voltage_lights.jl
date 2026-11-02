@@ -71,41 +71,51 @@ function _single_line_setpower!(light, voltage::Float64)
     lock(light.lock) do
         channel = _light_channel(light, :channel)
         _check_voltage(light, voltage)
-        if light.properties.is_on
+        if light.line_enabled
             try
                 _write_voltage(light.daq, "AO", channel, voltage)
             catch
+                light.line_enabled = false
                 _darken_after_failure!(light, "AO", channel)
                 rethrow()
             end
         end
         _record_level!(light, voltage)
-        light.level_staged = !light.properties.is_on
+        light.level_staged = !light.line_enabled
     end
     return nothing
 end
 
 function _single_line_on!(light)
     lock(light.lock) do
-        channel = _light_channel(light, :channel)
+        light.line_enabled = false
         voltage = light.level_staged ? light.level_requested : clamp(1.0, light.min_voltage, light.max_voltage)
         try
+            channel = _light_channel(light, :channel)
             _write_voltage(light.daq, "AO", channel, voltage)
         catch
-            _darken_after_failure!(light, "AO", channel)
+            _darken_after_failure!(light, "AO", light.channel)
             rethrow()
         end
         _record_level!(light, voltage)
         light.properties.is_on = true
+        light.line_enabled = true
         light.level_staged = false
     end
     return nothing
 end
 
-function _single_line_off!(light)
+function _single_line_off!(light; clear_stage=false)
     lock(light.lock) do
-        channel = _light_channel(light, :channel)
-        _write_voltage(light.daq, "AO", channel, 0.0)
+        light.line_enabled = false
+        clear_stage && (light.level_staged = false)
+        try
+            channel = _light_channel(light, :channel)
+            _write_voltage(light.daq, "AO", channel, 0.0)
+        catch
+            light.properties.is_on = true # off cannot be claimed
+            rethrow()
+        end
         light.properties.is_on = false
     end
     return nothing

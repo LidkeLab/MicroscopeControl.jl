@@ -1,6 +1,6 @@
 # The two single-line lights share every write-and-record operation.
-initialize(light::DaqTrLight) = NIDAQcard._single_line_off!(light)
-shutdown(light::DaqTrLight) = NIDAQcard._single_line_off!(light)
+initialize(light::DaqTrLight) = NIDAQcard._single_line_off!(light; clear_stage=true)
+shutdown(light::DaqTrLight) = NIDAQcard._single_line_off!(light; clear_stage=true)
 LightSourceInterface.setpower(light::DaqTrLight, voltage::Float64) = NIDAQcard._single_line_setpower!(light, voltage)
 LightSourceInterface.light_on(light::DaqTrLight) = NIDAQcard._single_line_on!(light)
 LightSourceInterface.light_off(light::DaqTrLight) = NIDAQcard._single_line_off!(light)

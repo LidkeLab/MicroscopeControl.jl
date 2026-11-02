@@ -162,6 +162,8 @@ The label follows the driver, not the click: after every command it shows
 failed `light_off` leaves the diode on) the toggle is put back, under a guard
 that keeps the correction from firing `light_on`/`light_off` again. Returns
 `(; toggle, status)`, the `Toggle` and the label's `Observable{String}`.
+It also polls the driver's report every 0.5 s without commanding the light;
+closing the window stops that timer.
 """
 function _attach_output_toggle!(fig, row, laser::LightSource, message)
     label(is_on) = is_on ? "output on" : "output off"
@@ -193,7 +195,10 @@ function _attach_output_toggle!(fig, row, laser::LightSource, message)
         catch e
             message.text = "refused: " * _panel_message(e)
         end
-        refresh()
+    end
+    timer = Timer(_ -> refresh(), 0.5; interval=0.5)
+    on(fig.scene.events.window_open) do open
+        open || close(timer)
     end
     return (; toggle, status)
 end
