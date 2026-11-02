@@ -50,7 +50,9 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
     @testset "Simulated Light Source" begin
         light = SimLight()
         before = state_snapshot(light)
-        gui(light)
+        screen = gui(light)
+        @test screen isa GLMakie.Screen
+        close(screen)
         GLMakie.closeall()
         @test state_snapshot(light) == before
         # Belt-and-suspenders check naming the exact fields item 1 was about.
@@ -158,7 +160,7 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
         light_on(laser)
         fig = Figure()
         message = Label(fig[1, 1], "")
-        toggle, status = MicroscopeControl.LightSourceInterface._attach_output_toggle!(fig, 2, laser, message)
+        (; toggle, status, poll_task) = MicroscopeControl.LightSourceInterface._attach_output_toggle!(fig, 2, laser, message)
         @test toggle.active[] && status[] == "output on"
         FakeKinesis.fail!("LD_DisableOutput")
         toggle.active[] = false
@@ -170,6 +172,8 @@ MicroscopeControl.light_off(light::RecordingLight) = (push!(light.log, :light_of
         delete!(FakeKinesis.status, "LD_DisableOutput")
         toggle.active[] = false
         @test !laser.properties.is_on && status[] == "output off" && !toggle.active[]
+        fig.scene.events.window_open[] = false
+        @test timedwait(() -> istaskdone(poll_task), 1.5; pollint=0.01) === :ok
         GLMakie.closeall()
     end
 end

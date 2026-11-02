@@ -1855,9 +1855,12 @@ lab_summary("Core") do
     include("pi_stage.jl")
 
     include("dcam4_pure.jl")
+    include("h5_saving.jl")
 
     include("contract.jl")
     include("skills.jl")
     include("gui.jl")
+    include("driver_panels.jl")
+    include("daq_lights.jl")
 end
 end  # lab_summary

@@ -17,7 +17,26 @@ hardware, without those fixes; `v0.3.0-rc1` had a bug (a channel's device part p
 a `SubString`, so `enable_modulation!(laser; ao_channel)` threw a MethodError on a real DAQ). The
 final 0.3.0 is tagged from main after the merge; the branch head reads `0.3.0-DEV` (main's convention), the
 rc tags carry their own version. 0.3.0, not 0.2.7: `max_current` is now required
-in open loop and `setupIO` has no default output (breaking).
+in open loop and `setupIO` has no default output (breaking). `v0.3.0-rc5` is rc4 plus the
+0.2.7 DAQ light safety fixes, `lights_off`, panels that follow the driver, the PI move check,
+stage step validators, camera menus, CSC and SLM `export_state`, and `roi_origin`.
+
+**Callers**
+
+- DAQ `light_off`, `setpower` and `initialize` now throw on command failures; use
+  `lights_off(lights)` in teardown to attempt every light and report all failures.
+- Default DAQ light properties use V and the voltage range, replacing mW and
+  0–100. Saved `power`, `min_power` and `max_power` are volts.
+- On CrystaLaser and DaqTrLight, `setpower(2.5); light_on` previously ended at
+  1.0 V and now ends at 2.5 V. `setpower` without an enable previously moved
+  the line and now only stages a request.
+
+### Fixed
+
+- Backported the 0.2.7 DAQ light safety and driver panel fixes onto rc4, including
+  failure reporting and requested-voltage state, safe teardown with `lights_off`,
+  PI move refusal checks, finite positive stage steps, working camera menus,
+  cached CSC and SLM exports, and explicit camera ROI origins.
 
 ### Changed (breaking)
 

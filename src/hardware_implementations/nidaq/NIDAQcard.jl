@@ -13,5 +13,6 @@ export NIdaq, gui, showdevices, showchannels, createtask, setvoltage, readvoltag
 
 include("types.jl")
 include("interface_methods.jl")
+include("voltage_lights.jl")
 
 end

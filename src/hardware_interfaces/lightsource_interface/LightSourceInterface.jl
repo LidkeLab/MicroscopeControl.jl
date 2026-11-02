@@ -11,7 +11,8 @@ using ...MicroscopeControl
 import ...MicroscopeControl: gui
 
 export LightSource, LightSourceProperties
-export setpower, light_on, light_off #, shutdown, initialize, export_state
+export setpower, light_on, light_off, lights_off
+public LightsOffError
 export gui
 
 # Regulated laser diodes: the mode types, the photodiode loop and the unit-true

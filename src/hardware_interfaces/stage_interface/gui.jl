@@ -33,6 +33,27 @@ function gui(stage::Stage)
     end
 end
 
+# Shared by all six step boxes; a parseable NaN or negative step is unsafe.
+_valid_step(s) = (x = tryparse(Float64, s); x !== nothing && isfinite(x) && x > 0)
+
+# Coordinate entries, arrows and Home share the same refusal guard.
+function _move_panel_target!(command, stage, xtarget, ytarget)
+    previous = (stage.targ_x, stage.targ_y)
+    displayed = (xtarget[], ytarget[])
+    try
+        command()
+        xtarget[], ytarget[] = stage.targ_x, stage.targ_y
+    catch e
+        stage.targ_x, stage.targ_y = previous
+        xtarget[], ytarget[] = displayed
+        @error "Stage move refused" exception=(e, catch_backtrace())
+    end
+    return nothing
+end
+
+_move_panel_target!(stage, xtarget, ytarget, x, y) =
+    _move_panel_target!(() -> move(stage, x, y), stage, xtarget, ytarget)
+
 function gui1d(stage::Stage)
     #First we will create a figure to hold the GUI elements
     stage_gui_fig = Figure(size=(600, 400))  #This is the Stage GUI Figure
@@ -89,7 +110,7 @@ function gui1d(stage::Stage)
 
     x_arrow_buttons = x_arrow_grid[1, 1:3] = [Button(stage_gui_fig, label=xbuttonlabels[i], width=100) for i in 1:3]
 
-    xsteptb = Textbox(stage_gui_fig[2, 3], placeholder="0.1", validator=Float64)
+    xsteptb = Textbox(stage_gui_fig[2, 3], placeholder="0.1", validator=_valid_step)
 
     #Callback functions to change the step size using the text boxes
     on(xsteptb.stored_string) do xstep_change
@@ -251,8 +272,7 @@ function gui1d(stage::Stage)
         end
     end
 
-    GLMakie.activate!(title=stage.stagelabel)
-    display(GLMakie.Screen(), stage_gui_fig)
+    return _show_stage_panel(stage_gui_fig, stage)
 end
 
 
@@ -315,10 +335,7 @@ function gui2d(stage::Stage)
             return
         end
 
-        stage.targ_x, stage.targ_y = x, y
-        xtarget[], ytarget[] = x, y
-
-        move(stage, stage.targ_x, stage.targ_y)
+        _move_panel_target!(stage, xtarget, ytarget, x, y)
     end
 
     Label(stage_gui_fig[1, 4], targetstring)
@@ -328,8 +345,8 @@ function gui2d(stage::Stage)
     Label(stage_gui_fig[2, 1], "X Axis Control")
     Label(stage_gui_fig[2, 3], "Y Axis Control")
 
-    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=Float64)
-    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=Float64)
+    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=_valid_step)
+    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=_valid_step)
 
     #Callback functions to change the step size using the text boxes
     on(xsteptb.stored_string) do xstep_change
@@ -365,9 +382,7 @@ function gui2d(stage::Stage)
             return
         end
 
-        stage.targ_x -= xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x, stage.targ_y)
+        _move_panel_target!(stage, xtarget, ytarget, stage.targ_x - xstepsize[], stage.targ_y)
     end
     on(x_right.clicks) do x_right_click
         if stage.connectionstatus == false
@@ -380,9 +395,7 @@ function gui2d(stage::Stage)
             return
         end
 
-        stage.targ_x += xstepsize[]
-        xtarget[] = stage.targ_x
-        move(stage, stage.targ_x, stage.targ_y)
+        _move_panel_target!(stage, xtarget, ytarget, stage.targ_x + xstepsize[], stage.targ_y)
     end
 
     on(y_down.clicks) do y_down_click
@@ -396,9 +409,7 @@ function gui2d(stage::Stage)
             return
         end
 
-        stage.targ_y -= ystepsize[]
-        ytarget[] = stage.targ_y
-        move(stage, stage.targ_x, stage.targ_y)
+        _move_panel_target!(stage, xtarget, ytarget, stage.targ_x, stage.targ_y - ystepsize[])
     end
 
     on(y_up.clicks) do y_right_click
@@ -412,9 +423,7 @@ function gui2d(stage::Stage)
             return
         end
 
-        stage.targ_y += ystepsize[]
-        ytarget[] = stage.targ_y
-        move(stage, stage.targ_x, stage.targ_y)
+        _move_panel_target!(stage, xtarget, ytarget, stage.targ_x, stage.targ_y + ystepsize[])
     end
 
     on(homebutton.clicks) do return_home_click
@@ -423,8 +432,9 @@ function gui2d(stage::Stage)
             return
         end
 
-        home(stage)
-        xtarget[], ytarget[] = stage.targ_x, stage.targ_y
+        _move_panel_target!(stage, xtarget, ytarget) do
+            home(stage)
+        end
     end
 
     #Create a button to query current position, initialize, shutdown, or stop motion 
@@ -545,8 +555,7 @@ function gui2d(stage::Stage)
         end
     end
 
-    GLMakie.activate!(title=stage.stagelabel)
-    display(GLMakie.Screen(), stage_gui_fig)
+    return _show_stage_panel(stage_gui_fig, stage)
 end
 
 
@@ -619,9 +628,9 @@ function gui3d(stage::Stage)
     Label(stage_gui_fig[2, 3], "Y Axis Control")
     Label(stage_gui_fig[2, 5], "Z Axis Control")
 
-    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=Float64)
-    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=Float64)
-    zsteptb = Textbox(stage_gui_fig[2, 6], placeholder="0.1", validator=Float64)
+    xsteptb = Textbox(stage_gui_fig[2, 2], placeholder="0.1", validator=_valid_step)
+    ysteptb = Textbox(stage_gui_fig[2, 4], placeholder="0.1", validator=_valid_step)
+    zsteptb = Textbox(stage_gui_fig[2, 6], placeholder="0.1", validator=_valid_step)
 
     #Callback functions to change the step size using the text boxes
     on(xsteptb.stored_string) do xstep_change
@@ -887,6 +896,10 @@ function gui3d(stage::Stage)
         end
     end
 
+    return _show_stage_panel(stage_gui_fig, stage)
+end
+
+function _show_stage_panel(fig, stage::Stage)
     GLMakie.activate!(title=stage.stagelabel)
-    display(GLMakie.Screen(), stage_gui_fig)
+    return display(GLMakie.Screen(), fig)
 end

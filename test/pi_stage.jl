@@ -233,3 +233,25 @@
         F.reset!()
     end
 end
+
+@testset "S1: refused PI moves preserve targets" begin
+    PI = MicroscopeControl.HardwareImplementations.PI
+    F = Main.FakePIStage
+    for command in (s -> move(s, 20.0, 21.0), s -> PI.moveandwait(s, 20.0, 21.0),
+                    s -> PI.movex(s, 20.0), s -> PI.movey(s, 21.0))
+        F.reset!()
+        stage = PIStage(targ_x=12.5, targ_y=12.5)
+        F.fail!("PI_MOV")
+        @test_throws "PI_MOV refused" command(stage)
+        @test (stage.targ_x, stage.targ_y) == (12.5, 12.5)
+        @test export_state(stage)[1]["target_x"] == 12.5
+        @test !("PI_IsMoving" in F.calls)
+    end
+    F.reset!()
+    stage = PIStage()
+    PI.movex(stage, 10.0)
+    PI.movey(stage, 11.0)
+    @test (stage.targ_x, stage.targ_y) == (10.0, 11.0)
+    PI.moveandwait(stage, 20.0, 21.0)
+    @test (stage.targ_x, stage.targ_y) == (20.0, 21.0)
+end

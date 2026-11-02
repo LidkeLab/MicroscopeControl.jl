@@ -78,7 +78,7 @@ is in `references/rig-causes.md`; the short form:
 | `initialize(::PIStage)` logs `@error` and returns, `connectionstatus` stays `false` (it does not throw) | controller unpowered, USB, or **held by another process** (PIMikroMove, a second Julia) | close the others; re-run; if it connects it was contention |
 | `MLSLM` does nothing | board claimed elsewhere, or SDK found 0 boards (`n_boards_found` is a default of 0 and never updated) | read what `initializesdk()` prints; close the vendor GUI; reboot if a dead process holds it |
 | serial timeouts / "port busy" (`Triggerscope4`, and `LCC1620` through it) | wrong COM number (Windows renumbers), or port open elsewhere; **two `Triggerscope4` objects on one port** | `LibSerialPort.list_ports()`; one scope object per port, shared (`mc-system-design`) |
-| `CrystaLaser`/`VortranLaser`/`DaqTrLight` `@warn` at construction, then `setpower` does nothing | NI-DAQ discovery picked the wrong device (`devs[1]`, or `device_index`), runtime missing, or partial AO/DO discovery | inspect `light.channelsAO`/`channelsDO` after construction; `NIDAQcard.showdevices(NIdaq())` |
+| DAQ voltage light warns at discovery or throws on a missing channel/write | **[limitation]** unnamed outputs still use enumeration; runtime missing or partial AO/DO discovery can leave channels absent. **[guarantee]** (0.2.7) commands throw on missing channels; a single-line off `setpower` records only. | **[policy]** inspect selected `channel` or `ao_channel`/`do_channel`; pass named outputs and `daq::DAQ`. |
 | a method throws `not implemented for <Type>` or does nothing | a contract stub, not a broken `ccall` (`mc-api-map`: resolving is not implementing) | `which(f, Tuple{typeof(dev)}).sig` names the interface or `AbstractInstrument` |
 
 A defect is what remains: a wrong argument type or size in a `ccall`, a wrong
@@ -255,6 +255,28 @@ with a helper (`enter_mode!(regulation_mode(l), l)`), as `TCubeLaser` does.
 **[policy]** carry the fields rather than writing your own panel: the fields are
 what make the Sim-for-hardware swap in `mc-testing` work.
 
+### DAQ voltage lights
+
+**[guarantee]** (0.2.7) The DAQ voltage lights take `setpower(light, ::Float64)`
+in volts, retain `level_requested`, and export that request in V. No command
+reads `properties.power`; accepted commands update it only when its unit is
+"V". Supplied properties objects are preserved at construction without warning.
+Crysta and DaqTrLight stage off requests and consume the stage only after a
+successful enable. With no stage they enable at 1.0 V clamped to the voltage
+range and record that default. Live level changes do not stage another enable;
+`light_off` keeps the saved level and staging flag; initialize and shutdown
+cancel the stage but retain the level. All three DAQ lights start with an
+unknown (`NaN`) requested level. Vortran writes AO regardless of DO state.
+**[guarantee]** Each light locks its write-and-record operations; a failed
+live level/enable write attempts to darken, with `is_on = true` if that fails
+too. Any failed off/initialize/shutdown throws and records `is_on = true`.
+Single-line level writes require `line_enabled`, set only by a successful
+enable and cleared by any off attempt, failed enable or failed live write.
+Otherwise `setpower` stages. Vortran shutdown attempts
+DO 0 and AO 0 independently and reports both failures.
+**[policy]** use `lights_off(lights)` for teardown; it continues after every
+exception and raises `MicroscopeControl.LightsOffError` with all name/error pairs.
+
 ### Behavioural obligations beyond method names
 
 **[policy]** for a new driver; the third column names the upstream driver that
@@ -263,9 +285,9 @@ shows the failure mode as a **[limitation]** (traced unless marked).
 | Obligation | Do this | Because |
 |---|---|---|
 | Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.2.1:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths *attempts* to uninitialize the SDK first (`dcamapi_uninit()` logs an `@error` if that fails, but the constructor ignores its return and throws anyway); an exception after a successful open has no such guard |
-| Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | `CrystaLaser()` builds its own `NIdaq()`, first device, first channel; cannot be shared or configured |
+| Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | **[guarantee]** (0.2.7) DAQ lights accept `daq::DAQ` and named outputs; **[limitation]** omitted names retain discovery by enumeration |
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
-| Failure visibility | throw, or set `last_error` and return `nothing`, and document which | the DAQ-backed lights `@warn` and return on an empty channel list: "initialized" and inert |
+| Failure visibility | throw, or set `last_error` and return `nothing`, and document which | **[guarantee]** (0.2.7) DAQ voltage lights throw on missing outputs or failed commands, and record state only after a successful write and cleanup |
 | Buffer lifetime | copy out of SDK buffers before releasing them | `DCAM4Camera.getdata` releases its buffers; `getlastframe` afterwards reads released memory (`mc-acquire`) |
 | Acquisition completion | expose a completion signal (`is_running`, a `Task`, or a blocking call) | `sequence(::SimCamera)` spawns an `@async` task that flips `is_running`; DCAM4 blocks in `dcamwait_event` |
 | Units | a `units`/`power_unit` field and the docstring; convert at the SDK boundary | PI millimetres, MCL micrometres, Sims unitless 0..100 |
@@ -293,8 +315,8 @@ interfaces; **[limitation]** `SLMInterface`'s `displayimage(::SLM)` has an empty
 body and returns `nothing`, the one interface stub that does not throw. The lifecycle generics come from
 `AbstractInstrument` and need no redeclaration. **[limitation]** `SLM` and `TRIG`
 are **not** the template: they sit outside `AbstractInstrument`, so `MLSLM` has
-no `initialize`/`shutdown`/`export_state`/`gui` at all (`MethodError`, not the
-"not implemented" error), `Triggerscope4` has no `export_state`, neither can sit
+no `initialize`/`shutdown`/`gui` at all (`MethodError`, not the
+"not implemented" error). **[guarantee]** Its `export_state` returns cached configuration attributes only. **[limitation]** `Triggerscope4` has no `export_state`; neither can sit
 in an `AbstractInstrument`-typed field or rollback list, and Meadowlark never
 `include`s its `interface_functions.jl` so `displayimage(::MLSLM)` resolves to
 an empty-bodied `displayimage(::SLM)` (executed). Full table, the executed

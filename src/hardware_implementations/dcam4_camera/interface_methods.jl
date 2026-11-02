@@ -344,6 +344,7 @@ function export_state(camera::DCAM4Camera)
         "roi_y" => camera.roi.y_start, 
         "roi_width" => camera.roi.width,
         "roi_height" => camera.roi.height, 
+        "roi_origin" => 0,
         "capture_mode" => Int(camera.capture_mode),
         "trigger_mode" => Int(camera.trigger_mode),
         "sequence_length" => camera.sequence_length, 

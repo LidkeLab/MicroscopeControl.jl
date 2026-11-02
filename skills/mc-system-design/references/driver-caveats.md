@@ -26,12 +26,12 @@ the connection; the table shows which drivers currently follow it.
 | `LCC1620(; scope=Triggerscope4(), dac_channel=1)` | constructs its own `Triggerscope4` unless you pass `scope`; validates `dac_channel` against `scope.dacoutputs` with `@error` (does not throw) | as for the scope it holds | traced |
 | **`DCAM4Camera(dev_id=0)`** | **calls `dcamapi_init` and `dcamdev_open`, reads sensor size and exposure.** The camera is claimed before `initialize`; `initialize(::DCAM4Camera)` is then a no-op. **Fixed in 0.2.1:** both failure paths now throw an `ErrorException` naming the device id and the `DCAMERR` code, instead of returning a non-camera value; on each of those two checked paths the constructor calls `dcamapi_uninit()` before it throws. That is not a general guarantee: an exception raised after `dcamdev_open` succeeds has no cleanup guard, and on the two paths that do clean up the cleanup is only *attempted*: `dcamapi_uninit()` checks its own SDK result and logs an `@error` when it fails, but the constructor ignores that return and throws either way, so a failed uninitialize is visible in the log and nowhere else. (Before 0.2.1, neither failure path returned a camera: if `dcamapi_init` failed the constructor called `dcamapi_uninit` itself and returned the `DCAMERR` code; if init succeeded but `dcamdev_open` failed it `@error`d "Could not open camera" and returned `nothing`, **leaving the DCAM API initialized**.) | On success: `shutdown(cam)` (`dcamdev_close` + `dcamapi_uninit`) even if you never called `initialize`. On an installed copy older than 0.2.1, a `nothing` return needs a manual `MicroscopeControl.HardwareImplementations.DCAM4.dcamapi_uninit()` call, or the next `DCAM4Camera()` in the session starts from a half-initialized SDK; check `cam isa DCAM4Camera` before storing it. | traced (hardware verification: NOT DONE for the 0.2.1 fix — no Hamamatsu camera available) |
 | **`ThorCamCSCCamera()`** | **initializes the Thorlabs SDK, discovers cameras, and opens the first one.** The camera is claimed at construction. There is no `initialize` method, so a lifecycle loop that calls `initialize(cam)` throws *after* the device is already open. | `shutdown(cam)` (closes the camera and uninitializes the SDK) | traced |
-| **`CrystaLaser()`, `VortranLaser()`, `DaqTrLight(; device_index=2)`** | **construct their own `NIdaq()` and run NI-DAQ device and channel discovery** (`showdevices`, then `showchannels` for AO, then for DO) inside one `try`. Construction always succeeds. Discovery can succeed **partially**: if AO discovery returns and DO discovery throws, the constructor `@warn`s, keeps the AO channel list it already had, and leaves DO empty. `initialize` then **returns normally** regardless of channel lists: Crysta's only sets `is_on = false`; Vortran's additionally `@warn`s "insufficient DO channels for initialization" and returns when fewer than 12 DO channels were found. | none for the DAQ (tasks are per-operation). But inspect `light.channelsAO` and `light.channelsDO` after construction: with an empty list the driver's `setpower`/`light_on`/`light_off` `@warn` and return without doing anything, so a laser can be "initialized" and silently inert. | traced |
+| `CrystaLaser(; daq, channel)`, `DaqTrLight(; daq, channel, device_index=2)`, `VortranLaser(; daq, ao_channel, do_channel)` | **[guarantee]** (0.2.7) named outputs skip discovery; `daq::DAQ` defaults to `NIdaq()`. **[limitation]** unnamed outputs still discover devices and AO then DO in one `try`, keeping any partial AO result and warning on discovery errors. Legacy defaults: device 1 for Crysta/Vortran, device 2 for DaqTrLight; AO index 1 for single-line lights, AO index 2 and DO index 12 for Vortran. | **[guarantee]** `initialize` writes 0 before recording off (Vortran: DO only), and throws on missing channels or transport failure. Tasks are per operation; cleanup is always attempted after a write. **[policy]** inspect the selected channel fields and use named wiring. | tested against a recording `DAQ`, no hardware |
 
 So "construct all devices, then initialize" is right for the Sim, PI, MCL, N472,
-SmarAct, DCx and TCube devices, and wrong for DCAM4, ThorCam CSC and the three
-DAQ-backed lights, which have already talked to hardware by the time the
-constructor returns.
+SmarAct, DCx and TCube devices, and wrong for DCAM4 and ThorCam CSC, which have already opened hardware by
+the time the constructor returns. **[limitation]** DAQ voltage lights still
+query the device when channel names are omitted; named outputs avoid discovery.
 
 ## Ordering and ownership
 
@@ -46,7 +46,7 @@ The runtime constraints come from object ownership:
 | `LCC1620` | `scope::Triggerscope4` | keyword `scope=`; defaults to a fresh `Triggerscope4()` on `COM3` | construct the scope first if you want to share it. `initialize(att)` calls `initialize(att.scope)` itself when the scope's port is not open, then sets the DAC range and drives to `min_voltage`. `shutdown(att)` drives the channel to `min_voltage` (0 V, which is **full transmission** on the LCC1620) and leaves the port open. |
 | `XEM` (module `OK_XEM`) | `daq::NIdaq` | keyword `daq=`; defaults to `NIdaq()` | none: `NIdaq` holds no connection (tasks are created and deleted per operation, `initialize`/`shutdown` are no-ops) |
 | `TCubeLaser` | `daq::NIdaq` for the modulation channel | keyword `daq=` | none, as above. `TCubeLaserControl.setupIO(laser)` creates the AO task on the channel you name (`ao_channel = "<device>/ao<n>"`, optional `daq_device=`); with none named it refuses and lists the AO channels found (up to 0.2.6 it took the second device's second channel). `max_current` is required in both modes (up to 0.2.6 open loop defaulted to 160 mA). **[guarantee]** (0.2.5, traced) `initialize` in `ConstantPhotocurrent` mode is a protected sequence and never enables the output: it requires key switch and interlock; requires the controller's TIA range bits to match `tia_range`; zeroes the setpoint and disables the output first, in both modes and before the mode command (the TLD001 ignores setpoints while the output is off, so `light_on` sends the setpoint right after enabling and `light_off` zeroes it before disabling); leaves the max-current potentiometer at the highest position whose controller-reported limit is `<= max_current` and records that limit in `pd.max_current_clamp`; enters closed loop and verifies the status bit; writes and reads back the W/A factor. Any failed step throws and closes the handle. `light_on` and `setoutputpower!` refuse until the clamp is verified, and re-read the closed-loop bit and the controller's limit before emitting (not yet run on hardware). Both modes start Kinesis polling (50 ms), so the readbacks are cache reads. Hardware-verified on a TLD001 (2026-09-28, output off and on): polling refreshes the setpoint cache, the pot needs adjust mode, setpoints only take with the output on. Closed loop verified at 1-70 mW with single-write setpoints; an optional ramp (`RAMP_STEP_mW[]`) is kept because a jump from 0 once locked the controller's loop at ~21 mW, intermittently; see `mc-extend/references/rig-causes.md`. **External modulation (Unreleased):** `enable_modulation!(laser; ao_channel)` (required: no default output; or `writer`, `v_range` and `output_id` for any other output) creates that AO task, writes 0 V and sets the control source to software + external; `setmodulation!(laser, level)` then adds `level` (mW closed loop, mA open loop; 10 V = full scale) in one DAQ write with no controller call; per laser and off by default; every switch-off writes 0 V first, totals above the ceiling are refused; the controller keeps ONE setpoint register (a USB write sets it, MOD IN changes add their difference), so while modulated every USB setpoint the driver sends is request + modulation level, verified on a TLD001 (17 of 17 checks, 2026-10-13). Several lasers: each claims its own output (DAQ channel, or `output_id` with a writer); a second laser asking for a held one is refused. Open loop + MOD IN is refused (on a TLD001 the input disarmed on every `setcurrent!` and re-arming left the current up to 5 mA off). A 0-5 V card cannot subtract, so the low level is the base setpoint (a 0 mW base is dark, < 0.01 % of ON, and a +20 mW pulse from it still lands within one 5 ms frame after 2 s dark). Details: `tcube_laser/CALIBRATION.md`, "External modulation"; a laser's serial, calibration and wiring belong in the rig's own code |
-| `CrystaLaser`, `VortranLaser`, `DaqTrLight` | `daq::NIdaq` | **built internally**; no keyword, cannot be shared | none; each constructor does its own discovery (see side effects) |
+| `CrystaLaser`, `VortranLaser`, `DaqTrLight` | `daq::DAQ` | **[guarantee]** (0.2.7) keyword `daq=NIdaq()` plus named outputs | **[guarantee]** no persistent connection; one task per command. `setpower` is volts, recorded in `level_requested`; commands never read `properties.power`. |
 
 Because `NIdaq` is a stateless handle, several devices each holding their own
 `NIdaq()` is fine. The only shared *connection* in the package is the
@@ -61,9 +61,9 @@ Each is confirmed by the exception sets in upstream `test/contract.jl`
 
 | Device | Missing | What the call does |
 |---|---|---|
-| `ThorCamCSCCamera` | `initialize`, `export_state` | throws (`AbstractInstrument`/`Camera` stub, `ErrorException("... not implemented ...")`) |
+| `ThorCamCSCCamera` | `initialize` | throws (`AbstractInstrument` stub, `ErrorException("... not implemented ...")`); **[guarantee]** `export_state` returns cached settings without SDK calls |
 | `Triggerscope4` | `export_state` | `TRIG` is outside `AbstractInstrument`, so there is no fallback at all: plain `MethodError` (executed: `hasmethod(export_state, Tuple{Triggerscope4})` is `false`) |
-| `MLSLM` | `initialize`, `shutdown`, `export_state`, `gui` | `MethodError` for all four (executed) |
+| `MLSLM` | `initialize`, `shutdown`, `gui` | `MethodError` for all three; **[guarantee]** `export_state` returns cached configuration attributes only, without SDK calls |
 
 `TCubeLaser` was in this table up to v0.2.2: its only `export_state` was
 `export_state(::TCubeLaser, sth)`, with an unused second positional argument, so
@@ -166,3 +166,42 @@ on open **[guarantee]**.
   Do the same in your own `attributes`.
 - A `children` value must be an `(attributes, data, children)` tuple, never a
   device object: `save_group_recursive` destructures it.
+
+## DAQ voltage-light state (0.2.7)
+
+**[guarantee]** `CrystaLaser` and `DaqTrLight` stage an off `setpower` request
+without writing. The next successful `light_on` uses it and clears
+`level_staged`; with no staged request it writes and records 1.0 V clamped to
+the voltage range. Live changes do not stage the next enable. `initialize`
+and `shutdown` cancel a pending stage; `light_off` preserves it.
+All preserve the last requested level for metadata. All three lights start
+with `level_requested = NaN`. Vortran writes AO even while off and enables
+through DO.
+**[guarantee]** `export_state` reports `power` and `power_requested` from
+`level_requested`, unit `V`, voltage bounds and the selected channels. A supplied
+`properties` object is retained unchanged, without warning; default properties
+are in volts. Accepted commands update `properties.power` only when its unit
+is "V", and commands never read that field.
+
+**[guarantee]** All writes use task cleanup in `finally`. State changes follow
+successful writes and cleanup. Any failed off/initialize/shutdown throws and
+records `is_on = true`; failed enable/live level writes try to darken, recording off only if
+that succeeds. Single-line `setpower` writes only when `line_enabled` is true;
+a successful enable sets it, and any off attempt, failed enable or failed live
+write clears it. Vortran failed DO off also tries AO 0, which lowers output
+but does not extinguish it; its shutdown tries both
+outputs independently and reports both failures in one error. **[limitation]**
+these are commanded states, with no optical measurement or readback.
+**[policy]** teardown uses `lights_off(lights)` to attempt every light; catch
+`MicroscopeControl.LightsOffError` to inspect its `failures` name/error pairs.
+
+**[limitation]** A failed task deletion may leave the channel reserved and
+`light_off` throwing with `is_on = true`. DAQmx.jl's explicit `clear!` keeps
+the handle on error, and its `Task` finalizer retries clear at garbage
+collection. Try `GC.gc()`, then `light_off`; if that still fails, restart Julia and call
+`initialize`, which writes 0. Whether a failed deletion actually leaves a
+channel reserved is untested on hardware.
+
+**[limitation]** Calling `initialize` in a second Julia beside a running
+experiment darkens that experiment's line while its first process still
+reports on.
