@@ -1,0 +1,47 @@
+name: Windows check
+# One-off check for PR 94 (admiral, 2026-11-03): run the save_h5, CSC, stage export and DCAM read-back
+# tests on a hosted Windows runner against the exact commit in TARGET_SHA. Lives only on the
+# `wincheck` branch; never merged.
+on:
+  push:
+    branches:
+      - wincheck
+  workflow_dispatch:
+env:
+  TARGET_SHA: bd6ea217e638920473c711b25f2957480858a8c8
+jobs:
+  windows:
+    name: Windows subset at ${{ github.sha }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out the runner
+        uses: actions/checkout@v7
+        with:
+          path: runner
+      - name: Check out the target commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          path: target
+      - name: Confirm the target commit
+        shell: bash
+        run: |
+          cd target
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git rev-parse HEAD
+      - name: Use the subset runner
+        shell: bash
+        run: cp runner/.github/wincheck/runtests.jl target/test/runtests.jl
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+          arch: x64
+      - uses: julia-actions/cache@v3
+      - name: Run the subset
+        shell: bash
+        working-directory: target
+        run: julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
