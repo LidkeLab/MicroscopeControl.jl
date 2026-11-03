@@ -10,12 +10,9 @@ the next version with `-DEV`).
 
 ## [Unreleased]
 
-## [0.2.7] - 2026-11-02
-
-This release adds DCAM4 camera fixes (#75, #85, #87, #88), PI stage and DCAM4 guards (#89), light-source
-modulators (#90), and changes DAQ light failure reporting, voltage metadata and off-state level writes.
-None of the DAQ light changes has run on hardware: they ran against a recording fake DAQ, and a real failed write was read from DAQmx.jl's source, not observed.
-Hardware checks are owed at each instrument's repin, not at this tag.
+DAQ light failure reporting, voltage metadata and off-state level writes changed (#94). None of the DAQ light
+changes has run on hardware: they ran against a recording fake DAQ, and a real failed write was read from DAQmx.jl's
+source, not observed. Hardware checks are owed at each instrument's repin.
 
 **Callers**
 
@@ -262,8 +259,8 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 
 ### Known issues
 
-- These defects remain open; their effects have not appeared in saved files
-  checked for this release. Candidate fixes are on `fixes-0.2.7-drivers`.
+- These defects remain open; their effects have not appeared in the saved files
+  checked for #94. Candidate fixes are on `fixes-0.2.7-drivers`.
   - `DCAM4Camera`: a failed exposure or ROI read-back is not checked, and 0 is taken as the value (0 of 1,041 saved
     files on two instruments show it).
   - `ThorCamCSCCamera`: a poll timeout gives an all-zero frame, inside a `getdata` sequence too, and the poll timeout
