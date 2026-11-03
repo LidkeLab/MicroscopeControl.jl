@@ -401,7 +401,9 @@ end
             # Missing parent directories are real filesystem failures. Preserve
             # the requested spelling, including .., for the HDF5 writer to handle.
             missing = joinpath("missing", "..", "frames.h5")
-            @test anchor(missing) == missing
+            # Windows resolves `..` in the path text before looking at the disk, so there the missing directory
+            # cancels out and the parent resolves; POSIX looks each component up, so it fails and the path stays.
+            @test anchor(missing) == (Sys.iswindows() ? expected : missing)
             absolute_missing = joinpath(ordinary, "missing", "frames.h5")
             @test anchor(absolute_missing) == absolute_missing
 

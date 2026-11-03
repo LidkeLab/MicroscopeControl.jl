@@ -150,7 +150,9 @@ end
 @testset "r7b: refused CSC timeout writes preserve the cache" begin
     CSC = MicroscopeControl.HardwareImplementations.ThorCamCSC
     F = Main.FakeCSC
-    cam = CSC.ThorCamCSCCamera()
+    # The fake SDK holds an 8 x 6 frame, so the camera must state that sensor: the driver copies the sensor's pixel
+    # count from the SDK's buffer (a known limitation), and a 1440 x 1080 default read past it (Windows faulted).
+    cam = CSC.ThorCamCSCCamera(camera_format=CameraFormat(8, 6, 1, 0, "CMOS"), roi=CameraROI(3, 2, 4, 3))
     before = cam.poll_timeout
     F.timeout_error[] = Cint(1) # Nonzero SDK failure, rather than an impossible timeout value.
     @test_throws "set poll timeout" setexposuretime!(cam, Int64(2_000_000))
