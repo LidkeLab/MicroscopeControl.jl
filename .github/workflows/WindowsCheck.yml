@@ -8,7 +8,7 @@ on:
       - wincheck
   workflow_dispatch:
 env:
-  TARGET_SHA: ce0a521a79a63cfef5ff3b020a913316ed0fca11
+  TARGET_SHA: d3541e16a45414f8200fb9557fe9bc86d0339278
 jobs:
   windows:
     name: Windows subset at ${{ github.sha }}
