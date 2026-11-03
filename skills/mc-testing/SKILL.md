@@ -304,8 +304,11 @@ because nothing above touches it:
   state the next acquisition can use (the Sim cannot show this). (Opening a
   light panel no longer commands power as of 0.2.1, so that is no longer a
   hardware-acceptance item — see the GUI smoke test section above.)
-- SDK failure paths: what `capture` returns on failure per driver (`nothing`,
-  or `ThorCamCSCCamera`'s silent all-zero frame);
+- SDK failure paths: **[guarantee, 0.2.7]** DCAM4 exposure/ROI read-backs throw; other DCAM4 acquisition errors
+  can return `nothing`. DCx failures can return `nothing`;
+  **[guarantee, 0.2.7]** CSC capture and sequence reads throw on timeout, while `getlastframe` returns `nothing`;
+- **[guarantee, 0.2.7]** stage exports attempt a position read without motion; check `position_fresh` rather than
+  assuming every saved position was freshly measured. Disconnected stages/channels and failed reads warn and retain cached values;
 - shared-connection ownership: two attenuators on one `Triggerscope4`, and that
   `shutdown(att)` means 0 V, full transmission, on an LCC1620;
 - that saved attributes are readbacks where you assumed they were.

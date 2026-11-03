@@ -166,3 +166,16 @@ function driftcorrection(stage::Stage, xtoggle::Bool, ytoggle::Bool, ztoggle::Bo
     #function to set stage drift correction state
     error("driftcorrection not implemented for $(typeof(stage))")
 end
+
+
+# Snapshot the cached position before invoking the driver's read. A save must survive a
+# disconnected stage or a failed read, including a read that updated only some axes.
+function _export_position(read_position, stage::Stage, cached)
+    try
+        stage.connectionstatus || error("Stage is not connected")
+        return read_position(), true
+    catch err
+        @warn "Could not refresh stage position for export; using last-read position" stage = typeof(stage) exception = (err, catch_backtrace())
+        return cached, false
+    end
+end

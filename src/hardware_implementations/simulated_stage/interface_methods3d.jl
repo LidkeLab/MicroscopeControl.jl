@@ -61,12 +61,17 @@ end
 
 """
     export_state(stage::SimStage3d)
+
+Refresh the simulated position through `getposition` and export it. `position_fresh::Bool` is always true,
+including when the simulated stage is disconnected; no hardware is involved.
 """
 function export_state(stage::SimStage3d)
+    StageInterface.getposition(stage)
     attributes = Dict{String, Any}(
         "label" => stage.label,
         "id" => stage.id,
         "dimensions" => stage.dimensions,
+        "position_fresh" => true,
         "position_x" => stage.real_x,
         "position_y" => stage.real_y,
         "position_z" => stage.real_z,

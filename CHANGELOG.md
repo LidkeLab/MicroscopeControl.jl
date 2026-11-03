@@ -26,6 +26,8 @@ source, not observed. Hardware checks are owed at each instrument's repin.
 
 ### Added
 
+- Stage exports include `position_fresh::Bool`: true when this export read every exported axis successfully
+  (always true for simulated stages); false when falling back to the last-read position.
 - `lights_off(lights)` and `lights_off(l1, l2, ...)` attempt every light even
   after an exception or interruption. Failures throw `MicroscopeControl.LightsOffError`
   (public, not exported), retaining every light name and caught exception in
@@ -94,6 +96,15 @@ source, not observed. Hardware checks are owed at each instrument's repin.
 
 ### Fixed
 
+- `DCAM4Camera` checks exposure and ROI read-back failures and throws before accepting failed-read zeros.
+- CSC `getlastframe` returns `nothing` on timeout; capture/sequences throw. Default timeouts follow exposure;
+  explicit timeouts are kept, and refused timeout writes preserve the cache.
+- `save_h5` snapshots state and writes in place. Failures log and rethrow, removing new targets (keeping symlinks)
+  or truncating existing files to zero bytes; cleanup failures log separately without hiding the original error.
+- `MCLStage` rejects negative Madlib position and calibration returns without replacing cached values;
+  failed writes throw before changing the accepted target.
+- Stage exports read the current position without moving. Disconnected stages and failed reads warn once
+  and export the last-read position, so a save during acquisition can continue.
 - Camera panel menus update their selected field.
 - CSC and MLSLM export cached settings without SDK calls; MLSLM saves attributes only.
   CSC `unique_id` is a name string.
@@ -146,7 +157,7 @@ source, not observed. Hardware checks are owed at each instrument's repin.
   stride and the padding dropped; the buffer was allocated for `rowbytes` but reshaped to `(width, height)`, which
   threw on a length mismatch.
 - `ThorCamCSCCamera` sizes its read buffer from the sensor (`camera_format`) instead of a hard-coded 1440 x 1080,
-  converts the full frame, and crops it to `roi` (`x_start`, `y_start`, 1-based) in software; the zero frame and the
+  converts the full frame, and crops it to `roi` (`x_start`, `y_start`, 1-based) in software; frames and the
   `getdata` sequence array follow the cropped size. The driver does not send `roi` to the camera, so there is no
   readout speedup, and an `roi` outside the sensor throws an `ArgumentError` before anything is copied. `getdata` in
   `SEQUENCE` mode looped to an undefined `sequence_frames`; it now loops to `sequence_length`.
@@ -259,16 +270,6 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 
 ### Known issues
 
-- These defects remain open; their effects have not appeared in the saved files
-  checked for #94. Candidate fixes are on `fixes-0.2.7-drivers`.
-  - `DCAM4Camera`: a failed exposure or ROI read-back is not checked, and 0 is taken as the value (0 of 1,041 saved
-    files on two instruments show it).
-  - `ThorCamCSCCamera`: a poll timeout gives an all-zero frame, inside a `getdata` sequence too, and the poll timeout
-    does not follow the exposure (no current caller takes a CSC sequence).
-  - `MCLStage`: a negative SDK return is stored as a position or range (0 of 3,372 saved values).
-  - `save_h5` shares the caller's arrays, overwrites an existing file, and leaves a partial file on failure.
-- A stage's `export_state` writes the position last read, not the position at save time: adaptive microscope files
-  from 2025-05 to 2026-05 record 12.5, 12.5 for the micro stage throughout.
 - Camera (`DCAM4Camera`):
   - One hang inside a camera library call, on several cores after GPU code had loaded (0.2.6's summary), and the
     NOTREADY, TIMEOUT and NOTSTABLE errors the rig logs during GUI use, are not fixed here. `DCAM4.dcam_trace!` records

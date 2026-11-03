@@ -40,6 +40,9 @@ const open_ids = Set{Int}()
 "Returned by `PI_GetError` and `PI_GetInitError`."
 const error_code = Ref(0)
 
+"Position returned by PI_qPOS; failures may modify the SDK output buffer."
+const position = [1.0, 2.0, 3.0]
+
 function reset!()
     empty!(calls)
     empty!(lastarg)
@@ -49,6 +52,7 @@ function reset!()
     empty!(failing)
     empty!(open_ids)
     error_code[] = 0
+    position .= [1.0, 2.0, 3.0]
     return nothing
 end
 
@@ -106,4 +110,9 @@ FakeGCS2.reset!()
     PI_qTMX(ID, szAxes, pdValueArray) = Main.FakeGCS2.status!("PI_qTMX", szAxes)
     PI_VEL(ID, szAxes, pdValueArray) = Main.FakeGCS2.status!("PI_VEL", szAxes)
     PI_qVEL(ID, szAxes, pdValueArray) = Main.FakeGCS2.status!("PI_qVEL", szAxes)
+    function PI_qPOS(ID, szAxes, pdValueArray)
+        status = Main.FakeGCS2.status!("PI_qPOS", szAxes)
+        pdValueArray .= Main.FakeGCS2.position
+        return status
+    end
 end

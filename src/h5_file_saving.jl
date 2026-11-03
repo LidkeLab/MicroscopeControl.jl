@@ -72,6 +72,28 @@ function save_group_recursive(h5parent, group_name::String, attributes::Dict, da
 end
 
 """
+    anchor_h5_path(filename::String) -> String
+
+Resolve the parent directory through the filesystem once at call time, including drive-relative paths,
+directory symlinks and `..`. Keep the leaf unchanged so HDF5 follows a symlink leaf itself.
+If parent resolution fails, return `filename` exactly as given, so the save opens the path the caller passed (a
+relative path then stays relative to the working directory, which still works when an ancestor of that directory is not
+searchable); interrupts propagate.
+"""
+function anchor_h5_path(filename::String)
+    cwd = pwd()
+    requested = joinpath(cwd, filename)
+    directory = dirname(requested)
+    parent = try
+        realpath(isempty(directory) ? cwd : directory)
+    catch err
+        err isa InterruptException && rethrow()
+        return filename
+    end
+    return joinpath(parent, basename(filename))
+end
+
+"""
     save_h5(filename::String, state_data)
 
 Save the state data to an HDF5 file.
@@ -80,20 +102,48 @@ Save the state data to an HDF5 file.
 - `filename::String`: Path to the HDF5 file
 - `state_data`: Tuple of dictionaries containing the attributes, data, and children of the instrument.
 
-Returns the `Task` that writes the file; `wait` it before reading. An image in `data` is stored as it is, `(y, x)` or
+Copies the entire state tree before returning the asynchronous `Task`; `wait` it before reading.
+Writes in place with HDF5's `"w"` open, letting HDF5 follow symlinks. `anchor_h5_path` resolves the parent
+through the filesystem once at call time; the task uses that same path for writing and cleanup.
+Saves overwrite existing files in place and are not atomic.
+Every task failure, including an interrupt, logs `@error "Failed to save to HDF5 file"` once and rethrows.
+Before writing, records `ispath` on that path (following links). On failure, a newly created file
+is removed, resolving its target with `realpath` only during cleanup if the path is a symlink, so the link stays.
+An existing file is truncated to zero bytes in place, retaining its inode, owner, mode, ACLs and hard links.
+Cleanup failures are logged separately without hiding the original error.
+The snapshot does not synchronize concurrent device changes while `export_state` is being assembled.
+
+An image in `data` is stored as it is, `(y, x)` or
 `(y, x, frame)`, with `dimension_order` and `dimension_order_convention` attributes (see
 `save_attributes_and_data`; lab decision 0040, `docs/src/conventions.md`). Files from 2026-01-29 until this change
 carry `dimension_order = "HW"` or `"HWN"`; a reader should keep accepting both.
 """
 function save_h5(filename::String, state_data)
+    path = anchor_h5_path(filename)
+    snapshot = deepcopy(state_data)
     @async begin
-        # Name the startigng group as "Main"
-        group = "Main"
-        # Extract the attributes, data and children from each instrument using the export_state function
-        attributes, data, children = state_data
-        # Save the attributes and data to the hdf5 file
-        save_attributes_and_data(filename, group, attributes, data, children)
-        # Declare that the data and attributes have been saved to the file
-        println("Data and attributes successfully saved to $filename")
+        existed = nothing
+        try
+            existed = ispath(path)
+            attributes, data, children = snapshot
+            h5open(path, "w") do h5file
+                save_group_recursive(h5file, "Main", attributes, data, children)
+            end
+            println("Data and attributes successfully saved to $filename")
+        catch err
+            @error "Failed to save to HDF5 file" exception = err
+            try
+                if existed === true
+                    open(path, "w") do io
+                        truncate(io, 0)
+                    end
+                elseif existed === false && ispath(path)
+                    rm(islink(path) ? realpath(path) : path)
+                end
+            catch cleanup_err
+                @error "Failed to clean up HDF5 file after save failure" exception = cleanup_err
+            end
+            rethrow()
+        end
     end
 end

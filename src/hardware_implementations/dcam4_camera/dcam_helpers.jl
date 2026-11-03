@@ -142,6 +142,10 @@ function _setexposuretime!(camera::DCAM4Camera)
         camera.last_error = err
     end    
     err, value = dcamprop_getvalue(hdcam, DCAM_IDPROP_EXPOSURETIME)
+    if is_failed(err) || !isfinite(value) || value < 0
+        camera.last_error = is_failed(err) ? err : DCAMERR_INVALIDVALUE
+        error("DCAM4Camera $(camera.unique_id): exposure read-back failed ($(err), $(value)); keeping requested exposure $(exposure_time) s.")
+    end
     # Only warn if difference is significant (>1% or >1ms)
     if !isapprox(exposure_time, value; rtol=0.01, atol=0.001)
         @warn "Exposure time set to $(value) instead of $(exposure_time)"
@@ -169,24 +173,28 @@ function _setroi!(camera::DCAM4Camera)
     setvalue(camera, DCAM_IDPROP_SUBARRAYMODE, 1) # set subarray mode to off so that the order of setting the ROI would not matter.
     setvalue(camera, DCAM_IDPROP_SUBARRAYHPOS, camera.roi.x_start)
     err, hpos = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_SUBARRAYHPOS)
+    check_roi_read!(camera, err, hpos, "HPOS")
     if hpos != camera.roi.x_start
         @warn "ROI HPOS set to $(hpos) instead of $(camera.roi.x_start)"
     end
 
     setvalue(camera, DCAM_IDPROP_SUBARRAYHSIZE, camera.roi.width)
     err, hsize = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_SUBARRAYHSIZE)
+    check_roi_read!(camera, err, hsize, "HSIZE"; size = true)
     if hsize != camera.roi.width
         @warn "ROI HSIZE set to $(hsize) instead of $(camera.roi.width)"
     end
 
     setvalue(camera, DCAM_IDPROP_SUBARRAYVPOS, camera.roi.y_start)
     err, vpos = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_SUBARRAYVPOS)
+    check_roi_read!(camera, err, vpos, "VPOS")
     if vpos != camera.roi.y_start
         @warn "ROI VPOS set to $(vpos) instead of $(camera.roi.y_start)"
     end
 
     setvalue(camera, DCAM_IDPROP_SUBARRAYVSIZE, camera.roi.height)
     err, vsize = dcamprop_getvalue(camera.camera_handle, DCAM_IDPROP_SUBARRAYVSIZE)
+    check_roi_read!(camera, err, vsize, "VSIZE"; size = true)
     if vsize != camera.roi.height
         @warn "ROI VSIZE set to $(vsize) instead of $(camera.roi.height)"
     end
@@ -214,8 +222,19 @@ function _setroi!(camera::DCAM4Camera)
     return camera.roi
 end
 
+# Do not publish a partial ROI or turn a failed SDK read's zero into accepted configuration.
+function check_roi_read!(camera::DCAM4Camera, err, value, name; size = false)
+    if is_failed(err) || !isfinite(value) || value < 0 || (size && value == 0) || !isinteger(value)
+        camera.last_error = is_failed(err) ? err : DCAMERR_INVALIDVALUE
+        error("DCAM4Camera $(camera.unique_id): ROI $(name) read-back failed ($(err), $(value)); keeping the requested ROI.")
+    end
+    return nothing
+end
+
 """
     setroi!(camera::DCAM4Camera, roi::CameraROI)
+
+A failed read-back sets `last_error` and throws while keeping the requested ROI; it never records failed-read zeros.
 
 Apply `roi` to the camera. **Prefer this over the four-argument form**, whose
 positional order is `(hpos, hsize, vpos, vsize)` — that is

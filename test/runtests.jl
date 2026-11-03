@@ -1867,8 +1867,11 @@ lab_summary("Core") do
     # process (same seam as tcube_fake_sdk.jl; see the file), so no other test runs against it.
     include("dcam4_fake_sdk.jl")
     include("dcam4_fake_paths.jl")
+    include("driver_readback.jl")
+    include("csc_failures.jl")
     include("image_layout_fakes.jl")
     # Likewise for the MCL stage's Madlib wrappers (see the file).
     include("mcl_stage.jl")
+    include("stage_exports.jl")
 end
 end  # lab_summary

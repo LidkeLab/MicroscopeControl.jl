@@ -8,7 +8,9 @@ Get the last image frame from the camera
 - `camera::Camera`: The camera object
 
 # Returns
-- `image`: The image frame, `(height, width)` indexed `[y, x]`, `[1, 1]` at the top left
+- `image`: The image frame, `(height, width)` indexed `[y, x]`, `[1, 1]` at the top left, or `nothing`
+  when no frame arrives (for example a CSC poll timeout or failed read). Check for `nothing` before indexing or
+  displaying; drivers must not fabricate a frame. CSC `capture` and sequence `getdata` throw on a missing frame.
 
 Image layout: lab decision 0040; see `docs/src/conventions.md`. A driver converts its SDK's row-major buffer once,
 with `rowmajor_to_yx`, and returns the result as it is.

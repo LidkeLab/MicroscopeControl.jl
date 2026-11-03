@@ -211,10 +211,16 @@ Each is stated as what the code does today; the label says how far to trust it.
    `(attributes, data, children)`; children are further tuples keyed by name; `save_h5` walks the tree recursively under a root group
    `Main` without knowing any device class (`src/h5_file_saving.jl`). That is a
    strong boundary: drivers describe themselves, the system assembles a
-   meaningful record, the writer persists it. It does **not** make
-   `export_state` an inverse of `set_state`, promise a hardware readback, or
-   produce an atomic snapshot: `save_h5` is `@async` and opens the file with
-   `"w"`. **[policy]** decide when you snapshot and mark what is missing, and
+   meaningful record, the writer persists it. **[guarantee, 0.2.7]** `save_h5` copies the state tree before
+   returning its asynchronous task and writes the given path in place with HDF5's `"w"` open, following symlinks.
+   It records `ispath` before writing. Every task failure, including an interrupt, logs once and rethrows;
+   a new target is removed (through `realpath` for a symlink, keeping the link), and an existing file is truncated
+   to zero bytes in place, keeping its inode, owner, mode, ACLs and hard links. Cleanup failures log separately
+   without hiding the original error. **[limitation]** saves overwrite in place and are not atomic.
+   Stage exports refresh position without motion and record `position_fresh`; on a disconnected
+   stage or failed read they warn once and keep the last-read position. **[limitation]** assembling `export_state`
+   across instruments is not an atomic snapshot, and it is not an inverse of `set_state`.
+   **[policy]** decide when you export and mark what is missing, and
    build your own dictionaries as `Dict{String,Any}`: the tuple and tree shape
    is the guarantee, the concrete `Dict` parameters are not (`export_state(NIdaq())`
    returns `Dict{String,String}` attributes and `Dict{Any,Any}` children;

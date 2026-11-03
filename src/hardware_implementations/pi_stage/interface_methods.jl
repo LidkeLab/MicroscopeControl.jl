@@ -69,16 +69,25 @@ end
 
 """
     export_state(stage::PIStage)
+
+Read the connected stage's position through `getposition`, without moving it. `position_fresh::Bool` is true
+only when this read succeeds. If disconnected or the read throws, warn once with the error and export the
+last-read position; an acquisition save is not interrupted.
 """
 function export_state(stage::PIStage)
+    position, position_fresh = StageInterface._export_position(stage, (stage.real_x, stage.real_y)) do
+        StageInterface.getposition(stage)
+        (stage.real_x, stage.real_y)
+    end
     attributes = Dict{String, Any}(
         "stage_label" => stage.stagelabel,
         "units" => stage.units,
         "dimensions" => stage.dimensions,
+        "position_fresh" => position_fresh,
         "connected" => stage.connectionstatus,
         "id" => stage.id,
-        "position_x" => stage.real_x,
-        "position_y" => stage.real_y,
+        "position_x" => position[1],
+        "position_y" => position[2],
         "target_x" => stage.targ_x,
         "target_y" => stage.targ_y,
         "range_x" => collect(stage.range_x),  # Convert tuple to array

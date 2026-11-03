@@ -156,7 +156,15 @@ on open **[guarantee]**.
   returns a `Task` (`@async`). `wait` it before reading the file or exiting.
   `save_attributes_and_data(filename, "Main", attributes, data, children)` is
   the synchronous form.
-- The file is opened with `"w"`, so each save overwrites.
+- **[guarantee, 0.2.7]** `save_h5` copies the state tree synchronously before returning its task, then writes the
+  given path in place with HDF5's `"w"` open, following symlinks. It records `ispath` before writing; every task
+  failure, including an interrupt, logs once and rethrows. Cleanup removes a newly created target (through
+  `realpath` for a symlink, keeping the link), or truncates an existing file to zero bytes in place, keeping its
+  inode, owner, mode, ACLs and hard links. Cleanup failures log separately without hiding the original error.
+  **[limitation]** saves overwrite in place and are not atomic.
+- **[guarantee, 0.2.7]** Stage exports read the current position without moving and report `position_fresh`.
+  A disconnected stage/channel or failed read warns once with the error and exports the last-read position with false;
+  simulated stages always report true. Negative MCL position/range returns throw before updating the cache.
 - `data` goes to a dataset named `data` in the node's group. For 2-D and 3-D
   arrays it gets attributes `dimension_order` (`"y,x"` or `"y,x,frame"`),
   `dimension_order_convention = "column-major (Julia/MATLAB); C-order tools list it reversed"`,

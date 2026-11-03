@@ -254,13 +254,13 @@ end
 
 function dcamprop_getsize(hdcam::Ptr{Cvoid})
     err, width = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_WIDTH))
-    if is_failed(err)
-        @error "DCAM Failed to get width"
+    if is_failed(err) || !isfinite(width) || width <= 0 || !isinteger(width)
+        error("DCAM4Camera: image width read-back failed ($err, $width).")
     end
 
     err, height = dcamprop_getvalue(hdcam, Int32(DCAM_IDPROP_IMAGE_HEIGHT))
-    if is_failed(err)
-        @error "DCAM Failed to get height"
+    if is_failed(err) || !isfinite(height) || height <= 0 || !isinteger(height)
+        error("DCAM4Camera: image height read-back failed ($err, $height).")
     end
 
     return Int(width), Int(height)

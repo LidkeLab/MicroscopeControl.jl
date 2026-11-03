@@ -24,27 +24,32 @@ function disarmcamera(camera::ThorCamCSCCamera)
     return is_camera_disarmed
 end
 
-function getlastframeornothing(camera::ThorCamCSCCamera)    #Calls tl_camera_get_pending_frame_or_null, returns Nothing, Nothing if no image collected
+# Raw SDK seam: tests replace this call, leaving timeout handling and the sensor copy exercised.
+function _sdk_pending_frame(handle, image, count, metadata, metadata_size)
+    return @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_pending_frame_or_null(
+        handle::Ptr{Cvoid}, image::Ref{Ptr{UInt16}}, count::Ref{Cint},
+        metadata::Ref{Ptr{Cchar}}, metadata_size::Ref{Cint})::Cint
+end
+
+# A driver-local sentinel, not a vendor status: SDK success with a null buffer means poll timeout.
+const FRAME_POLL_TIMEOUT = Cint(-1)
+
+function getlastframeornothing(camera::ThorCamCSCCamera)
     validate_roi(camera)
-    image_buffer_ref = Ref{Ptr{UInt16}}()
-    frame_count = Ref{Cint}(Cint(0))
-    metadata_ref = Ref{Ptr{Cchar}}()
-    metadate_size_bytes = Ref{Cint}(Cint(0))
-
-    is_frame_collected = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_get_pending_frame_or_null(camera.camera_handle::Ptr{Cvoid}, image_buffer_ref::Ref{Ptr{UInt16}}, frame_count::Ref{Cint}, metadata_ref::Ref{Ptr{Cchar}}, metadate_size_bytes::Ref{Cint})::Cint
-
-    if is_frame_collected != 0
-        @error "Frame not collected"
-        return Nothing
+    image = Ref{Ptr{UInt16}}(C_NULL)
+    count = Ref{Cint}(0)
+    metadata = Ref{Ptr{Cchar}}(C_NULL)
+    metadata_size = Ref{Cint}(0)
+    code = _sdk_pending_frame(camera.camera_handle, image, count, metadata, metadata_size)
+    camera.last_error = code
+    if code != 0
+        @error "Frame not collected" code
+        return nothing
+    elseif image[] == C_NULL
+        camera.last_error = FRAME_POLL_TIMEOUT
+        return nothing
     end
-    
-    image_buffer = image_buffer_ref[]
-    #prevents crashing if no frame is collected
-    if image_buffer != C_NULL
-        return copy_sensor_frame(camera, image_buffer)
-    else
-        return Nothing
-    end
+    return copy_sensor_frame(camera, image[])
 end
 
 # Copies the frame the SDK holds at `image_buffer` into a Julia vector. The camera delivers the full sensor, so the

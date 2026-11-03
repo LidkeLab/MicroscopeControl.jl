@@ -32,10 +32,9 @@ function capturesingleframe(exposure_time, operation_mode, frames_per_trigger)
 
 
     #Capture Last Frame
-    single_image = Nothing
-    @time while single_image == Nothing 
-        single_image = ThorCamCSC.getlastframe(test_cam)
-    end
+    single_image = nothing
+    single_image = ThorCamCSC.getlastframe(test_cam)
+    single_image === nothing && error("CSC capture frame timed out")
     #Disarm Camera
     ThorCamCSC.disarmcamera(test_cam)   
 

@@ -1,35 +1,50 @@
-function setexposuretime!(camera::ThorCamCSCCamera, exp_time::Clonglong) #Sets exposure to specified time
+# The TSI exposure value is in microseconds; image poll timeout is in milliseconds.
+# Round up so the timeout is at least two exposures plus one second, bounded by the SDK's Cint.
+function exposure_poll_timeout(exposure_us::Integer)
+    exposure_us >= 0 || throw(ArgumentError("Exposure must be nonnegative"))
+    return Cint(clamp(cld(Int128(exposure_us), 500) + 1000, 1, typemax(Cint)))
+end
+
+_sdk_set_exposure(handle::Ptr{Cvoid}, value::Clonglong) =
+    @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_exposure_time(handle::Ptr{Cvoid}, value::Clonglong)::Cint
+_sdk_set_poll_timeout(handle::Ptr{Cvoid}, value::Cint) =
+    @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_image_poll_timeout(handle::Ptr{Cvoid}, value::Cint)::Cint
+
+function check_csc(camera::ThorCamCSCCamera, code::Cint, operation)
+    camera.last_error = code
+    code == 0 || error("ThorCamCSCCamera $operation failed (SDK code $code)")
+    return code
+end
+
+function setexposuretime!(camera::ThorCamCSCCamera, exp_time::Clonglong)
+    exposure_poll_timeout(exp_time) # Validate before writing, including with an explicit timeout.
+    code = check_csc(camera, _sdk_set_exposure(camera.camera_handle, exp_time), "set exposure")
     camera.exposure_time = exp_time
-    is_exposure_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_exposure_time(camera.camera_handle::Ptr{Cvoid}, exp_time::Clonglong)::Cint
-    if is_exposure_set != 0
-        @error "Exposure time not set"
-    end
-    return is_exposure_set
+    # The exposure has already changed even if the subsequent timeout write fails.
+    setpolltimeout(camera)
+    return code
 end
 
-function setexposuretime(camera::ThorCamCSCCamera)  #uses exposure time in camera object to set exposure time
-    is_exposure_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_exposure_time(camera.camera_handle::Ptr{Cvoid}, camera.exposure_time::Clonglong)::Cint
-    if is_exposure_set != 0
-        @error "Exposure time not set"
-    end
-    return is_exposure_set
+setexposuretime(camera::ThorCamCSCCamera) = setexposuretime!(camera, camera.exposure_time)
+
+function _apply_poll_timeout!(camera::ThorCamCSCCamera, timeout::Cint, explicit::Bool)
+    code = check_csc(camera, _sdk_set_poll_timeout(camera.camera_handle, timeout), "set poll timeout")
+    setfield!(camera, :poll_timeout, timeout) # An automatic update is not a caller field assignment.
+    camera.poll_timeout_explicit = explicit
+    return code
 end
 
-function setpolltimeout!(camera::ThorCamCSCCamera, timeout::Cint)
-    camera.poll_timeout = timeout
-    is_timeout_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_image_poll_timeout(camera.camera_handle::Ptr{Cvoid}, timeout::Cint)::Cint
-    if is_timeout_set != 0
-        @error "Poll timeout not set"
-    end
-    return is_timeout_set
-end
+"""
+    setpolltimeout!(camera::ThorCamCSCCamera, timeout::Cint)
+
+Set an explicit poll timeout in milliseconds. After the SDK accepts it, keep it across exposure changes and
+acquisitions. A refused write throws and preserves the last accepted timeout and its explicit/automatic setting.
+"""
+setpolltimeout!(camera::ThorCamCSCCamera, timeout::Cint) = _apply_poll_timeout!(camera, timeout, true)
 
 function setpolltimeout(camera::ThorCamCSCCamera)
-    is_timeout_set = @ccall "thorlabs_tsi_camera_sdk.dll".tl_camera_set_image_poll_timeout(camera.camera_handle::Ptr{Cvoid}, camera.poll_timeout::Cint)::Cint
-    if is_timeout_set != 0
-        @error "Poll timeout not set"
-    end
-    return is_timeout_set
+    timeout = camera.poll_timeout_explicit ? camera.poll_timeout : exposure_poll_timeout(camera.exposure_time)
+    return _apply_poll_timeout!(camera, timeout, camera.poll_timeout_explicit)
 end
 
 function setoperationmode!(camera::ThorCamCSCCamera, op_mode::Cint)  #Sets operation mode to specified mode
