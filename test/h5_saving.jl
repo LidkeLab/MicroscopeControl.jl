@@ -471,3 +471,51 @@ end
         end
     end
 end
+
+# An attribute value HDF5 cannot store (a mutable struct). A caller's `export_state` could return one; HDF5.jl throws
+# after the file exists and the data are written, so it injects a failed save on every platform, Windows included,
+# where the file-size-limit tests above are skipped.
+mutable struct H5UnwritableAttribute
+    x::Vector{Int}
+end
+
+@testset "save_h5 removes or empties a partial file after a failed write, on every platform" begin
+    mktempdir() do dir
+        bad = (Dict{String,Any}("bad" => H5UnwritableAttribute([1])), fill(UInt16(7), 3, 4), Dict{String,Any}())
+        good = (Dict{String,Any}("run" => 1), fill(UInt16(42), 3, 4), Dict{String,Any}())
+        failed_save(path) = @test_logs (:error, r"Failed to save to HDF5 file") match_mode = :any begin
+            @test_throws TaskFailedException wait(save_h5(path, bad))
+        end
+
+        # A file the save created is removed.
+        fresh = joinpath(dir, "fresh.h5")
+        failed_save(fresh)
+        @test !ispath(fresh)
+
+        # An existing file is emptied in place (the HDF5 handle must be closed first, which Windows enforces).
+        existing = joinpath(dir, "existing.h5")
+        wait(save_h5(existing, good))
+        @test filesize(existing) > 0
+        failed_save(existing)
+        @test isfile(existing)
+        @test filesize(existing) == 0
+
+        # Through a symlink to a new target: the target is removed and the link kept. Making a symlink can need a
+        # privilege on Windows; skip only if the platform refuses.
+        target = joinpath(dir, "target.h5")
+        link = joinpath(dir, "link.h5")
+        made = try
+            symlink(target, link)
+            true
+        catch
+            false
+        end
+        if made
+            failed_save(link)
+            @test islink(link)
+            @test !ispath(target)
+        else
+            @test_skip false
+        end
+    end
+end
