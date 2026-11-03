@@ -71,6 +71,19 @@ end
         @test state_snapshot(cam) == before
     end
 
+    @testset "Camera panel buttons log a command that throws" begin
+        CI = MicroscopeControl.HardwareInterfaces.CameraInterface
+        fig = Figure()
+        cam = SimCamera()
+        # A CSC capture whose frame wait times out throws; the button logs it and the window keeps working.
+        button = CI.create_button(fig, 1, 1, "Start Capture", c -> error("frame wait timed out"), cam)
+        @test_logs (:error, r"Camera panel: Start Capture failed") button.clicks[] = button.clicks[] + 1
+        calls = Ref(0)
+        ok = CI.create_button(fig, 2, 1, "Abort", c -> (calls[] += 1), cam)
+        ok.clicks[] = ok.clicks[] + 1
+        @test calls[] == 1
+    end
+
     @testset "Camera live display" begin
         CI = MicroscopeControl.HardwareInterfaces.CameraInterface
         quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())

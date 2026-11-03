@@ -106,6 +106,8 @@ source, not observed. Hardware checks are owed at each instrument's repin.
 - Stage exports read the current position without moving. Disconnected stages and failed reads warn once
   and export the last-read position, so a save during acquisition can continue.
 - Camera panel menus update their selected field.
+- Camera panel buttons log a command that throws (for example a `ThorCamCSCCamera` capture or sequence whose frame
+  wait timed out, which now throws) instead of passing the error into the window's event loop.
 - CSC and MLSLM export cached settings without SDK calls; MLSLM saves attributes only.
   CSC `unique_id` is a name string.
 - DCAM4 and CSC exports identify their respective 0-based and 1-based ROI origins.

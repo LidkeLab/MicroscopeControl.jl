@@ -19,7 +19,13 @@ end
 function create_button(figure, row, column, label, action, camera)
     button = Button(figure[row, column], label=label)
     on(button.clicks) do _
-        action(camera)
+        # A camera command can throw (a capture or sequence whose frame wait timed out, a camera that is shut down);
+        # the panel logs it and stays usable instead of passing the error into the window's event loop.
+        try
+            action(camera)
+        catch e
+            @error "Camera panel: $label failed" exception = (e, catch_backtrace())
+        end
     end
     return button
 end
