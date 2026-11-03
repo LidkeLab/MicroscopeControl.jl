@@ -94,6 +94,23 @@ function anchor_h5_path(filename::String)
 end
 
 """
+    h5_landing_path(path::String) -> String
+
+The file a write to `path` lands on: `path` itself, or for a symlink its target, following each link's text
+(resolved against the link's own directory when relative) for up to 40 links. Works for a link whose target does not
+exist yet, which `realpath` refuses and which `ispath` reports as existing on Windows.
+"""
+function h5_landing_path(path::String)
+    landing = path
+    for _ in 1:40
+        islink(landing) || return landing
+        text = readlink(landing)
+        landing = isabspath(text) ? text : joinpath(dirname(landing), text)
+    end
+    return landing
+end
+
+"""
     save_h5(filename::String, state_data)
 
 Save the state data to an HDF5 file.
@@ -107,8 +124,10 @@ Writes in place with HDF5's `"w"` open, letting HDF5 follow symlinks. `anchor_h5
 through the filesystem once at call time; the task uses that same path for writing and cleanup.
 Saves overwrite existing files in place and are not atomic.
 Every task failure, including an interrupt, logs `@error "Failed to save to HDF5 file"` once and rethrows.
-Before writing, records `ispath` on that path (following links). On failure, a newly created file
-is removed, resolving its target with `realpath` only during cleanup if the path is a symlink, so the link stays.
+Before writing, it finds the file the write lands on (a symlink's target, following each link's text from the link's
+directory) and records whether that file exists; `ispath` on the link itself cannot be used, because on Windows it is
+true for a symlink whose target does not exist yet. On failure, a file the save created is removed (the target, so a
+link stays).
 An existing file is truncated to zero bytes in place, retaining its inode, owner, mode, ACLs and hard links.
 Cleanup failures are logged separately without hiding the original error.
 The snapshot does not synchronize concurrent device changes while `export_state` is being assembled.
@@ -123,8 +142,10 @@ function save_h5(filename::String, state_data)
     snapshot = deepcopy(state_data)
     @async begin
         existed = nothing
+        landing = path
         try
-            existed = ispath(path)
+            landing = h5_landing_path(path)
+            existed = ispath(landing)
             attributes, data, children = snapshot
             h5open(path, "w") do h5file
                 save_group_recursive(h5file, "Main", attributes, data, children)
@@ -137,8 +158,8 @@ function save_h5(filename::String, state_data)
                     open(path, "w") do io
                         truncate(io, 0)
                     end
-                elseif existed === false && ispath(path)
-                    rm(islink(path) ? realpath(path) : path)
+                elseif existed === false && ispath(landing)
+                    rm(landing)
                 end
             catch cleanup_err
                 @error "Failed to clean up HDF5 file after save failure" exception = cleanup_err

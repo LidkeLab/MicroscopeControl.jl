@@ -157,9 +157,9 @@ on open **[guarantee]**.
   `save_attributes_and_data(filename, "Main", attributes, data, children)` is
   the synchronous form.
 - **[guarantee, 0.2.7]** `save_h5` copies the state tree synchronously before returning its task, then writes the
-  given path in place with HDF5's `"w"` open, following symlinks. It records `ispath` before writing; every task
-  failure, including an interrupt, logs once and rethrows. Cleanup removes a newly created target (through
-  `realpath` for a symlink, keeping the link), or truncates an existing file to zero bytes in place, keeping its
+  given path in place with HDF5's `"w"` open, following symlinks. Before writing it records whether the file the
+  write lands on (a symlink's target) exists; every task failure, including an interrupt, logs once and rethrows.
+  Cleanup removes a newly created target (the link's target for a symlink, keeping the link), or truncates an existing file to zero bytes in place, keeping its
   inode, owner, mode, ACLs and hard links. Cleanup failures log separately without hiding the original error.
   **[limitation]** saves overwrite in place and are not atomic.
 - **[guarantee, 0.2.7]** Stage exports read the current position without moving and report `position_fresh`.

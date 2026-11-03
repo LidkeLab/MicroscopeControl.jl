@@ -213,8 +213,9 @@ Each is stated as what the code does today; the label says how far to trust it.
    strong boundary: drivers describe themselves, the system assembles a
    meaningful record, the writer persists it. **[guarantee, 0.2.7]** `save_h5` copies the state tree before
    returning its asynchronous task and writes the given path in place with HDF5's `"w"` open, following symlinks.
-   It records `ispath` before writing. Every task failure, including an interrupt, logs once and rethrows;
-   a new target is removed (through `realpath` for a symlink, keeping the link), and an existing file is truncated
+   It records whether the file the write lands on (a symlink's target) exists before writing. Every task failure,
+   including an interrupt, logs once and rethrows; a new target is removed (the link's target for a symlink, keeping
+   the link), and an existing file is truncated
    to zero bytes in place, keeping its inode, owner, mode, ACLs and hard links. Cleanup failures log separately
    without hiding the original error. **[limitation]** saves overwrite in place and are not atomic.
    Stage exports refresh position without motion and record `position_fresh`; on a disconnected
