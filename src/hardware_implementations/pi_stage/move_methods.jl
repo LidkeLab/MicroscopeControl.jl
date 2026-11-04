@@ -4,7 +4,7 @@ Function to move PI Stage to a specific position
 """
 function move(stage::PIStage, x::Float64, y::Float64)
     ok = PI_MOV(stage.id, "1 2", [Cdouble(x),Cdouble(y)])
-    ok == 1 || @error "PI_MOV refused — stage not connected, not referenced, or servo off"
+    ok == 1 || error("PI_MOV refused: stage not connected, not referenced, or servo off")
     stage.targ_x = x
     stage.targ_y = y
     @info "Stage moving to position: " * string(x) * ", " * string(y)
@@ -14,7 +14,8 @@ end
 Function to move PI Stage, and wait for completion
 """
 function moveandwait(stage::PIStage, x::Float64, y::Float64)
-    PI_MOV(stage.id, "1 2", [Cdouble(x),Cdouble(y)])
+    ok = PI_MOV(stage.id, "1 2", [Cdouble(x),Cdouble(y)])
+    ok == 1 || error("PI_MOV refused: stage not connected, not referenced, or servo off")
     stage.targ_x = x
     stage.targ_y = y
     ismoving(stage)
@@ -28,7 +29,8 @@ end
 Function to move PI Stage X axis to a specific position
 """
 function movex(stage::PIStage, x::Float64)
-    PI_MOV(stage.id, "1", [Cdouble(x)])
+    ok = PI_MOV(stage.id, "1", [Cdouble(x)])
+    ok == 1 || error("PI_MOV refused for X")
     stage.targ_x = x
 end
 
@@ -36,7 +38,8 @@ end
 Function to move PI Stage Y axis to a specific position
 """
 function movey(stage::PIStage, y::Float64)
-    PI_MOV(stage.id, "2", [Cdouble(y)])
+    ok = PI_MOV(stage.id, "2", [Cdouble(y)])
+    ok == 1 || error("PI_MOV refused for Y")
     stage.targ_y = y
 end
 

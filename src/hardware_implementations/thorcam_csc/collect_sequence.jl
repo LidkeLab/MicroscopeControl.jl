@@ -33,10 +33,9 @@ function collectsequence(exposure_time, operation_mode, frames_per_trigger, sequ
     #Create loop to capture
     sequence_array = Array{UInt16}(undef, 1440*1080, sequence_frames)
     for i in 1:sequence_frames
-        single_image = Nothing
-        while single_image == Nothing
-            single_image = ThorCamCSC.getlastframe(test_cam)
-        end
+        single_image = nothing
+        single_image = ThorCamCSC.getlastframe(test_cam)
+        single_image === nothing && error("CSC sequence frame $i timed out")
         sequence_array[:,i] = single_image
     end
 

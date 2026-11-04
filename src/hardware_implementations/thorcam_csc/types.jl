@@ -32,6 +32,25 @@ mutable struct ThorCamCSCCamera <: Camera
     last_error::Cint
     camera_state::Cint  #TODO: Enums for these
     is_running::Int
+    poll_timeout_explicit::Bool # Constructor, setter or field assignment; otherwise follow exposure.
+end
+
+# Field assignment is part of the existing camera API. Mark a caller's timeout
+# explicit; the driver's automatic SDK write bypasses this method with setfield!.
+function Base.setproperty!(camera::ThorCamCSCCamera, name::Symbol, value)
+    converted = convert(fieldtype(ThorCamCSCCamera, name), value)
+    setfield!(camera, name, converted)
+    name === :poll_timeout && setfield!(camera, :poll_timeout_explicit, true)
+    return converted
+end
+
+# Preserve the original positional arity; its supplied timeout is explicit.
+function ThorCamCSCCamera(camera_handle, exposure_time, poll_timeout, unique_id, max_id_length,
+        camera_format, number_of_frames_to_buffer, operation_mode, frames_per_trigger_zero_for_unlimited,
+        frame_rate, roi, sequence_length, capture_mode, trigger_mode, last_error, camera_state, is_running)
+    return ThorCamCSCCamera(camera_handle, exposure_time, poll_timeout, unique_id, max_id_length,
+        camera_format, number_of_frames_to_buffer, operation_mode, frames_per_trigger_zero_for_unlimited,
+        frame_rate, roi, sequence_length, capture_mode, trigger_mode, last_error, camera_state, is_running, true)
 end
 
 function ThorCamCSCCamera(;
@@ -39,7 +58,7 @@ function ThorCamCSCCamera(;
     unique_id::Vector{UInt8} = Vector{UInt8}(undef, 5),
     max_id_length::Cint = Cint(5),
     exposure_time::Clonglong = 40,
-    poll_timeout::Cint = Cint(1000),
+    poll_timeout::Union{Nothing,Cint} = nothing,
     camera_format::CameraFormat = CameraFormat(1440, 1080,1, 0, "CMOS"),
     number_of_frames_to_buffer::Cint = Cint(2),
     operation_mode::Cint = Cint(0),
@@ -53,6 +72,7 @@ function ThorCamCSCCamera(;
     camera_state::Cint = Cint(0),
     is_running::Int = 0
 )
+    timeout = poll_timeout === nothing ? exposure_poll_timeout(exposure_time) : poll_timeout
     is_init = thorcamsdkinit()
 
     if is_init != 0
@@ -68,5 +88,5 @@ function ThorCamCSCCamera(;
     end
 
     #TODO: Open camera here, so that it doesn not need to be opened in other functions
-    ThorCamCSCCamera(camera_handle, exposure_time, poll_timeout, unique_id, max_id_length, camera_format, number_of_frames_to_buffer, operation_mode, frames_per_trigger_zero_for_unlimited, frame_rate, roi, sequence_length, capture_mode,trigger_mode, last_error, camera_state, is_running)
+    ThorCamCSCCamera(camera_handle, exposure_time, timeout, unique_id, max_id_length, camera_format, number_of_frames_to_buffer, operation_mode, frames_per_trigger_zero_for_unlimited, frame_rate, roi, sequence_length, capture_mode,trigger_mode, last_error, camera_state, is_running, poll_timeout !== nothing)
 end

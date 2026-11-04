@@ -143,8 +143,8 @@
         @test all(stack[:, :, i] == full[2:4, 3:6] for i in 1:3)
 
         # No frame yet: a zero frame of the ROI's shape
-        @eval CSC getlastframeornothing(camera::ThorCamCSCCamera) = Nothing
-        @test CameraInterface.getlastframe(cam) == zeros(UInt16, 3, 4)
+        @eval CSC getlastframeornothing(camera::ThorCamCSCCamera) = nothing
+        @test CameraInterface.getlastframe(cam) === nothing
 
         # An ROI outside the sensor (past an edge, or empty) throws before anything is read
         @eval CSC function getlastframeornothing(camera::ThorCamCSCCamera)

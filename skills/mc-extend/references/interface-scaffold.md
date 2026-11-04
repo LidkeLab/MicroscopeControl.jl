@@ -11,14 +11,14 @@ sit *outside* `AbstractInstrument`. What that costs them today:
 |---|---|---|
 | `T <: AbstractInstrument` | `false` | `false` |
 | `initialize`/`shutdown` | **no methods**: `MethodError`, not the "not implemented" error | defined by the driver itself |
-| `export_state` | `MethodError` | `MethodError` (`hasmethod` is `false`); cannot appear in a saved record |
+| `export_state` | **[guarantee]** cached configuration attributes only, without SDK calls | `MethodError` (`hasmethod` is `false`); cannot appear in a saved record |
 | `gui` | none | `gui(::TRIG)` exists because `TrigInterface` imports `gui` and defines it |
 | in a system field typed `AbstractInstrument`, or a `Vector{AbstractInstrument}` rollback list | cannot be stored | cannot be stored |
-| upstream contract test | listed in `no_core_methods`; exempt from everything | exempt from `export_state` |
+| upstream contract test | listed in `no_core_methods` for lifecycle/GUI gaps; export is checked independently | exempt from `export_state` |
 | SLM interface operations | `displayimage(::MLSLM)` resolves to the interface's own `displayimage(::SLM)`, whose body is **empty** (returns `nothing`, silently): Meadowlark's `interface_functions.jl` is never `include`d by its module (executed / traced). A non-throwing default is exactly what this skill tells you never to ship. | n/a |
 
 A system cannot treat these two like the other devices: no uniform lifecycle
-loop, no export, and an error type (`MethodError`) that a
+loop, only MLSLM exports state, and an error type (`MethodError`) that a
 `catch e; e isa ErrorException` guard will not catch. Making them
 `<: AbstractInstrument` is an upstream follow-up. Your new interface goes under
 `AbstractInstrument`, full stop.

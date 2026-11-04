@@ -5,7 +5,7 @@ Function to update the position of the PI Stage
 """
 function getposition(stage::PIStage)
     position = Vector{Cdouble}(undef, 2)
-    PI_qPOS(stage.id, "1 2", position)
+    PI_qPOS(stage.id, "1 2", position) == 1 || error("PIStage position read failed (GCS error $(PI_GetError(stage.id)))")
 
     @info "Stage position: " * string(position[1]) * ", " * string(position[2])
     stage.real_x = position[1]

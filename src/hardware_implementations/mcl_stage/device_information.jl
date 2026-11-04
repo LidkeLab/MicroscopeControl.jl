@@ -32,18 +32,13 @@ function getcommandedposition(stage::MCLStage)
     return x_commanded[], y_commanded[], z_commanded[]  #Could change target to this?
 end
 
-function getcalibration(stage::MCLStage, axis::Int) #This returns the maximum value of each axis
-    if axis == 1
-        calibration = @ccall libmadlib.MCL_GetCalibration(Cint(1)::Cint, stage.id::Cint)::Cdouble
-        stage.range_x = (0.0, calibration)
-    elseif axis == 2
-        calibration = @ccall libmadlib.MCL_GetCalibration(Cint(2)::Cint, stage.id::Cint)::Cdouble
-        stage.range_y = (0.0, calibration)
-    elseif axis == 3
-        calibration = @ccall libmadlib.MCL_GetCalibration(Cint(3)::Cint, stage.id::Cint)::Cdouble
-        stage.range_z = (0.0, calibration)
-    else
+_mcl_calibration(axis::Int, id::Int) = @ccall libmadlib.MCL_GetCalibration(axis::Cint, id::Cint)::Cdouble
+
+function getcalibration(stage::MCLStage, axis::Int) # Maximum value of each axis
+    if !(axis in 1:3)
         @error "Invalid axis"
         return false
     end
+    calibration = checked_mcl_value(_mcl_calibration(axis, stage.id), "calibration axis $axis")
+    return setfield!(stage, (:range_x, :range_y, :range_z)[axis], (0.0, calibration))
 end

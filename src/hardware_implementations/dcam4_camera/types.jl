@@ -205,6 +205,9 @@ function DCAM4Camera(dev_id::Int = 0;
         im_width, im_height = dcamprop_getsize(hdcam)
         camera_format = CameraFormat(im_width, im_height, 1, 1, "SCMOS")
         err, exposure_time = dcamprop_getvalue(hdcam, DCAM_IDPROP_EXPOSURETIME)
+        if is_failed(err) || !isfinite(exposure_time) || exposure_time < 0
+            error("DCAM4Camera(dev_id=$dev_id): exposure read-back failed ($err, $exposure_time).")
+        end
         data = zeros(UInt16, im_width, im_height)
 
         # The count taken above is this camera's own: `assemble_camera`, not the positional constructor, which adopts one.

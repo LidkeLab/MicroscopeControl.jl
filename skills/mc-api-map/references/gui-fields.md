@@ -30,6 +30,9 @@ Methods called (arity follows `dimensions`): `initialize`, `shutdown`,
 follow `StageFormat` in `stage_interface/interface_types.jl`: positions
 `Float64`, ranges `Tuple{Float64,Float64}`.
 
+**[guarantee]** Step boxes accept only finite, positive numbers. The 2D panel
+catches and logs refused moves and restores its previous target display.
+
 | Device | Missing GUI fields | Panel opens (no hardware)? |
 |---|---|---|
 | `SimStage1d/2d/3d` | `stagelabel` (they have `label`) | **no: `FieldError` [limitation]** |
@@ -55,29 +58,41 @@ Methods called: `capture` (**its return value is used as the frame**),
 `start_live`/`start_sequence`. `DCAM4Camera`, `SimCamera`, `ThorCamCSCCamera`,
 `ThorcamDCXCamera` all carry every field (executed), but **presence is
 necessary, not sufficient**: the CSC types above break the panel even though
-`hasfield` passes for all seven. Check types, not just names. `[limitation]` the
-mode-dropdown callback assigns to a `camera` name outside its scope
-(`create_menu`), so the dropdowns are not a reliable way to change mode; and
-because `capture(::SimCamera)` returns an enum, "Start Capture" only works for
-cameras whose `capture` returns the frame.
+`hasfield` passes for all seven. Check types, not just names. **[guarantee]**
+the capture dropdown changes `capture_mode` and the trigger dropdown changes
+`trigger_mode`; each callback receives the camera and updates only its selected field.
+**[limitation]** because `capture(::SimCamera)` returns an enum, "Start Capture"
+only works for cameras whose `capture` returns the frame.
 
 ## `gui(::LightSource)` and `gui(::Attenuator)`
 
-Read `unique_id` and `properties` (`LightSourceProperties.min_power`,
-`max_power`, `power`; `AttenuatorProperties`). Every current light and the
-`LCC1620` carry both (executed). **Fixed in 0.2.1:** the light panel's slider
-and toggle used to be wired with `lift`, which fires on creation, so opening
-the panel called `setpower(light, 0.5)` immediately, then `light_on`/
-`light_off` on the toggle's initial value: opening a GUI was a hardware
-write. Both are now wired with `on` (fires only on a later change) and
-initialised from `properties.power`/`properties.is_on`, so opening **this**
-panel is observably read-only. The fix is scoped to the shared light panel;
-it is not a guarantee about the others, and `gui(::DAQ)` still calls
-`showdevices`/`showchannels` at construction.
+**[guarantee]** (0.2.7) The light panel reads `unique_id` and
+`properties.is_on`; plain lights use `properties.min_power`, `max_power`,
+`power` and `power_unit`. `CrystaLaser`, `VortranLaser` and `DaqTrLight` use
+`min_voltage`, `max_voltage`, `level_requested` and unit `V`, independent of
+`properties.power`. The attenuator panel continues to read `unique_id` and
+`AttenuatorProperties`.
 
-From 0.2.5 this panel serves only the lights that are not a `DiodeLaser`
+**[guarantee]** Opening the light panel issues no command. The slider spans
+the full native range; a NaN or out-of-range start falls back to the bottom.
+The textbox accepts only numbers within those bounds. Each submission issues
+one guarded command, including repeats of the displayed value and retries after
+failure; slider synchronization does not issue a second command. The textbox
+follows slider changes. A refusal or transport failure appears in the panel,
+with the output toggle corrected to the driver's state after level and output
+commands and polls `properties.is_on` twice a second without issuing commands;
+window close stops the poll. The requested line refreshes after toggle
+commands, including when an unstaged single-line light enables at the
+clamped 1.0 V default.
+**[guarantee]** Generic `gui(::LightSource)` returns the displayed
+`GLMakie.Screen`; the diode panels return their figure. **[limitation]** closing a panel leaves its light as it was.
+**[policy]** call `lights_off(lights)` during teardown and report every named
+failure from `MicroscopeControl.LightsOffError.failures`.
+
+**[guarantee]** This panel serves the lights that are not a `DiodeLaser`
 (`CrystaLaser`, `VortranLaser`, `DaqTrLight`, `SimLight`); a `DiodeLaser` has its
-own, below.
+own panel below. `gui(::DAQ)` still queries `showdevices`/`showchannels` at
+construction **[limitation]**.
 
 ## `gui(::DiodeLaser)` (0.2.5)
 
@@ -113,8 +128,9 @@ shows "not read yet" until Read is pressed or Poll (off at construction) is
 turned on. On a `SimDiodeLaser` this is checkable: `laser.log` gains nothing when
 the panel opens. `[guarantee]` The textbox accepts only a number within the
 slider's range, the same bounds the driver enforces; anything else is not
-applied and the border turns red. An entry moves the slider, so it issues exactly
-one command. The "commanded" line is refreshed from the device's fields only after
+applied and the border turns red. Each submission issues exactly one guarded
+command, including when the slider position stays the same; the textbox follows
+slider changes. The "commanded" line is refreshed from the device's fields only after
 the command returns, and a refusal is shown in the panel as `refused: <message>`,
 not thrown out of the callback.
 

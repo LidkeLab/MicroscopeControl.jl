@@ -1,7 +1,7 @@
-function create_menu(figure, row, column, options, default)
+function create_menu(figure, row, column, options, default, camera, field::Symbol)
     menu = Menu(figure[row, column], options=options, default=default, width=350, height=30)
     on(menu.selection) do mode
-        camera.capture_mode = mode
+        setfield!(camera, field, mode)
     end
     return menu
 end
@@ -19,7 +19,13 @@ end
 function create_button(figure, row, column, label, action, camera)
     button = Button(figure[row, column], label=label)
     on(button.clicks) do _
-        action(camera)
+        # A camera command can throw (a capture or sequence whose frame wait timed out, a camera that is shut down);
+        # the panel logs it and stays usable instead of passing the error into the window's event loop.
+        try
+            action(camera)
+        catch e
+            @error "Camera panel: $label failed" exception = (e, catch_backtrace())
+        end
     end
     return button
 end
@@ -128,7 +134,7 @@ function gui(camera::Camera)
     modes = ["capture", "trigger"]
     for (index, mode) in enumerate(modes)
         options = [(string(m), m) for m in instances(typeof(getfield(camera, Symbol(mode * "_mode"))))]
-        create_menu(control_fig, 2, index, options, string(getfield(camera, Symbol(mode * "_mode"))))
+        create_menu(control_fig, 2, index, options, string(getfield(camera, Symbol(mode * "_mode"))), camera, Symbol(mode * "_mode"))
     end
 
     # label, textbox, and callback for each property

@@ -93,7 +93,8 @@ Two consequences of the same mechanism on `DCAM4Camera` (traced):
 | `sequence(cam)` | `SEQUENCE`, `is_running = 1`, cleared by an `@async` timer after `sequence_length` exposures | `getdata(cam)` returns `(H, W, N)` `Array{UInt16,3}`, `N = cam.sequence_length` |
 | `live(cam)` | `LIVE`, `is_running = 1` | `getlastframe(cam)` `(H, W)` per call; stop as above |
 
-`getlastframe(cam)` is `(H, W)` in every mode. With `roi = CameraROI(1, 1, 64, 32)`
+**[guarantee, 0.2.7]** `getlastframe(cam)` returns an `(H, W)` frame or `nothing` when no frame arrives; check before indexing.
+With `roi = CameraROI(1, 1, 64, 32)`
 (width 64, height 32) the Sim camera returns `(32, 64)` and `(32, 64, N)`.
 
 ### The capture contract differs per driver
@@ -106,7 +107,7 @@ from each driver's `interface_methods.jl`; only the Sim row was executed.
 | `SimCamera` | the enum, not a frame | the frame. This is the only driver where this is the right call. |
 | `DCAM4Camera` | the frame `(H, W)`, after allocating one buffer, snapping, reading, and **releasing** the buffer | waits on a cycle-end event for an acquisition that no longer exists, then copies from released buffers. Do not call it. |
 | `ThorcamDCXCamera` | the frame, then frees the image memory | in any mode reads `sequence_length` frames from `pImage_Mem` and calls `abort`; only valid after `sequence`. |
-| `ThorCamCSCCamera` | the frame (arm, software trigger, `getlastframe`) | `SINGLE_FRAME` branch calls `getlastframe` again, which polls `tl_camera_get_pending_frame_or_null`: whatever frame is pending at that moment, or the zero-filled placeholder below if none is. Not the captured frame, and not guaranteed to be any frame. The `SEQUENCE` branch loops `getlastframe` `sequence_length` times, so it has the same limit. |
+| `ThorCamCSCCamera` | the frame (arm, software trigger); throws on a timeout or failed read | polls for another pending frame, not the captured frame. **[guarantee, 0.2.7]** a missing frame throws, including at any index of a sequence; no placeholder enters a stack. |
 
 So on every hardware driver in the package, the frame is the **return value of
 `capture`**, and `getdata` is for sequences. **[policy]** Put the difference in one place in your
@@ -122,13 +123,12 @@ value differs:
 
 | Driver | `capture` on SDK failure |
 |---|---|
-| `DCAM4Camera` | logs `@error`, sets `cam.last_error`, returns `nothing` (or the copy step returns `nothing` with `@error "DCAM Failed to Copy Frame"`) |
+| `DCAM4Camera` | **[guarantee, 0.2.7]** failed exposure/ROI read-backs throw and set `last_error`. Other acquisition failures can log `@error` and return `nothing` (including a failed frame copy). |
 | `ThorcamDCXCamera` | logs `@error`, returns `nothing` |
-| `ThorCamCSCCamera` | **returns `zeros(UInt16, roi.height, roi.width)`**. `getlastframe` substitutes an all-zero image whenever the frame fetch yields nothing, and that happens on two paths (`thorcamcsc_camcontrol.jl`): the SDK call fails (logged, `@error "Frame not collected"`), or the SDK call succeeds but hands back a null buffer (**not logged at all**). So the placeholder can arrive silently. A `=== nothing` check passes it as valid data, and the log cannot be relied on. The only detection is `all(iszero, frame)`, and that is a heuristic: a genuinely black frame is indistinguishable from the placeholder. Treat an all-zero CSC frame as suspect, not as data. |
+| `ThorCamCSCCamera` | **[guarantee, 0.2.7]** throws on a failed read or poll timeout. `getlastframe` instead returns `nothing`, setting `last_error` (`-1` for SDK success with a null buffer, the timeout sentinel; the SDK code for a failed read). A genuine all-zero image remains valid data. |
 | `SimCamera` | cannot fail |
 
-A zero-filled frame in a z-stack is a worse failure than a thrown error, because it
-saves cleanly.
+**[policy]** Treat `nothing` as a missing frame and stop a failed acquisition before saving its stack.
 
 ## Exposure and ROI are fields, with driver-specific types and units
 
@@ -145,9 +145,9 @@ type or unit of `exposure_time`, nor the ROI origin convention. Per driver (from
 | Driver | `exposure_time` field | Unit at the SDK | Pushing the field to hardware | ROI offsets |
 |---|---|---|---|---|
 | `SimCamera` | `Float64`, default `0.1` | seconds (used as a `sleep` in `getlastframe`) | not needed; read on every call. `setexposuretime!`/`setroi!`/`settriggermode!` **throw** | `x_start`/`y_start` ignored; only `width`/`height` matter |
-| `DCAM4Camera` | `Float64`, read from `DCAM_IDPROP_EXPOSURETIME` at construction | seconds (DCAM property) | `setexposuretime!(cam)`, `setroi!(cam)`, `settriggermode!(cam)` implemented, and called by `capture`/`live`/`sequence` themselves, so assigning the field before the acquisition call suffices | `x_start`/`y_start` forwarded unchanged to `DCAM_IDPROP_SUBARRAYHPOS`/`VPOS`; the SDK's origin convention applies, and the driver `@warn`s if the SDK rounds them |
+| `DCAM4Camera` | `Float64`, read from `DCAM_IDPROP_EXPOSURETIME` at construction | seconds (DCAM property) | `setexposuretime!(cam)`, `setroi!(cam)`, `settriggermode!(cam)` implemented, and called by `capture`/`live`/`sequence` themselves, so assigning the field before the acquisition call suffices | `x_start`/`y_start` forwarded unchanged to `DCAM_IDPROP_SUBARRAYHPOS`/`VPOS`; the SDK's origin convention applies, and the driver `@warn`s if the SDK rounds them; **[guarantee, 0.2.7]** failed exposure/ROI read-backs throw and preserve the requested settings |
 | `ThorcamDCXCamera` | `Float64`, default `0.01` | seconds in the field, multiplied by `1e3` to milliseconds at the SDK | `setexposuretime!`, `setroi!` implemented; `capture` calls both | `x_start` forwarded unchanged to `s32X`; SDK convention applies |
-| `ThorCamCSCCamera` | `Clonglong`, default `40` | forwarded to the SDK **unconverted**; the SDK's own unit applies | `setexposuretime!(cam, ::Int)` only; `capture` calls the internal setter | not forwarded by the driver |
+| `ThorCamCSCCamera` | `Clonglong`, default `40` | microseconds, forwarded unconverted; by default the poll timeout is rounded up to two exposures plus one second in milliseconds. **[guarantee, 0.2.7]** an explicit constructor timeout or accepted `setpolltimeout!` is kept across acquisition/exposure changes; a refused timeout write preserves the cache | `setexposuretime!(cam, ::Int)` only; `capture` calls the internal setter | not forwarded by the driver |
 
 Consequences: `cam.exposure_time = 0.02` is correct for Sim, DCAM4 and DCX and is an
 `InexactError` on `ThorCamCSCCamera`, whose field is an integer. Do not write
@@ -240,6 +240,11 @@ From each driver's `types.jl` and `move` method; only `SimStage3d` was executed:
 | `N472` (PI N-472) | `(stage, pos::Vector{Float64})`, not x/y/z | **millimetres** (`units = "mm"`) | `stage.pos::Vector`, not `real_*` | no `getrange`; `minpos`/`maxpos` vectors |
 | `MCS2Stage` (SmarAct) | `(stage, x, y[, z])` | **micrometres**, converted to picometres for the SDK | `real_x/y/z`, `targ_x/y/z` | `range_x/y/z` set by `initialize` from the controller |
 
+**[guarantee, 0.2.7]** Stage `export_state` refreshes the connected stage's position through the driver's read,
+without motion. `position_fresh` is true only when every exported axis was read (always true on Sim stages). A disconnected stage or
+failed read warns once and exports the last-read position with `position_fresh=false`; acquisition saves continue.
+MCL negative read/calibration codes throw before replacing cached positions/ranges.
+
 `move(stage, 1, 2, 3)` with integers is a `MethodError` on every stage. Only
 `PIStage`, `MCLStage` and `N472` carry a `units` field; `SimStage*` and `MCS2Stage`
 do not, and `stage.units` on them throws. Guard the check, and hard-code the
@@ -258,6 +263,35 @@ Executed against the constructed (unconnected) stage objects: `PIStage().units =
 Do the check before the first move on a new rig. Settling time is the driver's business; the Sim stage moves
 instantly, so on hardware poll `getposition` until the position field is within
 tolerance before exposing.
+
+## DAQ voltage lights and teardown
+
+**[guarantee]** (0.2.7) `CrystaLaser`, `VortranLaser` and `DaqTrLight` take
+volts in `setpower` and export `level_requested` as `power`/`power_requested`
+with unit `V`. A caller may update `properties.power` for its display without
+changing any future voltage command. Supplied properties are preserved at
+construction, and accepted commands update their `power` only when the unit
+is "V". Crysta and DaqTrLight stage levels set while off; the next successful
+enable applies that request and clears `level_staged`. Without a stage they
+enable at 1.0 V clamped to the range and record the default. Live level changes
+do not stage the next enable. `light_off` preserves a pending stage; initialize
+and shutdown cancel it. All preserve the saved level for metadata, and all
+three lights start with an unknown (`NaN`) request. Vortran writes AO while
+off, with DO as enable.
+
+**[policy]** acquisition teardown calls `lights_off(lights)` in `finally`.
+**[guarantee]** it tries every light, interruptions included, then throws
+`MicroscopeControl.LightsOffError` containing all `light name => exception`
+pairs in `failures`, printed one per line. `lights_off(l1, l2, ...)` also works.
+A failed DAQ off/initialize/shutdown throws and records `is_on = true`; a failed
+enable/live level command tries to darken and records off only on success.
+Single-line level writes require `line_enabled`, set by a successful enable
+and cleared by any off attempt, failed enable or failed live write. Otherwise
+`setpower` stages. Vortran failed DO off also tries AO 0, which lowers output
+but does not extinguish it; shutdown always attempts both lines,
+records each success independently, and states both errors if both fail.
+**[limitation]** these DAQ states record commands, not optical measurements;
+closing a panel does not switch off the light.
 
 ## Modulated light sources during an acquisition
 

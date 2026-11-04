@@ -22,6 +22,8 @@ export export_state, initialize, shutdown, get_state, set_state, gui
 # Hardware interfaces (abstract types + method signatures)
 include("hardware_interfaces/HardwareInterfaces.jl")
 @reexport using .HardwareInterfaces
+using .HardwareInterfaces.LightSourceInterface: LightsOffError
+public LightsOffError
 
 # Hardware implementations (concrete device drivers)
 include("hardware_implementations/HardwareImplementations.jl")

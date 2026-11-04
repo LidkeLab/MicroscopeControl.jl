@@ -71,6 +71,19 @@ end
         @test state_snapshot(cam) == before
     end
 
+    @testset "Camera panel buttons log a command that throws" begin
+        CI = MicroscopeControl.HardwareInterfaces.CameraInterface
+        fig = Figure()
+        cam = SimCamera()
+        # A CSC capture whose frame wait times out throws; the button logs it and the window keeps working.
+        button = CI.create_button(fig, 1, 1, "Start Capture", c -> error("frame wait timed out"), cam)
+        @test_logs (:error, r"Camera panel: Start Capture failed") button.clicks[] = button.clicks[] + 1
+        calls = Ref(0)
+        ok = CI.create_button(fig, 2, 1, "Abort", c -> (calls[] += 1), cam)
+        ok.clicks[] = ok.clicks[] + 1
+        @test calls[] == 1
+    end
+
     @testset "Camera live display" begin
         CI = MicroscopeControl.HardwareInterfaces.CameraInterface
         quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
@@ -150,7 +163,9 @@ end
     @testset "Simulated Light Source" begin
         light = SimLight()
         before = state_snapshot(light)
-        gui(light)
+        screen = gui(light)
+        @test screen isa GLMakie.Screen
+        close(screen)
         GLMakie.closeall()
         @test state_snapshot(light) == before
         # Belt-and-suspenders check naming the exact fields item 1 was about.
@@ -258,7 +273,7 @@ end
         light_on(laser)
         fig = Figure()
         message = Label(fig[1, 1], "")
-        toggle, status = MicroscopeControl.LightSourceInterface._attach_output_toggle!(fig, 2, laser, message)
+        (; toggle, status, poll_task) = MicroscopeControl.LightSourceInterface._attach_output_toggle!(fig, 2, laser, message)
         @test toggle.active[] && status[] == "output on"
         FakeKinesis.fail!("LD_DisableOutput")
         toggle.active[] = false
@@ -270,6 +285,8 @@ end
         delete!(FakeKinesis.status, "LD_DisableOutput")
         toggle.active[] = false
         @test !laser.properties.is_on && status[] == "output off" && !toggle.active[]
+        fig.scene.events.window_open[] = false
+        @test timedwait(() -> istaskdone(poll_task), 1.5; pollint=0.01) === :ok
         GLMakie.closeall()
     end
 end

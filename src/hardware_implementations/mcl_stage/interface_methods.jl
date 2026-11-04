@@ -90,17 +90,26 @@ end
 
 """
     export_state(stage::MCLStage)
+
+Read the connected stage's position through `getposition`, without moving it. `position_fresh::Bool` is true
+only when this read succeeds. If disconnected or the read throws, warn once with the error and export the
+last-read position; an acquisition save is not interrupted.
 """
 function export_state(stage::MCLStage)
+    position, position_fresh = StageInterface._export_position(stage, (stage.real_x, stage.real_y, stage.real_z)) do
+        StageInterface.getposition(stage)
+        (stage.real_x, stage.real_y, stage.real_z)
+    end
     attributes = Dict{String, Any}(
         "stage_label" => stage.stagelabel,
         "units" => stage.units,
         "id" => stage.id,
         "dimensions" => stage.dimensions,
+        "position_fresh" => position_fresh,
         "connected" => stage.connectionstatus,
-        "position_x" => stage.real_x,
-        "position_y" => stage.real_y,
-        "position_z" => stage.real_z,
+        "position_x" => position[1],
+        "position_y" => position[2],
+        "position_z" => position[3],
         "target_x" => stage.targ_x,
         "target_y" => stage.targ_y,
         "target_z" => stage.targ_z,

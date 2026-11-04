@@ -199,17 +199,27 @@ end
     export_state(stage::MCS2Stage) -> (attributes, data, children)
 
 Returns a tuple of (Dict, nothing, Dict) for compatibility with the
-MicroscopeControl state serialisation convention used by the PI module.
+MicroscopeControl state serialisation convention used by the PI module. Read the connected stage through
+`getposition!`, without moving it. `position_fresh::Bool` is true only when every exported channel was read.
+If the controller or any exported channel is disconnected, or a read throws, warn once with the error and export
+the last-read position; a save is not interrupted. Reads still query any connected channels.
 """
 function export_state(stage::MCS2Stage)
+    position, position_fresh = StageInterface._export_position(stage, copy(stage.pos_pm)) do
+        position = getposition!(stage)
+        (length(stage.channel_ids) == length(position) && all(stage.connected[eachindex(position)])) ||
+            error("Not all exported SmarAct channels are connected")
+        position
+    end
     attributes = Dict{String, Any}(
         "stage_label"     => stage.stagelabel,
         "n_channels"      => stage.n_channels,
         "channel_ids"     => copy(stage.channel_ids),
         "connected"       => stage.connectionstatus,
         "handle"          => stage.dHandle[],
-        "position_pm"     => copy(stage.pos_pm),
-        "position_um"     => stage.pos_pm ./ 1e6,
+        "position_pm"     => position,
+        "position_fresh"  => position_fresh,
+        "position_um"     => position ./ 1e6,
         "min_pm"          => copy(stage.min_pm),
         "max_pm"          => copy(stage.max_pm),
         "home_pm"         => copy(stage.home_pm),

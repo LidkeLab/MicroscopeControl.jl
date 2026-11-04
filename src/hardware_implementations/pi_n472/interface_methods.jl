@@ -97,7 +97,9 @@ end
 
 function StageInterface.getposition(stage::N472)
     axes = join(stage.axes, " ")
-    success = PI_qPOS(stage.id, axes, stage.pos)
+    position = similar(stage.pos)
+    success = PI_qPOS(stage.id, axes, position)
+    success == TRUE && copyto!(stage.pos, position)
     @info "Current position: " * string(stage.pos)
     return success
 end
@@ -126,8 +128,16 @@ end
 
 """
     export_state(stage::N472)
+
+Read the connected stage through `getposition` without moving it. `position_fresh::Bool` is true only on a
+successful GCS2 read. If disconnected or the read fails or throws, warn once with the error and export the
+last-read position; an acquisition save is not interrupted.
 """
 function export_state(stage::N472)
+    position, position_fresh = StageInterface._export_position(stage, copy(stage.pos)) do
+        StageInterface.getposition(stage) == TRUE || error("N472 position read failed (GCS error $(PI_GetError(stage.id)))")
+        copy(stage.pos)
+    end
     attributes = Dict{String, Any}(
         "stage_label" => stage.stagelabel,
         "units" => stage.units,
@@ -135,7 +145,8 @@ function export_state(stage::N472)
         "axes" => join(stage.axes, " "),
         "connected" => stage.connectionstatus,
         "id" => stage.id,
-        "position" => copy(stage.pos),
+        "position" => position,
+        "position_fresh" => position_fresh,
         "min_position" => copy(stage.minpos),
         "max_position" => copy(stage.maxpos),
         "home_position" => copy(stage.homepos),
