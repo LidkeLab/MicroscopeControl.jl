@@ -47,7 +47,7 @@ function progfocus(scope::Triggerscope4, startpos::Int, stepsize::Int, numsteps:
 end
 
 """
-    progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bool) -> String
+    progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bool)
 
 Program TTL output `ttlnum` to go high or low at program line `programline` by sending
 `PROG_TTL,<line>,<ttl>,<0 or 1>`. `[limitation]` After the command is written the function assigns into

@@ -19,12 +19,12 @@ A Thorlabs scientific camera (CS-series) driven through the Thorlabs TSI camera 
 (`thorlabs_tsi_camera_sdk.dll`, so Windows only).
 
 **The keyword constructor opens the camera.** It initializes the SDK, has the SDK write the available camera ids
-into `unique_id` (the default 5-byte buffer holds one), and opens the id that buffer holds. A failure at any step
-prints or logs an error and does not throw. `[limitation]` `camera_handle` stays `C_NULL` only when no camera is
-discovered: after a failed open it holds whatever the SDK left in an uninitialized reference, so a non-null handle
-does not prove the camera opened. `[limitation]` There is no `initialize` method for this type, so
+into the `unique_id` buffer (5 bytes by default), and passes that buffer to the open call. A failed SDK step prints
+or logs an error and does not throw (an invalid exposure, or a missing DLL, still throws). `[limitation]` After a
+failed discovery, `camera_handle` keeps the keyword's value (`C_NULL` by default); after a failed open it holds
+whatever the SDK left in an uninitialized reference. So a non-null handle does not prove the camera opened. `[limitation]` There is no `initialize` method for this type, so
 `initialize(camera)` throws `"initialize not implemented"`. `shutdown` closes the camera and uninitializes the
-SDK, and returns both SDK codes. `[limitation]` `abort` calls `shutdown`, so after an `abort` (including closing a
+SDK for the whole process, and returns both SDK codes. `[limitation]` `abort` calls `shutdown`, so after an `abort` (including closing a
 [`start_live`](@ref) window) the object cannot be used again; construct a new one.
 
 # Keywords and fields

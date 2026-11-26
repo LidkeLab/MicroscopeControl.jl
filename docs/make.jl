@@ -13,9 +13,10 @@ mc_public(obj) = any(o -> o === obj, MC_PUBLIC_OBJECTS)
 mc_internal(obj) = !mc_public(obj)
 
 # Documenter's own missing-docstring check misses a docstring left off the site when its name is documented in
-# several modules (`initialize`, `getdata`, ...): it compares one module's signatures per name. The pages put every
-# docstring of a module on the site once that module is in an `@autodocs` `Modules` list (each list pairs a
-# `mc_public` block with a `mc_internal` one, or takes the module unfiltered), so check that every submodule is.
+# several modules (`initialize`, `getdata`, ...): it compares one module's signatures per name. So before building,
+# select docstrings the way Documenter's `@autodocs` and `@docs` blocks do, from every page in docs/src, and fail if
+# any docstring of any submodule lands on no page. `@autodocs` evaluates `Modules`, `Order`, `Public` and `Private`
+# in the page's `CurrentModule` and `Filter` in `Main`; `@docs` takes every docstring of each binding it names.
 function submodules(m::Module, acc=Set{Module}([m]))
     for n in names(m; all=true)
         isdefined(m, n) || continue
@@ -27,19 +28,49 @@ function submodules(m::Module, acc=Set{Module}([m]))
     end
     return acc
 end
-function listed_modules()
-    listed = Set{Module}()
-    for file in readdir(joinpath(@__DIR__, "src", "api"); join=true)
+assignments(body) = [ex for ex in Meta.parseall(body).args if ex isa Expr && ex.head === :(=)]
+function docs_left_off()
+    autodocs = []                   # (modules, order, public, private, filter) per @autodocs block
+    named = Set{Docs.Binding}()     # bindings named in @docs blocks
+    for (root, _, files) in walkdir(joinpath(@__DIR__, "src")), file in files
         endswith(file, ".md") || continue
-        for m in eachmatch(r"Modules = \[(.*?)\]"s, read(file, String)), name in split(m.captures[1], ',')
-            push!(listed, Core.eval(MicroscopeControl, Meta.parse(strip(name))))
+        text = replace(read(joinpath(root, file), String), r"<!--.*?-->"s => "")
+        meta = match(r"^```@meta\s*\n(.*?)^```"ms, text)
+        curmod = Main
+        if meta !== nothing
+            for ex in assignments(meta.captures[1])
+                ex.args[1] === :CurrentModule && (curmod = Core.eval(Main, ex.args[2]))
+            end
+        end
+        for block in eachmatch(r"^```@autodocs\s*\n(.*?)^```"ms, text)
+            f = Dict{Symbol,Any}()
+            for ex in assignments(block.captures[1])
+                f[ex.args[1]] = Core.eval(ex.args[1] === :Filter ? Main : curmod, ex.args[2])
+            end
+            push!(autodocs, (f[:Modules], get(f, :Order, [:module, :constant, :type, :function, :macro]),
+                             get(f, :Public, true), get(f, :Private, true), get(f, :Filter, _ -> true)))
+        end
+        for block in eachmatch(r"^```@docs\s*\n(.*?)^```"ms, text), line in split(block.captures[1], '\n')
+            isempty(strip(line)) || push!(named, Documenter.DocSystem.binding(curmod, Meta.parse(line)))
         end
     end
-    return listed
+    left = String[]
+    for mod in submodules(MicroscopeControl), (binding, multidoc) in Documenter.DocSystem.getmeta(mod)
+        binding in named && continue
+        ispublic = Documenter.DocSystem.APIStatus(mod, binding.var).ispublic
+        category = Documenter.DocSystem.category(binding)
+        object = Core.eval(binding.mod, binding.var)
+        shown = any(autodocs) do (modules, order, public, private, filter)
+            mod in modules && category in order && (ispublic ? public : private) &&
+                Base.invokelatest(filter, object)
+        end
+        shown || push!(left, "$mod: $binding ($(length(multidoc.docs)) docstring(s))")
+    end
+    return left
 end
-let unlisted = setdiff(submodules(MicroscopeControl), listed_modules())
-    isempty(unlisted) || error("modules on no API page (add each to a page's @autodocs Modules list): " *
-                               join(string.(unlisted), ", "))
+let left = docs_left_off()
+    isempty(left) || error("docstrings on no page of the manual (add their module to an @autodocs block, or " *
+                           "name them in a @docs block):\n  " * join(left, "\n  "))
 end
 
 makedocs(;

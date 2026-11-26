@@ -35,16 +35,16 @@ back the API count; the last holder uninitializes the API, so several cameras ca
   exported `TriggerMode` is the Triggerscope's): push it with `settriggermode!`.
 - `sequence_length`: frames per `sequence`.
 
-`last_error` holds the `DCAMERR` of the last failed acquisition or property call (`shutdown`'s device close is
-logged, not recorded there). `capture`, `live`, `sequence`, `getlastframe`,
+`last_error` holds the `DCAMERR` of most failed calls, not all: a failed readout-time read falls back with a
+warning, and `shutdown`'s device close is logged only. `capture`, `live`, `sequence`, `getlastframe`,
 `getdata` and `abort` document their waits, timeouts and return values in their own docstrings.
 
 # Concurrency
 One lock per camera, `acquisition_lock`, serializes every start (`live`, `sequence`, `capture`) with every stop
 (`abort`, `shutdown`), so `getlastframe` can run on another thread during a live view. A frame wait runs with the
 lock released and is registered with the camera; a stop aborts the registered waits and waits for them to end
-before it releases the buffer. Every frame wait is bounded by its timeout, so a stop is never held up by a frame
-wait. `[limitation]` A property call (`setvalue`, `setexposuretime!`, `setroi!` and the others) holds the lock
+before it releases the buffer. Every frame wait is bounded by its timeout, so a frame wait delays a stop by at
+most that timeout. `[limitation]` A property call (`setvalue`, `setexposuretime!`, `setroi!` and the others) holds the lock
 across its DCAM call, which has no timeout, so a hung property call delays a stop or `shutdown` until it returns.
 The comments on the struct's fields state the invariant in full.
 """

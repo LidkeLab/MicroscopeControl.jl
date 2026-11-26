@@ -18,9 +18,9 @@ failed open or configure with `println` and returns without throwing, so a retur
 board is configured. It also passes the serial string to the DLL as a byte vector with the zero bytes
 removed, so the string handed over has no terminating NUL.
 
-Fields: `exposure_bit` (us per exposure step, default 2.56), `exposure_time` (us, last exposure set by
-`setexposure`, default 30000), `enable` (default `0.0`; not updated by [`enable`](@ref)), `volt_bit` (the four
-exposure code bits last sent, as a string), `task_trigger` and `task_enable` (NI tasks created by
+Fields: `exposure_bit` (us per exposure step, default 2.56), `exposure_time` (us, the last rounded exposure
+`setexposure` was asked for, stored before its DAQ write, default 30000), `enable` (default `0.0`; not updated by
+[`enable`](@ref)), `volt_bit` (the four exposure code bits last written or attempted, as a string), `task_trigger` and `task_enable` (NI tasks created by
 [`setupIO`](@ref)), `devicehandle`, `bitfile` and `daq`.
 """
 mutable struct XEM 

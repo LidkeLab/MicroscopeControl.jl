@@ -19,6 +19,9 @@
     
         - Servo Control Button (if servo is present)
         - Drift Correction Control Button (if drift correction is present)
+
+`[limitation]` The panel reads `stage.stagelabel` for its window title, a field the simulated stages
+(`SimStage1d`, `SimStage2d`, `SimStage3d`) do not have, so `gui` throws on them.
 """
 function gui(stage::Stage)
     #This funcion will create a GUI for the stage, calling the correct GUI function based on the stage dimensions

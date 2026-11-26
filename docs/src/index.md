@@ -22,9 +22,8 @@ Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
 Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.6")
 ```
 
-The README explains why `DAQmx` must be added by hand and how the version numbers read. The [Quick start](@ref)
-uses features newer than the latest release (`lights_off`, and the `"y,x,frame"` label `save_h5` writes); to run
-it as written, install `main` instead, with `rev="main"`.
+The README explains why `DAQmx` must be added by hand and how the version numbers read; the [Quick start](@ref)
+says when to install `main` instead.
 
 ## How the package is organized
 
@@ -33,14 +32,15 @@ has these four functions:
 
 | Function | What it does |
 |:---------|:-------------|
-| [`initialize`](@ref initialize(::AbstractInstrument)) | Connect to the hardware. A simulated device does nothing, marks itself connected, or (`SimLight`) switches on. |
+| [`initialize`](@ref initialize(::AbstractInstrument)) | Connect to the hardware. A simulated device does nothing, marks itself connected, or (`SimLight` without a modulator) switches on. |
 | [`shutdown`](@ref shutdown(::AbstractInstrument)) | Release the hardware; each driver's docstring says what it closes (an `LCC1620` leaves its shared serial port open). |
 | [`export_state`](@ref export_state(::AbstractInstrument)) | Return `(attributes, data, children)`, the device's state for [`save_h5`](@ref). |
 | [`gui`](@ref gui(::AbstractInstrument)) | Open a GLMakie control panel for the device. |
 
 Each device class also has its interface: an abstract type and the generic functions its drivers implement.
 Calling most interface functions on a driver that does not implement them throws
-`"<function> not implemented for <type>"` (the SLM display functions are the exception; see their docstrings). A
+`"<function> not implemented for <type>"`; a few fallbacks do something else instead (the SLM display functions,
+for example), and their docstrings say what. A
 driver's docstring says whether its constructor or `initialize` opens the device.
 
 | Device class | Abstract type | Interface functions | Drivers | Simulated |

@@ -9,8 +9,8 @@ saving of an exported state, and the Claude Code skill installer.
 
 `export_state` returns `(attributes, data, children)`: `attributes` is a `Dict` of settings keyed by name, `data` is
 `nothing` or an array, and `children` is a `Dict` whose values are further `(attributes, data, children)` tuples.
-Most drivers return `Dict{String,Any}`s, but not all (`NIdaq`'s are narrower), so do not dispatch on the
-concrete type. [`save_h5`](@ref) writes that tree as nested HDF5 groups under `Main`; it returns a `Task`, so
+Most drivers return `Dict{String,Any}`s, but not all (`NIdaq`'s attributes are a `Dict{String,String}`, and
+several drivers' children are a `Dict{Any,Any}`), so do not dispatch on the concrete type. [`save_h5`](@ref) writes that tree as nested HDF5 groups under `Main`; it returns a `Task`, so
 `wait` it before reading the file.
 
 ## Instruments and systems

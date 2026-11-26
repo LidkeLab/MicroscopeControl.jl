@@ -209,10 +209,13 @@ end
     start_sequence(camera::Camera) -> nothing
 
 Open a GLMakie window, start `sequence(camera)`, and show frames read with `getlastframe` while
-`camera.is_running == 1`, as [`start_live`](@ref) does. The window does not collect the stack: read it with
-`getdata` while the window is still open. Closing the window calls `abort(camera)` at any time, and on some drivers
-that ends the data: `ThorcamDCXCamera`'s `abort` frees the sequence buffers and `ThorCamCSCCamera`'s shuts the
-camera down.
+`camera.is_running == 1`, as [`start_live`](@ref) does. The window is for watching a sequence, not for keeping
+it: it does not collect the stack, and closing it calls `abort(camera)`, which on `DCAM4Camera` and
+`ThorcamDCXCamera` releases the sequence buffers and on `ThorCamCSCCamera` shuts the camera down. `[limitation]` Do
+not read the stack with `getdata` around this window: on `ThorcamDCXCamera` `getdata` frees the same buffers the
+window's `abort` frees again, and on `ThorCamCSCCamera` the window and `getdata` take frames from the same queue. To
+keep a stack, call `sequence` and `getdata` without the window. Only `SimCamera` keeps its (simulated) stack after
+the window closes.
 """
 function start_sequence(camera::Camera)
     create_display(camera, sequence)

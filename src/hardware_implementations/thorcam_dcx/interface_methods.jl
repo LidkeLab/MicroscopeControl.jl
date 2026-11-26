@@ -62,7 +62,8 @@ end
     CameraInterface.capture(camera::ThorcamDCXCamera)
 
 Capture one frame and return it, `(roi.height, roi.width)` indexed `[y, x]` (see `getlastframe`; lab decision 0040,
-`docs/src/conventions.md`). If the buffer allocation or the capture fails it logs an error and returns `nothing`.
+`docs/src/conventions.md`). If selecting the image buffer, the capture or the frame copy fails it logs an error and returns `nothing`; the
+allocation's own result is not checked.
 """
 function CameraInterface.capture(camera::ThorcamDCXCamera)
 

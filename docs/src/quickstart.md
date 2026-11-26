@@ -1,8 +1,8 @@
 # Quick start
 
 This page runs on the simulated devices, so it needs no hardware; the docs build runs every block on it. It
-documents `main` (`0.2.7-DEV`): `lights_off` and the `"y,x,frame"` label that `save_h5` writes are newer than the
-latest release, so install with `rev="main"` to run it as written. `using MicroscopeControl` loads GLMakie, so it
+documents the `main` branch: if a call is missing from the release you installed (`lights_off`, say), install with
+`rev="main"` to run the page as written. `using MicroscopeControl` loads GLMakie, so it
 needs a display (run it under `xvfb-run` on a headless machine), and the HDF5 read-back at the end needs `HDF5` in
 your environment.
 
@@ -50,8 +50,8 @@ size(stack)
 
 `SimCamera`'s frames are random `UInt16` noise; only their shape means anything. `SimCamera`'s `getdata` returns at
 once. On the hardware drivers this step differs: `DCAM4Camera`'s `getdata` waits for the sequence within a timeout,
-`ThorCamCSCCamera`'s reads the frames one by one and throws on a missing one, and `ThorcamDCXCamera`'s does not
-wait at all (see its docstring).
+`ThorCamCSCCamera`'s polls the frames one by one and throws when a poll fails or times out, and
+`ThorcamDCXCamera`'s copies its buffers without waiting for the sequence to finish (see its docstring).
 
 ## Move a stage
 
@@ -75,8 +75,8 @@ light.properties
 ```
 
 A regulated laser diode is set in the unit its controller regulates. `SimDiodeLaser` is the simulated twin of the
-TCube driver, `TCubeLaser`: it takes the same mode and diode keywords (not the serial number or the DAQ settings),
-plus model fields of its own:
+TCube driver, `TCubeLaser`: it shares the mode and diode keywords, but not the serial number or the controller and
+DAQ settings, and adds simulation keywords of its own (its docstring lists both):
 
 ```@example quickstart
 laser = SimDiodeLaser(mode = ConstantCurrent())
@@ -86,8 +86,9 @@ light_on(laser)
 measured_current(laser)
 ```
 
-[`lights_off`](@ref) calls `light_off` on every light it is given, even after one of them fails, and then throws one
-`LightsOffError` naming every light that failed. A light whose switch-off failed may still be on.
+[`lights_off`](@ref) calls `light_off` on every light it is given, even after one of them fails. If any failed, it
+then throws one `LightsOffError` naming every light that failed, and a light whose switch-off failed may still be
+on; otherwise it returns `nothing`.
 
 ```@example quickstart
 lights_off(light, laser)

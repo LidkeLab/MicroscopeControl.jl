@@ -6,8 +6,9 @@ CurrentModule = MicroscopeControl
 
 A camera is a subtype of `Camera`. Exposure time and region of interest live in the camera's `exposure_time` and
 `roi::CameraROI` fields. Where a driver defines them, the setters (`setexposuretime!`, `setroi!`,
-`settriggermode!`) push those fields to the hardware; not every driver defines every setter (`ThorCamCSCCamera`
-crops its ROI in Julia and has no `setroi!`, and `SimCamera` has none), and the generic one throws. Every frame is a
+`settriggermode!`) push those fields to the hardware, and the generic setter throws elsewhere. `DCAM4Camera` has all
+three; `ThorcamDCXCamera` has `setexposuretime!` and `setroi!`; `ThorCamCSCCamera` has only
+`setexposuretime!(camera, value)`, which takes the value (it crops its ROI in Julia); `SimCamera` has none. Every frame is a
 `(height, width)` array indexed `[y, x]`, and a sequence is `(height, width, frames)` (see [Image layout](@ref)).
 
 The acquisition calls are `capture` (one frame), `live` (a continuous view read with `getlastframe`), `sequence`
@@ -66,5 +67,5 @@ Modules = [HardwareInterfaces.CameraInterface, HardwareImplementations.Simulated
 Filter = t -> Main.mc_internal(t) && t !== HardwareInterfaces.CameraInterface.rowmajor_to_yx
 ```
 
-`CameraInterface.rowmajor_to_yx`, the conversion every driver calls, is documented on the [Image layout](@ref)
+`CameraInterface.rowmajor_to_yx`, the conversion every hardware camera driver calls, is documented on the [Image layout](@ref)
 page.

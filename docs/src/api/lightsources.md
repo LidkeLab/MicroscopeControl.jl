@@ -13,8 +13,8 @@ A regulated laser diode is a `DiodeLaser`, typed by the quantity its controller 
 `ConstantPhotocurrent`, fixed at construction. It is set with `setcurrent!` (mA), `setoutputpower!` (mW at the
 laser output) or `setlevel!` (0 to 1 of the declared range), and read back with `measured_current`,
 `measured_photocurrent`, `indicated_output_power` and `loop_status`. `setpower` is deprecated on a `DiodeLaser`: on
-a `ConstantCurrent` laser it warns and forwards to `setcurrent!` (the value in mA), and on a `ConstantPhotocurrent`
-laser it throws. The closed-loop calibration procedure of the TCube driver is in
+a `ConstantCurrent` laser it forwards to `setcurrent!` (the value in mA) with a deprecation warning that Julia shows
+only under `--depwarn=yes`, and on a `ConstantPhotocurrent` laser it throws. The closed-loop calibration procedure of the TCube driver is in
 `src/hardware_implementations/tcube_laser/CALIBRATION.md` in the repository.
 
 A light can take a `modulator::AbstractModulationControl`, which puts its level on an analog input as a voltage;

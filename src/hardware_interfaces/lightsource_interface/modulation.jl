@@ -20,7 +20,7 @@ and a light; the claim in [`open_modulator!`](@ref) refuses a second light on th
 - `shutdown(mc)`: write 0 V, then release.
 - `output_id(mc)::String`: names the physical output, for the claim.
 
-`export_state``(mc)` has a fallback (the type and `output_id`) and is a child of the light's.
+`export_state(mc)` has a fallback (the type and `output_id`) and is a child of the light's.
 
 # How a light takes one
 
