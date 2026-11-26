@@ -18,7 +18,7 @@ export LCC1620, attenuator_gui
 """
     attenuator_gui(attenuator::Attenuator) -> GLMakie.Screen
 
-The same function as [`gui`](@ref) for an attenuator, under the name this module exports for the
+The same function as `gui` for an attenuator, under the name this module exports for the
 `LCC1620`. It opens a window with a drive-voltage slider (volts, from `properties.min_voltage` to
 `properties.max_voltage` in 0.01 V steps, starting at `properties.drive_voltage`) and a text box that moves the
 slider, prints the attenuator's type to standard output, and returns the `Screen`. Each change of the slider

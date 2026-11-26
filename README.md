@@ -27,9 +27,9 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 
 ## Example
 
-The simulated devices need no hardware; the same calls run on a hardware driver of the same class by changing its
-constructor, with the differences that driver's docstring states. `using MicroscopeControl` loads GLMakie, so run
-it with a display (under `xvfb-run` on a headless machine).
+The simulated devices need no hardware. The hardware drivers have the same functions, but their constructors,
+region-of-interest offsets and blocking behavior differ, so read a driver's docstring before running this on it.
+`using MicroscopeControl` loads GLMakie, so run it with a display (under `xvfb-run` on a headless machine).
 
 ```julia
 using MicroscopeControl
@@ -44,7 +44,8 @@ stack = getdata(camera)          # (height, width, frames) = (48, 64, 5), indexe
 
 move(stage, 10.0, 20.0, 5.0)
 
-wait(save_h5("state.h5", export_state(camera)))   # save_h5 returns a Task
+attributes, _, children = export_state(camera)  # the camera's settings; SimCamera's state holds no image
+wait(save_h5("state.h5", (attributes, stack, children)))   # settings plus the stack; save_h5 returns a Task
 ```
 
 The [documentation](https://LidkeLab.github.io/MicroscopeControl.jl/dev/) has a longer quick start, one API page

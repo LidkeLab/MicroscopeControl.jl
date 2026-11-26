@@ -1724,7 +1724,7 @@ end
 """
     EXPORT_STATE_2ARG_WARNED
 
-Whether the deprecated 2-argument [`export_state`](@ref) has already attempted
+Whether the deprecated 2-argument `export_state` has already attempted
 its warning in this session. Not `@warn`'s `maxlog=1`, so that the warning is
 testable more than once per process; `Threads.Atomic` rather than a plain `Ref`
 because a check followed by a store lets two concurrent callers both warn and

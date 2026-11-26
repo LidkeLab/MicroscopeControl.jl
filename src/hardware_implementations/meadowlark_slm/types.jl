@@ -44,7 +44,7 @@ call reaches the generic interface methods, which send nothing to the board or f
 only on Windows with that SDK installed.
 
 Keywords and fields: `width` and `height` (pixels), `pixelsize` and `wavelength` (stored and exported by
-[`export_state`](@ref) only; the code gives no unit), `phase` and `offset` (`Float64` arrays of size
+`export_state` only; the code gives no unit), `phase` and `offset` (`Float64` arrays of size
 `(width, height)`, default zeros; `phase` holds fractions of a wave in 0 to 1, which `writesingleimage`
 scales to 0 to 255), `pupil` (a `Pupil`), `sequence` (a [`Sequence`](@ref)). The SDK fields `bit_depth`,
 `n_boards_found`, `constructed_ok`, `is_nematic_type`, `ram_write_enable`, `use_gpu` and

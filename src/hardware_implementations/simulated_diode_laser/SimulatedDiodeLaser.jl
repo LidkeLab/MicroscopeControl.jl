@@ -117,8 +117,8 @@ reference; it only stores them. `threshold_current` defaults to
 diode's numbers); the model fields are documented on the type.
 
 Unlike `TCubeLaser`, whose default `properties` are 0.2.4's `"mW"` labels, the
-default `properties` here are labelled `"mA"`: this type is new, has no 0.2.x
-behaviour to keep, and its values are mA.
+default `properties` here are labeled `"mA"`: this type is new, has no 0.2.x
+behavior to keep, and its values are mA.
 """
 function SimDiodeLaser(;
     mode::RegulationMode=ConstantCurrent(),

@@ -69,9 +69,9 @@ end
 Set the closed-loop move velocity of all axes with the GCS2 `PI_VEL` call, one value per axis in the order of
 `stage.axes`, then read the velocities back with `PI_qVEL` into `stage.velocity` (so the field holds what
 the controller reports, not what was requested). `vel` is passed to the controller unchanged; the code states
-no unit, and the default `stage.velocity` is `0.01` for `units="mm"`. Returns `FALSE` if the set failed,
+no unit, and the default `stage.velocity` is `[0.01, 0.01, 0.01]` (one per axis) for `units="mm"`. Returns `FALSE` if the set failed,
 otherwise the result of the read-back (`TRUE` or `FALSE`); a failure is also logged with `@error`, never
-thrown. [`initialize`](@ref) calls it with `stage.velocity`. Needs an open connection.
+thrown. `initialize` calls it with `stage.velocity`. Needs an open connection.
 """
 function setvel(stage::N472,vel::Vector{Float64})
     axes = join(stage.axes, " ")

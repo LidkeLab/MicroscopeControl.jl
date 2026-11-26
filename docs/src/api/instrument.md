@@ -7,9 +7,10 @@ CurrentModule = MicroscopeControl
 The types and functions every device shares, the system types for composing devices into an instrument, HDF5
 saving of an exported state, and the Claude Code skill installer.
 
-`export_state` returns `(attributes, data, children)`: `attributes` is a `Dict{String,Any}` of settings, `data` is
-`nothing` or an array, and `children` is a `Dict{String,Any}` whose values are further `(attributes, data,
-children)` tuples. [`save_h5`](@ref) writes that tree as nested HDF5 groups under `Main`; it returns a `Task`, so
+`export_state` returns `(attributes, data, children)`: `attributes` is a `Dict` of settings keyed by name, `data` is
+`nothing` or an array, and `children` is a `Dict` whose values are further `(attributes, data, children)` tuples.
+Most drivers return `Dict{String,Any}`s, but not all (`NIdaq`'s are narrower), so do not dispatch on the
+concrete type. [`save_h5`](@ref) writes that tree as nested HDF5 groups under `Main`; it returns a `Task`, so
 `wait` it before reading the file.
 
 ## Instruments and systems
@@ -43,7 +44,11 @@ environment variable, `MICROSCOPECONTROL_LIBDCAM` or `MICROSCOPECONTROL_LIBMADLI
 re-export the interfaces and drivers.
 
 ```@autodocs
-Modules = [MicroscopeControl, MicroscopeControl.Libraries, MicroscopeControl.HardwareInterfaces,
+Modules = [MicroscopeControl]
+Filter = t -> Main.mc_internal(t)
+```
+
+```@autodocs
+Modules = [MicroscopeControl.Libraries, MicroscopeControl.HardwareInterfaces,
            MicroscopeControl.HardwareImplementations]
-Filter = t -> Main.mc_internal(t) || (t isa Module && t !== MicroscopeControl)
 ```

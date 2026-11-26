@@ -5,13 +5,15 @@ CurrentModule = MicroscopeControl
 ```
 
 A camera is a subtype of `Camera`. Exposure time and region of interest live in the camera's `exposure_time` and
-`roi::CameraROI` fields; a driver's setters (`setexposuretime!`, `setroi!`, `settriggermode!`) push them to the
-hardware. Every frame is a `(height, width)` array indexed `[y, x]`, and a sequence is `(height, width, frames)`
-(see [Image layout](@ref)).
+`roi::CameraROI` fields. Where a driver defines them, the setters (`setexposuretime!`, `setroi!`,
+`settriggermode!`) push those fields to the hardware; not every driver defines every setter (`ThorCamCSCCamera`
+crops its ROI in Julia and has no `setroi!`, and `SimCamera` has none), and the generic one throws. Every frame is a
+`(height, width)` array indexed `[y, x]`, and a sequence is `(height, width, frames)` (see [Image layout](@ref)).
 
 The acquisition calls are `capture` (one frame), `live` (a continuous view read with `getlastframe`), `sequence`
 (a fixed number of frames read with `getdata`) and `abort`. Their blocking behavior, timeouts and return values
-differ between drivers; each driver's docstrings below state its own.
+differ between drivers. Each driver's type docstring below says how its own differ, including what its methods do
+not check.
 
 ## Camera interface
 
@@ -61,5 +63,8 @@ every driver calls, and each driver's SDK bindings.
 ```@autodocs
 Modules = [HardwareInterfaces.CameraInterface, HardwareImplementations.SimulatedCamera,
            HardwareImplementations.DCAM4, HardwareImplementations.ThorCamCSC, HardwareImplementations.ThorCamDCx]
-Filter = t -> Main.mc_internal(t)
+Filter = t -> Main.mc_internal(t) && t !== HardwareInterfaces.CameraInterface.rowmajor_to_yx
 ```
+
+`CameraInterface.rowmajor_to_yx`, the conversion every driver calls, is documented on the [Image layout](@ref)
+page.

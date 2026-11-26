@@ -58,7 +58,8 @@ end
 """
     TrigInterface.getinputvalue(trig::TRIG, input::Input, channel::Int)
 
-The reading of `channel` of the input group `input`. Not exported.
+The value of `channel` of the input group `input`. Not exported. `[limitation]` `Triggerscope4` cannot read its
+inputs this way: its method logs an error and returns the stored `input.values[channel]`.
 """
 function getinputvalue(trig::TRIG, input::Input, channel::Int)
     error("getinputvalue not implemented for $(typeof(trig))")

@@ -20,8 +20,8 @@ A Hamamatsu camera driven through the DCAM-API (`libdcam`, resolved at load time
 `MICROSCOPECONTROL_LIBDCAM` to override the library path).
 
 **The constructor opens the camera.** It takes a count of the DCAM API (initializing it if no other
-`DCAM4Camera` in the process holds it), opens device `dev_id`, reads the sensor size into `camera_format` and the
-camera's exposure into `exposure_time`; the `camera_format` and `exposure_time` keywords are therefore replaced. It
+`DCAM4Camera` in the process holds it), opens device `dev_id`, reads the image size the camera reports (`IMAGE_WIDTH`, `IMAGE_HEIGHT`) into
+`camera_format` and the camera's exposure into `exposure_time`; the `camera_format` and `exposure_time` keywords are therefore replaced. It
 throws if the API cannot be initialized or the device cannot be opened, which usually means another process holds
 the DCAM SDK or the camera. `initialize` does nothing. `shutdown` stops any capture, closes the device and gives
 back the API count; the last holder uninitializes the API, so several cameras can share one process.
@@ -31,18 +31,22 @@ back the API count; the last holder uninitializes the API, so several cameras ca
   `setexposuretime!(camera, t)`; the camera's read-back value is stored.
 - `roi::CameraROI`: 0-based `x_start`/`y_start` in sensor pixels, as DCAM takes them. Push it with
   `setroi!(camera)` or `setroi!(camera, roi)`.
-- `trigger_mode::TriggerMode` (one of the `DCAMPROP_TRIGGER_MODE__*` values): push it with `settriggermode!`.
+- `trigger_mode::DCAM4.TriggerMode` (one of the `DCAM4.DCAMPROP_TRIGGER_MODE__*` values, not exported; the
+  exported `TriggerMode` is the Triggerscope's): push it with `settriggermode!`.
 - `sequence_length`: frames per `sequence`.
 
-`last_error` holds the `DCAMERR` of the last failed call. `capture`, `live`, `sequence`, `getlastframe`,
+`last_error` holds the `DCAMERR` of the last failed acquisition or property call (`shutdown`'s device close is
+logged, not recorded there). `capture`, `live`, `sequence`, `getlastframe`,
 `getdata` and `abort` document their waits, timeouts and return values in their own docstrings.
 
 # Concurrency
 One lock per camera, `acquisition_lock`, serializes every start (`live`, `sequence`, `capture`) with every stop
 (`abort`, `shutdown`), so `getlastframe` can run on another thread during a live view. A frame wait runs with the
 lock released and is registered with the camera; a stop aborts the registered waits and waits for them to end
-before it releases the buffer. Every wait is bounded by its timeout, so every stop ends. The comments on the
-struct's fields state the invariant in full.
+before it releases the buffer. Every frame wait is bounded by its timeout, so a stop is never held up by a frame
+wait. `[limitation]` A property call (`setvalue`, `setexposuretime!`, `setroi!` and the others) holds the lock
+across its DCAM call, which has no timeout, so a hung property call delays a stop or `shutdown` until it returns.
+The comments on the struct's fields state the invariant in full.
 """
 mutable struct DCAM4Camera <: Camera
     unique_id::String

@@ -5,7 +5,8 @@ Abstract type for a trigger and output controller: a box with groups of output c
 and input channels, each group described by an [`Output`](@ref) or [`Input`](@ref) for the shared control panel
 (`gui`). Unlike the other device classes it is not a subtype of `AbstractInstrument`, though its driver,
 `Triggerscope4`, defines `initialize` and `shutdown`. A driver implements `setoutputvalue`, `setoutputrange`,
-`getoutputvalue`, `getinputvalue` and `Base.reset` (none exported; call them qualified).
+`getoutputvalue`, `getinputvalue` and `Base.reset`. The first four are not exported (call them as
+`TrigInterface.setoutputvalue` and so on); `reset` extends `Base.reset` and is callable unqualified.
 """
 abstract type TRIG end
 

@@ -45,7 +45,7 @@ end
 
 Open the serial port `scope.portname` at `scope.baudrate`, store it in `scope.sp`, assert DTR, set the read
 and write timeouts to `scope.rwtimeout` seconds, flush both buffers and sleep `scope.compause` seconds.
-Called by [`initialize`](@ref); it does not check that a Triggerscope answers. A port that cannot be
+Called by `initialize`; it does not check that a Triggerscope answers. A port that cannot be
 opened throws the `LibSerialPort` error.
 """
 function openport(scope::Triggerscope4)
@@ -67,7 +67,7 @@ end
 """
     closeport(scope::Triggerscope4) -> nothing
 
-Close the serial port `scope.sp`. Called by [`shutdown`](@ref).
+Close the serial port `scope.sp`. Called by `shutdown`.
 """
 function closeport(scope::Triggerscope4)
     close(scope.sp)

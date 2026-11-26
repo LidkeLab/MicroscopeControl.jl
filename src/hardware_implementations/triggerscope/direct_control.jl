@@ -4,7 +4,7 @@
 """
     acknowledgetest(scope::Triggerscope4) -> String
 
-Send the acknowledgement command `*` and return the device's response line, which [`initialize`](@ref)
+Send the acknowledgement command `*` and return the device's response line, which `initialize`
 logs as the Triggerscope version. Needs an open port.
 """
 function acknowledgetest(scope::Triggerscope4)

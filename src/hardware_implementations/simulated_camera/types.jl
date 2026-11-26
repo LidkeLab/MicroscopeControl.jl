@@ -17,8 +17,12 @@ Every frame is `(roi.height, roi.width)` indexed `[y, x]`, and a sequence's stac
 - `roi = CameraROI(1, 1, 1024, 1024)`: `width` and `height` set the frame size. Not checked against
   `camera_format`.
 - `sequence_length = 10`: frames per `sequence`.
-- `frame_rate`, `capture_mode::CaptureMode = LIVE`, `trigger_mode::TriggerMode = AUTO`, `camera_handle`,
-  `last_error`, `camerastate`, `is_running::Bool = false`: stored and exported; nothing else reads them.
+- `capture_mode::CaptureMode = LIVE`: set by `capture`, `live` and `sequence`; it picks what `getdata` returns.
+- `is_running::Bool = false`: set by `live` and `sequence`, cleared by `abort` and at the end of a sequence;
+  [`start_live`](@ref) reads frames while it is set.
+- `trigger_mode::TriggerMode = AUTO`, `frame_rate`, `last_error`, `camerastate`: stored and exported (the panel
+  offers `capture_mode` and `trigger_mode` in menus); no simulated behavior depends on them. `camera_handle` is
+  stored only.
 
 # Behavior
 - `initialize` and `shutdown` do nothing.

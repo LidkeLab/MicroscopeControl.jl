@@ -36,7 +36,7 @@ export red_laser_gui
 """
     red_laser_gui(laser) -> GLMakie.Screen
 
-The same function as [`gui`](@ref), under the name this module exports for the `TCubeLaser`. A `TCubeLaser` is
+The same function as `gui`, under the name this module exports for the `TCubeLaser`. A `TCubeLaser` is
 a `DiodeLaser`, so the call opens the panel for its regulation mode (`ConstantCurrent` or
 `ConstantPhotocurrent`) and issues no command and no read; the readout fills from the panel's Read button or
 its Poll toggle. Needs a display (GLMakie).

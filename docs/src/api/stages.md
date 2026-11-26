@@ -5,9 +5,10 @@ CurrentModule = MicroscopeControl
 ```
 
 A stage is a subtype of `Stage`. `move` commands a position, `getposition` reads it, `getrange` reports the travel
-of each axis, and `stopmotion` halts a move. The number of axes, the position units and whether `move` waits for
-the stage to arrive differ between drivers; each driver's docstrings below state its own. A stage's `export_state`
-records `position_fresh::Bool`, true when the export read every axis from the hardware.
+of each axis, and `stopmotion` halts a move where the driver implements it (`MCLStage`'s only logs an error). The
+number of axes, the position units and whether `move` waits for the stage to arrive differ between drivers; each
+driver's docstrings below state its own. A stage's `export_state` records `position_fresh::Bool`: on a hardware
+stage, true when the export read every axis from the hardware; on a simulated stage, always true.
 
 ## Stage interface
 

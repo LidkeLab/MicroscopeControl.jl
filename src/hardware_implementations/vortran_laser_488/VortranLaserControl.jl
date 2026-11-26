@@ -21,7 +21,7 @@ export VortranLaser, laser_488_gui, nidaq_gui, light_on, light_off, setpower
 """
     laser_488_gui(light::LightSource) -> GLMakie.Screen
 
-The same function as [`gui`](@ref), under the name this module exports for its light. For a `VortranLaser` it opens
+The same function as `gui`, under the name this module exports for its light. For a `VortranLaser` it opens
 a panel in the light's own power unit and range and returns its `GLMakie.Screen`; opening the panel issues no
 command. Closing the panel does not switch the light off. Needs a display (GLMakie).
 """

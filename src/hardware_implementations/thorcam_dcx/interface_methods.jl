@@ -62,7 +62,7 @@ end
     CameraInterface.capture(camera::ThorcamDCXCamera)
 
 Capture one frame and return it, `(roi.height, roi.width)` indexed `[y, x]` (see `getlastframe`; lab decision 0040,
-`docs/src/conventions.md`).
+`docs/src/conventions.md`). If the buffer allocation or the capture fails it logs an error and returns `nothing`.
 """
 function CameraInterface.capture(camera::ThorcamDCXCamera)
 
@@ -205,7 +205,8 @@ end
 
 The sequence as `(roi.height, roi.width, sequence_length)` `UInt8`, indexed `[y, x, frame]`, each frame converted
 once from the SDK's row-major buffer with `CameraInterface.rowmajor_to_yx` (lab decision 0040; see
-`docs/src/conventions.md`).
+`docs/src/conventions.md`). `[limitation]` It copies the buffers at once, without waiting for the sequence or
+checking each copy, and then calls `abort`, which frees them; see [`ThorcamDCXCamera`](@ref).
 """
 function CameraInterface.getdata(camera::ThorcamDCXCamera)
     Width = camera.roi.width

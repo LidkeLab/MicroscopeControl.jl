@@ -18,11 +18,14 @@ end
 A Thorlabs scientific camera (CS-series) driven through the Thorlabs TSI camera SDK
 (`thorlabs_tsi_camera_sdk.dll`, so Windows only).
 
-**The keyword constructor opens the camera.** It initializes the SDK, discovers the first available camera
-(writing its id into `unique_id`) and opens it. A failure at any step prints or logs an error and does not throw;
-`camera_handle` then stays `C_NULL`. `[limitation]` There is no `initialize` method for this type, so
+**The keyword constructor opens the camera.** It initializes the SDK, has the SDK write the available camera ids
+into `unique_id` (the default 5-byte buffer holds one), and opens the id that buffer holds. A failure at any step
+prints or logs an error and does not throw. `[limitation]` `camera_handle` stays `C_NULL` only when no camera is
+discovered: after a failed open it holds whatever the SDK left in an uninitialized reference, so a non-null handle
+does not prove the camera opened. `[limitation]` There is no `initialize` method for this type, so
 `initialize(camera)` throws `"initialize not implemented"`. `shutdown` closes the camera and uninitializes the
-SDK, and returns both SDK codes.
+SDK, and returns both SDK codes. `[limitation]` `abort` calls `shutdown`, so after an `abort` (including closing a
+[`start_live`](@ref) window) the object cannot be used again; construct a new one.
 
 # Keywords and fields
 - `exposure_time::Clonglong = 40`: microseconds. `capture`, `live` and `sequence` write it to the camera before
@@ -38,7 +41,7 @@ SDK, and returns both SDK codes.
 - `operation_mode`, `number_of_frames_to_buffer`: written when `capture`, `live` and `sequence` set up and arm
   the camera. `frames_per_trigger_zero_for_unlimited` is written by `capture`; `live` and `sequence` set it to 0
   (unlimited).
-- `frame_rate`, `trigger_mode`: recorded and exported.
+- `frame_rate`: stored only. `trigger_mode`: stored and exported.
 """
 mutable struct ThorCamCSCCamera <: Camera
     camera_handle::Ptr{Cvoid}

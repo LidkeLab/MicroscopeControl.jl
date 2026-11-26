@@ -52,8 +52,9 @@ Acquire one frame.
 
 # Returns
 - The frame, `(height, width)` indexed `[y, x]`, on `DCAM4Camera`, `ThorCamCSCCamera` and `ThorcamDCXCamera`
-  (lab decision 0040; see `docs/src/conventions.md`). A driver may instead return `nothing` or throw when the frame
-  does not arrive; its own docstring says which.
+  (lab decision 0040; see `docs/src/conventions.md`). When the frame does not arrive, `DCAM4Camera` returns
+  `nothing` or throws (its docstring says when), `ThorCamCSCCamera` throws, and `ThorcamDCXCamera` logs an error and
+  returns `nothing`.
 - `[limitation]` `SimCamera`'s `capture` only switches the camera to single-frame mode and returns no frame; read
   the simulated frame with `getdata` or `getlastframe`.
 """

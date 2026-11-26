@@ -66,8 +66,8 @@ _mcl_calibration(axis::Int, id::Int) = @ccall libmadlib.MCL_GetCalibration(axis:
 
 Read the calibration (maximum travel) of axis `axis` (1 = X, 2 = Y, 3 = Z) with `MCL_GetCalibration`, store
 `(0.0, calibration)` in `stage.range_x`, `range_y` or `range_z`, and return that tuple. An axis outside 1 to 3
-logs an error and returns `false`; a negative or non-finite library result throws an `ErrorException` naming
-the Madlib error.
+logs an error and returns `false`. A negative integer library result throws an `ErrorException` naming the
+Madlib error; a non-finite result throws one saying the value is invalid.
 """
 function getcalibration(stage::MCLStage, axis::Int) # Maximum value of each axis
     if !(axis in 1:3)

@@ -4,7 +4,8 @@
 
 Trigger mode for Triggerscope sequences (the type of the `trigmode` field), set with [`trigmode`](@ref). The integer value
 is what `trigmode` sends to the device: `RISING` = 2, `FALLING` = 3, `CHANGE` = 4.
-A comment in the source says trigger modes 1 and 2 are supported only by the Triggerscope 3B.
+A comment in the source says trigger modes 1 and 2 are supported only by the Triggerscope 3B; that would include
+`RISING` (2), the constructor's default. This has not been checked against the device.
 """
 @enum TriggerMode begin
     RISING = 2
@@ -47,17 +48,20 @@ Advanced Research Consulting Triggerscope 4: a USB serial DAC (16-bit analog out
 The keyword constructor builds the object and an unopened `LibSerialPort.SerialPort` for `portname`;
 it does not talk to the device. `[limitation]` Creating that `SerialPort` needs `portname` to be a port the
 operating system lists: on a machine without the default `"COM3"`, `Triggerscope4()` throws a `LibSerialPort`
-error (`SP_ERR_ARG`), so pass a real `portname`. [`initialize`](@ref) opens the port (see [`openport`](@ref)) and
-sends the acknowledgement test, [`shutdown`](@ref) closes it.
+error (`SP_ERR_ARG`), so pass a real `portname`. `initialize` opens the port (see [`openport`](@ref)) and
+sends the acknowledgement test, `shutdown` closes it.
 
 Every command function (`setdac`, `setttl`, `arm`, ...) writes one ASCII command line to the port, sleeps
-`compause`, reads one response line, and returns that line as a `String`. If the write or the read throws,
+`compause`, reads one response line, and returns that line as a `String`, except where its docstring gives a
+`[limitation]` (`progttl` throws after sending its command). If the write or the read throws,
 the port is closed and reopened and an error is raised. The response text is never parsed or checked.
 
 Fields a caller reads or sets: `portname`, `baudrate`, `rwtimeout` (s, read and write timeout),
 `compause` (s, pause after each write and each read), `dacranges` (the range assumed per DAC channel
-when converting volts), `dacvalues` (last DAC codes, 0 to 65535), `ttlvalues`, `trigmode`. The `outputs`
-and `inputs` fields feed the generic DAQ GUI.
+when converting volts), `dacvalues` and `ttlvalues`, `trigmode`. `dacvalues` and `ttlvalues` are a cache, not a
+readback: the panel's `setoutputvalue` updates them before it writes, `progdac` updates `dacvalues`, and `setdac`
+and `setttl` do not touch them; a DAC code computed from an out-of-range voltage can fall outside 0 to 65535. The
+`outputs` and `inputs` fields feed the generic DAQ GUI.
 """
 mutable struct Triggerscope4 <: TRIG #This is a "Data Aquistion Device
     #basic setup parameters
@@ -158,8 +162,8 @@ end
 A list of DAC and TTL commands plus a trigger mode, the input of [`progarray`](@ref). Each element of
 `commands` is a `CommandSignal(commandType::CommandType, channel::Int, value::Union{Float64,Bool})` (not
 exported). `[limitation]` [`progarray`](@ref) as written does not complete, so a `SignalArray` cannot
-presently be programmed onto the device through it; use `progdac`, `progttl` and the other program
-functions directly.
+presently be programmed onto the device through it. `progdac` and the other program functions can be called
+directly, except `progttl`, which throws after sending its command (see its docstring).
 """
 mutable struct SignalArray
     trigMode::TriggerMode

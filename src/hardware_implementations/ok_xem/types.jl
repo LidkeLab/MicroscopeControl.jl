@@ -9,9 +9,9 @@ const TRIGGER_ON = 16.0
 
 Opal Kelly XEM FPGA board, driven through the FrontPanel DLL (`okFrontPanel.dll`), with the camera trigger
 and enable lines carried by a National Instruments digital-output task (`daq`). The keyword constructor
-only fills the struct; it opens nothing. [`initialize`](@ref) creates the FrontPanel handle, opens the
+only fills the struct; it opens nothing. `initialize` creates the FrontPanel handle, opens the
 first board listed (index 0), configures it with the bitfile at `bitfile`, and sets `fpgalabel` (model)
-and `serialnumber`. [`shutdown`](@ref) destroys the handle.
+and `serialnumber`. `shutdown` destroys the handle.
 `[limitation]` The DLL path is `C:\\Program Files\\Opal Kelly\\FrontPanelUSB\\API\\lib\\x64\\okFrontPanel.dll`,
 so the driver works only on Windows with FrontPanel installed. `initialize` reports a missing board or a
 failed open or configure with `println` and returns without throwing, so a returned call does not mean the

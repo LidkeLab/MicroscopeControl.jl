@@ -12,6 +12,36 @@ const MC_PUBLIC_OBJECTS = Any[getfield(MicroscopeControl, n) for n in names(Micr
 mc_public(obj) = any(o -> o === obj, MC_PUBLIC_OBJECTS)
 mc_internal(obj) = !mc_public(obj)
 
+# Documenter's own missing-docstring check misses a docstring left off the site when its name is documented in
+# several modules (`initialize`, `getdata`, ...): it compares one module's signatures per name. The pages put every
+# docstring of a module on the site once that module is in an `@autodocs` `Modules` list (each list pairs a
+# `mc_public` block with a `mc_internal` one, or takes the module unfiltered), so check that every submodule is.
+function submodules(m::Module, acc=Set{Module}([m]))
+    for n in names(m; all=true)
+        isdefined(m, n) || continue
+        v = getfield(m, n)
+        if v isa Module && v !== m && parentmodule(v) === m && !(v in acc)
+            push!(acc, v)
+            submodules(v, acc)
+        end
+    end
+    return acc
+end
+function listed_modules()
+    listed = Set{Module}()
+    for file in readdir(joinpath(@__DIR__, "src", "api"); join=true)
+        endswith(file, ".md") || continue
+        for m in eachmatch(r"Modules = \[(.*?)\]"s, read(file, String)), name in split(m.captures[1], ',')
+            push!(listed, Core.eval(MicroscopeControl, Meta.parse(strip(name))))
+        end
+    end
+    return listed
+end
+let unlisted = setdiff(submodules(MicroscopeControl), listed_modules())
+    isempty(unlisted) || error("modules on no API page (add each to a page's @autodocs Modules list): " *
+                               join(string.(unlisted), ", "))
+end
+
 makedocs(;
     modules=[MicroscopeControl],
     authors="klidke@unm.edu",

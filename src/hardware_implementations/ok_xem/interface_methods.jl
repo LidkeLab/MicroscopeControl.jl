@@ -67,7 +67,8 @@ end
 
 First form: set the exposure `exposure_time` (us) on the FPGA through the four trigger lines. With
 `div = ceil(exposure_time / fpga.exposure_bit)`, it finds `i` in 0:15 with `2^i <= div < 2^(i+1)`, stores the
-exposure actually set, `2^i * fpga.exposure_bit` us, in `fpga.exposure_time` (printed), keeps the four
+rounded exposure, `2^i * fpga.exposure_bit` us, in `fpga.exposure_time` (printed) before the DAQ write, so the
+field holds the requested rounded value even if the write then throws (there is no readback from the FPGA), keeps the four
 low bits of `i` as the string `fpga.volt_bit`, and writes the digits `[8, 4, 2, 1]` (each kept where its bit
 is 1, else 0) to `fpga.task_trigger`. It returns the 1 by 4 digit matrix. So the exposure is rounded to a
 power-of-two multiple of `exposure_bit`, not the requested value.
@@ -114,8 +115,8 @@ end
     enable(fpga::XEM, enable::Float64) -> nothing
 
 Write `enable` to the enable task `fpga.task_enable` (see [`setupIO`](@ref)) through `NIDAQcard.setvoltage`;
-`fpga.enable` is not updated. The unexported constants `TRIGGER_OFF` (0.0) and `TRIGGER_ON` (16.0) are the
-values the struct's `enable` default uses. `NIDAQcard.setvoltage` accepts only 0 or 1 for a single-line
+`fpga.enable` is not updated. The unexported constants are `TRIGGER_OFF` (0.0, the struct's `enable` default) and
+`TRIGGER_ON` (16.0). `NIDAQcard.setvoltage` accepts only 0 or 1 for a single-line
 digital task and the port word for a port task, so `TRIGGER_ON` is accepted only when the task channel is a
 port.
 """
@@ -154,7 +155,9 @@ end
 """
     activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32) -> nothing
 
-Fire the trigger-in bits of `bitmask` on FrontPanel endpoint `epaddr` (`ActivateTriggerIn`). `[limitation]`
+Fire one trigger-in bit on FrontPanel endpoint `epaddr` (`ActivateTriggerIn`). Despite the argument's name,
+`bitmask` is passed unchanged as the bit number (0 to 31), as the FrontPanel API takes it: `4` fires bit 4, not the
+bit that the mask `0x04` would select. `[limitation]`
 A failing call is reported with `println` and the function returns `nothing` as on success; nothing is thrown.
 """
 function activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32)
