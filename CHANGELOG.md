@@ -270,6 +270,18 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
   layout.
 
+### Documentation
+
+- The documentation site has one API page per device class (cameras, stages, light sources, DAQ and FPGA boards,
+  attenuators, spatial light modulators, Triggerscope), each with the interface, the simulated device and every
+  driver, then the driver internals; every docstring in the package is on a page, and the docs build now fails
+  if one is not. A quick-start page runs on the simulated devices at every docs build.
+- Docstrings for every device type that had none (`SimCamera`, `DCAM4Camera`, `ThorCamCSCCamera`,
+  `ThorcamDCXCamera`, `MCLStage`, `SimStage1d`/`2d`/`3d`, `Triggerscope4`, `MLSLM`, `XEM`, `XEM_dac`), the SLM and
+  Triggerscope interfaces, `start_live`, `start_sequence`, and the exported driver functions. Each states where the
+  device is opened (constructor or `initialize`), the units of its fields, and its limitations.
+- README: pins `v0.2.6`, lists every supported device, and has a short example.
+
 ### Known issues
 
 - Camera (`DCAM4Camera`):
@@ -284,6 +296,14 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
   image. The fix is to ask the SDK for the image size (`tl_camera_get_image_width` and `_height`), which needs the
   Thorlabs camera SDK header; none is archived yet.
+- Found while documenting, not fixed (each docstring says so):
+  - `SimCamera`'s `capture` returns no frame, where every hardware driver returns one.
+  - `SimStage3d`'s and `SimStage2d`'s `getposition` return only the last axis, not the tuple the `Stage` interface
+    describes.
+  - The SLM interface's `displayimage`, `displayzernike` and `displayblaze` do not work on any SLM: one assigns to
+    the abstract type, two call functions that are not defined, and `MLSLM`'s own methods are in a file the package
+    does not include.
+  - `ThorCamCSCCamera` has no `initialize` method, so the generic one throws.
 
 ## [0.2.6] - 2026-10-01
 

@@ -50,7 +50,7 @@ generic.
   straight to the clamp.
 - `tia_over_fault`, `tia_under_fault`: force the amplifier flags.
 - `settle_s`: real `sleep` after each command.
-- `modulator::Union{Nothing,AbstractModulationControl}`: as on [`TCubeLaser`](@ref), keyword
+- `modulator::Union{Nothing,AbstractModulationControl}`: as on [`TCubeLaser`](@ref MicroscopeControl.HardwareImplementations.TCubeLaserControl.TCubeLaser), keyword
   default `nothing`. With one, `initialize` opens it, `light_on` writes level 0, enables, then puts
   the request on it, `light_off` and `shutdown` write 0 first, and the level setters check and
   record as always but write only while the light is on (an `ArgumentError` from the modulator
@@ -103,7 +103,7 @@ LightSourceInterface.regulation_mode(::Type{SimDiodeLaser{M}}) where {M} = M()
 """
     SimDiodeLaser(; mode = ConstantCurrent(), kwargs...)
 
-Takes the same keywords with the same requirements as [`TCubeLaser`](@ref),
+Takes the same keywords with the same requirements as [`TCubeLaser`](@ref MicroscopeControl.HardwareImplementations.TCubeLaserControl.TCubeLaser),
 minus the serial (both apply them through `diode_loop_from_keywords`), so one
 construction line serves a system and its simulated twin. `mode` defaults to
 `ConstantCurrent()`.

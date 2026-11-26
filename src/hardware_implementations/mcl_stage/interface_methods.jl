@@ -35,6 +35,13 @@ function StageInterface.move(stage::MCLStage, x::Float64, y::Float64, z::Float64
     return (errcodex, errcodey, errcodez)
 end
 
+"""
+    move_to_z(stage::MCLStage, z::Float64) -> String
+
+Write axis 3 (Z) to `z` (micrometers) with `singlewrite`, leaving X and Y alone, and return the status string
+`"MCL_SUCCESS"`. The Z target `stage.targ_z` is recorded only on success; a write the library refuses throws
+an `ErrorException` naming the Madlib error.
+"""
 function move_to_z(stage::MCLStage, z::Float64)
     @info "Z stage moving to position: " * string(z)
 
@@ -45,6 +52,12 @@ function move_to_z(stage::MCLStage, z::Float64)
     return errcodez
 end
 
+"""
+    get_z_position(stage::MCLStage) -> Float64
+
+Read axis 3 (Z) with `singleread`, store it in `stage.real_z`, and return it (micrometers). A failed read
+throws an `ErrorException` naming the Madlib error.
+"""
 function get_z_position(stage::MCLStage)
     @info "Getting Z stage position"
 

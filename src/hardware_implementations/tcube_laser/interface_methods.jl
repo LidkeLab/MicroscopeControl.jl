@@ -397,12 +397,12 @@ end
     program_clamp!(light::TCubeLaser; raise::Bool=true)
 
 Leave the controller's diode current limit at the highest potentiometer position
-(or one position below it: see [`DIGPOT_STEP_ESTIMATE_mA`](@ref))
+(or one position below it: see `DIGPOT_STEP_ESTIMATE_mA`)
 whose limit, **as the controller reports it**, does not exceed
 `light.max_current`, and return that limit in mA.
 
 The search starts from the current position. It moves by the header's step
-estimate ([`DIGPOT_STEP_ESTIMATE_mA`](@ref)), which is larger than the real step
+estimate (`DIGPOT_STEP_ESTIMATE_mA`), which is larger than the real step
 on the rig's controller, so moves fall short and approach the ceiling from one
 side. It reads the controller's limit after each setting and keeps the best
 position under the ceiling and the lowest over it, so it settles in a few
@@ -541,7 +541,7 @@ const SETPOINT_READBACK_TOLERANCE = 2
     send_setpoint(light::TCubeLaser, code::UInt16)
 
 Send a setpoint **with the output on** and wait for the controller to report it
-back within [`SETPOINT_READBACK_TOLERANCE`](@ref) codes, throwing if it does not.
+back within `SETPOINT_READBACK_TOLERANCE` codes, throwing if it does not.
 Only call it with the output enabled. Nothing is recorded by this function.
 
 # The setpoint only takes while the output is ON
@@ -838,7 +838,7 @@ simplified away:
    controller itself reports it after leaving adjust mode, is `<= max_current`.
    `pd.max_current_clamp` records that reported limit, never a request or a
    value computed from a position (the header's position scale is wrong on the
-   rig's controller; see [`DIGPOT_STEP_ESTIMATE_mA`](@ref)).
+   rig's controller; see `DIGPOT_STEP_ESTIMATE_mA`).
 4. `LD_SetClosedLoopMode`, then re-read the bits and require `0x4`.
 5. `LD_SetWACalibFactor(pd.wa_calibration)` and read it back within `Cfloat`
    tolerance, so the front panel and this driver display the same number. The

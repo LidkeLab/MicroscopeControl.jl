@@ -1,6 +1,36 @@
 @enum CaptureMode LIVE SINGLE_FRAME SEQUENCE
 @enum TriggerMode AUTO SOFTWARE_TRIGGER HARDWARE_TRIGGER
 
+"""
+    SimCamera(; unique_id="SimCamera", exposure_time=0.1, roi=CameraROI(1, 1, 1024, 1024),
+              sequence_length=10, kwargs...)
+
+A simulated camera that returns random `UInt16` frames, for tests, examples and system code run without hardware.
+Every frame is `(roi.height, roi.width)` indexed `[y, x]`, and a sequence's stack is
+`(roi.height, roi.width, sequence_length)` (see `docs/src/conventions.md`); the values are noise.
+
+# Keywords
+- `unique_id::String = "SimCamera"`
+- `camera_format::CameraFormat = CameraFormat(1024, 1024, 6, 2, "SCMOS")`: reported by `export_state` only.
+- `exposure_time::Float64 = 0.1`: seconds. `getlastframe` sleeps this long, and a sequence runs
+  `sequence_length * exposure_time`.
+- `roi = CameraROI(1, 1, 1024, 1024)`: `width` and `height` set the frame size. Not checked against
+  `camera_format`.
+- `sequence_length = 10`: frames per `sequence`.
+- `frame_rate`, `capture_mode::CaptureMode = LIVE`, `trigger_mode::TriggerMode = AUTO`, `camera_handle`,
+  `last_error`, `camerastate`, `is_running::Bool = false`: stored and exported; nothing else reads them.
+
+# Behavior
+- `initialize` and `shutdown` do nothing.
+- `live` and `sequence` set `is_running`; a sequence clears it after `sequence_length * exposure_time` on an
+  `@async` task, and `abort` clears it at once.
+- `getdata` returns at once, without waiting for a running sequence: a stack in `SEQUENCE` mode, one frame
+  otherwise.
+- `[limitation]` `capture` only switches to `SINGLE_FRAME` mode and returns no frame, unlike the hardware drivers;
+  read the frame with `getdata`.
+- `[limitation]` `setexposuretime!` and `setroi!` are not implemented; set the `exposure_time` and `roi` fields
+  directly.
+"""
 mutable struct SimCamera <: Camera
     unique_id::String
     camera_format::CameraFormat

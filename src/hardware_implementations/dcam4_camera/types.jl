@@ -12,7 +12,38 @@
 end
 
 
+"""
+    DCAM4Camera(dev_id::Int = 0; unique_id="DCAM4Camera", roi=CameraROI(0, 0, 1024, 1024),
+                trigger_mode=DCAMPROP_TRIGGER_MODE__NORMAL, sequence_length=10, kwargs...)
 
+A Hamamatsu camera driven through the DCAM-API (`libdcam`, resolved at load time; set
+`MICROSCOPECONTROL_LIBDCAM` to override the library path).
+
+**The constructor opens the camera.** It takes a count of the DCAM API (initializing it if no other
+`DCAM4Camera` in the process holds it), opens device `dev_id`, reads the sensor size into `camera_format` and the
+camera's exposure into `exposure_time`; the `camera_format` and `exposure_time` keywords are therefore replaced. It
+throws if the API cannot be initialized or the device cannot be opened, which usually means another process holds
+the DCAM SDK or the camera. `initialize` does nothing. `shutdown` stops any capture, closes the device and gives
+back the API count; the last holder uninitializes the API, so several cameras can share one process.
+
+# Fields a caller sets
+- `exposure_time::Float64`: seconds. Push it to the camera with `setexposuretime!(camera)`, or call
+  `setexposuretime!(camera, t)`; the camera's read-back value is stored.
+- `roi::CameraROI`: 0-based `x_start`/`y_start` in sensor pixels, as DCAM takes them. Push it with
+  `setroi!(camera)` or `setroi!(camera, roi)`.
+- `trigger_mode::TriggerMode` (one of the `DCAMPROP_TRIGGER_MODE__*` values): push it with `settriggermode!`.
+- `sequence_length`: frames per `sequence`.
+
+`last_error` holds the `DCAMERR` of the last failed call. `capture`, `live`, `sequence`, `getlastframe`,
+`getdata` and `abort` document their waits, timeouts and return values in their own docstrings.
+
+# Concurrency
+One lock per camera, `acquisition_lock`, serializes every start (`live`, `sequence`, `capture`) with every stop
+(`abort`, `shutdown`), so `getlastframe` can run on another thread during a live view. A frame wait runs with the
+lock released and is registered with the camera; a stop aborts the registered waits and waits for them to end
+before it releases the buffer. Every wait is bounded by its timeout, so every stop ends. The comments on the
+struct's fields state the invariant in full.
+"""
 mutable struct DCAM4Camera <: Camera
     unique_id::String
     camera_format::CameraFormat

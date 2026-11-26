@@ -33,6 +33,13 @@ end
 
 # Query current position from hardware and update stage struct
 
+"""
+    query_positions!(stage::MCS2Stage) -> nothing
+
+Read the current position of every connected channel from the controller (property `POSITION`, picometers)
+into `stage.pos_pm` and log them in micrometers. Channels with `stage.connected[i] == false` are skipped.
+Throws an `ErrorException` carrying the SDK message if a read fails.
+"""
 function query_positions!(stage::MCS2Stage)
     for (i, ch) in enumerate(stage.channel_ids)
         stage.connected[i] || continue   # skip channels with no positioner
@@ -54,6 +61,13 @@ end
 
 # Set velocity and acceleration
 
+"""
+    set_velocity!(stage::MCS2Stage, vel_pm_s::Int64) -> nothing
+
+Set the move velocity of every connected channel to `vel_pm_s` picometers per second (1 mm/s is
+`1_000_000_000`) and record it in `stage.velocity_pm_s`. One value is applied to all channels; it is not
+range-checked here. Throws an `ErrorException` carrying the SDK message if the controller rejects it.
+"""
 function set_velocity!(stage::MCS2Stage, vel_pm_s::Int64)
     for (i, ch) in enumerate(stage.channel_ids)
         stage.connected[i] || continue   # skip channels with no positioner
@@ -63,6 +77,13 @@ function set_velocity!(stage::MCS2Stage, vel_pm_s::Int64)
     @info "Velocity set to $(vel_pm_s / 1e9) mm/s"
 end
 
+"""
+    set_acceleration!(stage::MCS2Stage, accel_pm_s2::Int64) -> nothing
+
+Set the move acceleration of every connected channel to `accel_pm_s2` picometers per second squared
+(1 mm/s^2 is `1_000_000_000`) and record it in `stage.accel_pm_s2`. One value is applied to all channels; it
+is not range-checked here. Throws an `ErrorException` carrying the SDK message if the controller rejects it.
+"""
 function set_acceleration!(stage::MCS2Stage, accel_pm_s2::Int64)
     for (i, ch) in enumerate(stage.channel_ids)
         stage.connected[i] || continue   # skip channels with no positioner
@@ -74,6 +95,16 @@ end
 
 # Referencing
 
+"""
+    find_reference!(stage::MCS2Stage, ch_index::Int; timeout_s::Float64=60.0) -> nothing
+
+Run the controller's referencing (homing) move on channel `ch_index` (1-based index into
+`stage.channel_ids`) with default referencing options (`0`), then poll the channel state every 0.1 s until
+it is no longer referencing. A channel with no positioner attached logs a warning and returns. Sets
+`stage.is_referenced[ch_index] = true` when the poll ends without reading the referenced bit back.
+Throws an `ErrorException` if the start command fails or if `timeout_s` seconds (default 60) pass; on
+timeout the referencing move is not stopped.
+"""
 function find_reference!(stage::MCS2Stage, ch_index::Int; timeout_s::Float64 = 60.0)
     ch = stage.channel_ids[ch_index]
 

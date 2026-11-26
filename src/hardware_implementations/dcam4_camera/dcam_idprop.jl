@@ -297,3 +297,11 @@
     DCAM_IDPROP_CONVERSIONFACTOR_COEFF = 16769040  # 0x00FFE010, R/O, double,   "CONVERSION FACTOR COEFF"
     DCAM_IDPROP_CONVERSIONFACTOR_OFFSET = 16769056  # 0x00FFE020, R/O, double,  "CONVERSION FACTOR OFFSET"
 end
+
+"""
+DCAM property ID `0x00403810` (value 4208656), "INTERNAL FRAME RATE": the frame rate of the camera's internal
+timing, a read/write property in frames per second. A member of `DCAM_IDPROP`; pass it to
+[`dcamprop_getvalue`](@ref) to read the rate as a `Float64`. Whether a camera supports it, and which values it
+accepts, is a property of the model: read its attributes with `dcamprop_getattr`.
+"""
+DCAM_IDPROP_INTERNALFRAMERATE

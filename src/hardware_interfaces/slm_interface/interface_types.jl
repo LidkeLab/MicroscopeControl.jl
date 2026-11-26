@@ -1,7 +1,19 @@
 
 
+"""
+    SLM
+
+Abstract type for a spatial light modulator. Unlike the other device classes it is not a subtype of
+`AbstractInstrument`. Its one driver is `MLSLM` (Meadowlark).
+"""
 abstract type SLM end
 
+"""
+    Pupil(x_center, y_center, x_radius, y_radius)
+
+The pupil an SLM pattern is meant for: center and radii, all `Float64`. `MLSLM` stores one in its `pupil` field
+and writes it in `export_state`; no pattern generator reads it (`genzernike!` takes its own center and radius).
+"""
 mutable struct Pupil
     x_center::Float64
     y_center::Float64

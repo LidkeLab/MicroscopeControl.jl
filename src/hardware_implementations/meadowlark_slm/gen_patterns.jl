@@ -2,6 +2,17 @@
 #TODO: Create blazed pattern for any angle and using MLSLM structure instead of an inputted phase array
 
 
+"""
+    genblazed!(slm::MLSLM, is_vert::Bool=true, period::Int=32; blaze_start::Int=1, blaze_end::Int=-1)
+
+Fill `slm.phase` with a blazed grating and return it; nothing is sent to the board. Along the chosen axis
+the phase ramps from 1 down to 0 over `period` pixels and repeats; with `is_vert` true it depends only
+on the second index of the `(width, height)` array, otherwise only on the first. Pixels outside
+`blaze_start:blaze_end` (1-based indices along that axis) stay 0. `period == 1` gives 0 everywhere.
+`[limitation]` `blaze_end` must lie in `1:height` (`is_vert` true) or `1:width` (`is_vert` false). The
+default `-1`, or any value past that axis length, leaves `pattern_end` unset, so the call throws
+`UndefVarError`; a call with no `blaze_end` keyword always fails this way.
+"""
 function genblazed!(slm::MLSLM, is_vert::Bool=true, period::Int=32; blaze_start::Int=1, blaze_end::Int=-1)    #Units are pixels
     #Create array of size of SLM    
     width = slm.width
@@ -44,6 +55,18 @@ function genblazed!(slm::MLSLM, is_vert::Bool=true, period::Int=32; blaze_start:
     slm.phase = phase_pattern
 end
 
+"""
+    genzernike!(slm::MLSLM, radial_order::Int, coefficients::Vector{Float64}, radius::Int, x_center::Int,
+                y_center::Int)
+
+Fill `slm.phase` with a sum of Zernike polynomials over a disk and return it; nothing is sent to the
+board. The disk has radius `radius` pixels and is centered at index `(x_center, y_center)` of the
+`(width, height)` array; everything outside it is 0. `coefficients` weights the polynomials (each scaled by `sqrt(n+1)` or `sqrt(2(n+1))`) up to `radial_order` in the order of the recurrence in `gen_patterns.jl` (OSA, per its comment),
+so it must have `(radial_order+1)*(radial_order+2)/2` elements and `radial_order` must be at least 1.
+Coefficients are in radians; the sum is wrapped into 0 to 2 pi and stored divided by 2 pi, so
+`slm.phase` holds fractions of a wave in 0 to 1. If the disk extends past the array edge, only the part
+on the array is kept and four index ranges are printed.
+"""
 function genzernike!(slm::MLSLM, radial_order::Int, coefficients::Vector{Float64}, radius::Int, x_center::Int, y_center::Int)
     phase_array = zeros(Float64, slm.width, slm.height)
 

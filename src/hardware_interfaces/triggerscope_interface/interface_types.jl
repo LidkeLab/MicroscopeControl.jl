@@ -1,5 +1,11 @@
 """
-`NIdaq` an abstract type that defines the interface for a data acquisition card.
+    TRIG
+
+Abstract type for a trigger and output controller: a box with groups of output channels (analog DAC, digital TTL)
+and input channels, each group described by an [`Output`](@ref) or [`Input`](@ref) for the shared control panel
+(`gui`). Unlike the other device classes it is not a subtype of `AbstractInstrument`, though its driver,
+`Triggerscope4`, defines `initialize` and `shutdown`. A driver implements `setoutputvalue`, `setoutputrange`,
+`getoutputvalue`, `getinputvalue` and `Base.reset` (none exported; call them qualified).
 """
 abstract type TRIG end
 
@@ -26,6 +32,13 @@ These fields will be used to create the GUI for the DAQ.
 
 #It is useful to instead of having a large amount of fields, create two objects that contain the fields for the input and output channels. Each object will contain arrays of the fields for each channel.
 
+"""
+    Output(label, datatype, numchannels, ranges, values, israngevariable)
+
+One group of output channels on a [`TRIG`](@ref) device, as the control panel shows it: `label` (for example
+`"DAC"` or `"TTL"`), the channel value type `datatype` (`Float64` volts, `Bool`), `numchannels`, the per-channel
+`ranges`, the last-commanded `values`, and whether the range can be changed (`israngevariable`).
+"""
 mutable struct Output
     label::String           #The name of the type of output
     datatype::DataType      #The datatype of the output
@@ -35,6 +48,12 @@ mutable struct Output
     israngevariable::Bool   #If the range is variable
 end
 
+"""
+    Input(label, datatype, numchannels, ranges, values, israngevariable)
+
+One group of input channels on a [`TRIG`](@ref) device, with the same fields as [`Output`](@ref); `values` holds
+the last readings.
+"""
 mutable struct Input
     label::String           #The name of the type of input
     datatype::DataType      #The datatype of the input

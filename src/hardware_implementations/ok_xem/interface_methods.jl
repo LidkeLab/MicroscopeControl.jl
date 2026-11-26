@@ -37,6 +37,15 @@ function initialize(fpga::XEM)
     return nothing
 end
 
+"""
+    setupIO(fpga::XEM) -> nothing
+
+Create the two NI digital-output tasks the FPGA board is driven through. With `devs` the DAQ devices found
+by `showdevices`, `showchannels(daq, "DO", devs[1])` lists the digital-output channels of the first device:
+the exposure-trigger task takes channels 4, 3, 2 and 1 of that list (added in that order) and the enable
+task takes channel 5. The tasks are stored in `fpga.task_trigger` and `fpga.task_enable`. Needs NI-DAQmx;
+nothing is sent to the FPGA.
+"""
 function setupIO(fpga::XEM)
     devs = NIDAQcard.showdevices(fpga.daq)
     channelsDO = NIDAQcard.showchannels(fpga.daq,"DO",devs[1])
@@ -52,6 +61,22 @@ function setupIO(fpga::XEM)
     return nothing
 end
 
+"""
+    setexposure(fpga::XEM, exposure_time::Float64) -> Matrix{Float64}
+    setexposure(fpga::XEM, volt_digit::Array{Float64}) -> nothing
+
+First form: set the exposure `exposure_time` (us) on the FPGA through the four trigger lines. With
+`div = ceil(exposure_time / fpga.exposure_bit)`, it finds `i` in 0:15 with `2^i <= div < 2^(i+1)`, stores the
+exposure actually set, `2^i * fpga.exposure_bit` us, in `fpga.exposure_time` (printed), keeps the four
+low bits of `i` as the string `fpga.volt_bit`, and writes the digits `[8, 4, 2, 1]` (each kept where its bit
+is 1, else 0) to `fpga.task_trigger`. It returns the 1 by 4 digit matrix. So the exposure is rounded to a
+power-of-two multiple of `exposure_bit`, not the requested value.
+`[limitation]` A request with `div` below 1 or at or above 65536 matches no `i` and the call fails with an
+error before anything is written.
+
+Second form: write `volt_digit` to `fpga.task_trigger` as is, without touching `fpga.exposure_time` or
+`fpga.volt_bit`. Requires [`setupIO`](@ref) first.
+"""
 function setexposure(fpga::XEM, exposure_time::Float64)
     volt_bit = 0
     for i in 0:15
@@ -85,6 +110,15 @@ function setexposure(fpga::XEM, volt_digit::Array{Float64})
     return nothing
 end
 
+"""
+    enable(fpga::XEM, enable::Float64) -> nothing
+
+Write `enable` to the enable task `fpga.task_enable` (see [`setupIO`](@ref)) through `NIDAQcard.setvoltage`;
+`fpga.enable` is not updated. The unexported constants `TRIGGER_OFF` (0.0) and `TRIGGER_ON` (16.0) are the
+values the struct's `enable` default uses. `NIDAQcard.setvoltage` accepts only 0 or 1 for a single-line
+digital task and the port word for a port task, so `TRIGGER_ON` is accepted only when the task channel is a
+port.
+"""
 function enable(fpga::XEM, enable::Float64)
     NIDAQcard.setvoltage(fpga.daq,fpga.task_enable, enable) 
     return nothing
@@ -95,6 +129,14 @@ function shutdown(fpga::XEM)
     return nothing
 end
 
+"""
+    setwirein(fpga::XEM, epaddr::UInt8, value::UInt32) -> nothing
+
+Set FrontPanel wire-in endpoint `epaddr` to `value` and apply it to the FPGA (`SetWireInValue` with mask
+`0xFFFF`, so only the low 16 bits of `value` are written, then `UpdateWireIns`). `[limitation]` A failing
+FrontPanel call is reported with `println` and the function returns `nothing` as on success; nothing is
+thrown.
+"""
 function setwirein(fpga::XEM, epaddr::UInt8, value::UInt32)
     err = okFrontPanel_SetWireInValue(fpga.devicehandle, epaddr, value, 0xFFFF)
     if err != ok_ErrorCode(0)
@@ -109,6 +151,12 @@ function setwirein(fpga::XEM, epaddr::UInt8, value::UInt32)
     return nothing
 end
 
+"""
+    activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32) -> nothing
+
+Fire the trigger-in bits of `bitmask` on FrontPanel endpoint `epaddr` (`ActivateTriggerIn`). `[limitation]`
+A failing call is reported with `println` and the function returns `nothing` as on success; nothing is thrown.
+"""
 function activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32)
     err = okFrontPanel_ActivateTriggerIn(fpga.devicehandle, epaddr, bitmask)
     if err != ok_ErrorCode(0)
@@ -118,6 +166,12 @@ function activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32)
     return nothing
 end
 
+"""
+    getwireout(fpga::XEM, epaddr::UInt8) -> Union{UInt32, Nothing}
+
+Refresh the FrontPanel wire-outs (`UpdateWireOuts`) and return the value of wire-out endpoint `epaddr` as a
+`UInt32`. If the refresh fails the error is printed and `nothing` is returned.
+"""
 function getwireout(fpga::XEM, epaddr::UInt8)
     # Update wire outs first (required!)
     err = okFrontPanel_UpdateWireOuts(fpga.devicehandle)

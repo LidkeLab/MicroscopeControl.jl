@@ -40,6 +40,14 @@ function readresponse(scope::Triggerscope4)
     end
 end
 
+"""
+    openport(scope::Triggerscope4) -> nothing
+
+Open the serial port `scope.portname` at `scope.baudrate`, store it in `scope.sp`, assert DTR, set the read
+and write timeouts to `scope.rwtimeout` seconds, flush both buffers and sleep `scope.compause` seconds.
+Called by [`initialize`](@ref); it does not check that a Triggerscope answers. A port that cannot be
+opened throws the `LibSerialPort` error.
+"""
 function openport(scope::Triggerscope4)
     # Open the serial port
     scope.sp = open(scope.portname, scope.baudrate)
@@ -56,6 +64,11 @@ function openport(scope::Triggerscope4)
     sleep(scope.compause)
 end
 
+"""
+    closeport(scope::Triggerscope4) -> nothing
+
+Close the serial port `scope.sp`. Called by [`shutdown`](@ref).
+"""
 function closeport(scope::Triggerscope4)
     close(scope.sp)
 end
