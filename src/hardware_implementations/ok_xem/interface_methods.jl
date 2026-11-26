@@ -156,7 +156,8 @@ end
     activetriggerin(fpga::XEM, epaddr::UInt8, bitmask::UInt32) -> nothing
 
 Fire one trigger-in bit on FrontPanel endpoint `epaddr` (`ActivateTriggerIn`). Despite the argument's name,
-`bitmask` is passed unchanged and unchecked as the bit number, as the FrontPanel API takes it (which bits exist
+`bitmask` is passed as the bit number, as the FrontPanel API takes it, converted to a C `int` (a value above
+`typemax(Cint)` throws `InexactError`) and otherwise unchecked (which bits exist
 depends on the board's trigger endpoint): `4` fires bit 4, not the
 bit that the mask `0x04` would select. `[limitation]`
 A failing call is reported with `println` and the function returns `nothing` as on success; nothing is thrown.

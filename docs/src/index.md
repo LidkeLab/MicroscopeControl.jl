@@ -32,7 +32,7 @@ has these four functions:
 
 | Function | What it does |
 |:---------|:-------------|
-| [`initialize`](@ref initialize(::AbstractInstrument)) | Connect to the hardware. A simulated device does nothing, marks itself connected, or (`SimLight` without a modulator) switches on. |
+| [`initialize`](@ref initialize(::AbstractInstrument)) | Connect to the hardware. On the simulated devices: the camera does nothing, a stage marks itself connected, the laser diode opens its simulated controller with the output off, and `SimLight` switches on (with a modulator it stays off and opens the modulator). |
 | [`shutdown`](@ref shutdown(::AbstractInstrument)) | Release the hardware; each driver's docstring says what it closes (an `LCC1620` leaves its shared serial port open). |
 | [`export_state`](@ref export_state(::AbstractInstrument)) | Return `(attributes, data, children)`, the device's state for [`save_h5`](@ref). |
 | [`gui`](@ref gui(::AbstractInstrument)) | Open a GLMakie control panel for the device. |

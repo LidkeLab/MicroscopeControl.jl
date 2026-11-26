@@ -103,11 +103,14 @@ LightSourceInterface.regulation_mode(::Type{SimDiodeLaser{M}}) where {M} = M()
 """
     SimDiodeLaser(; mode = ConstantCurrent(), kwargs...)
 
-Takes the mode and diode keywords of [`TCubeLaser`](@ref MicroscopeControl.HardwareImplementations.TCubeLaserControl.TCubeLaser)
-with the same requirements (both apply them through `diode_loop_from_keywords`): `mode`, `unique_id`,
+Takes the mode and diode keywords of [`TCubeLaser`](@ref MicroscopeControl.HardwareImplementations.TCubeLaserControl.TCubeLaser),
+with the same meanings (both build the photodiode loop through `diode_loop_from_keywords`), but `TCubeLaser`
+checks some of them further against its controller, so a configuration the simulation accepts can still be refused
+by the hardware driver. The shared keywords: `mode`, `unique_id`,
 `properties`, `min_current`, `max_current`, `threshold_current`, the photodiode-loop keywords below and
 `modulator`. It does not take the serial number or `TCubeLaser`'s controller and DAQ keywords (`laser_color`,
-`controller_max_current`, `max_setcurrent`, `max_setpoint`, `drive_current`, `daq`, `daq_device`, `ao_channel`),
+`controller_max_current`, `max_setcurrent`, `max_setpoint`, `drive_current`, `task_mod`, `daq`, `daq_device`,
+`ao_channel`),
 and it adds its own model and fault keywords, documented on the type; so a system's construction line and its
 twin's share the diode keywords but are not the same line. `mode` defaults to `ConstantCurrent()`.
 In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,

@@ -43,8 +43,8 @@ warning, and `shutdown`'s device close is logged only. `capture`, `live`, `seque
 One lock per camera, `acquisition_lock`, serializes every start (`live`, `sequence`, `capture`) with every stop
 (`abort`, `shutdown`), so `getlastframe` can run on another thread during a live view. A frame wait runs with the
 lock released and is registered with the camera; a stop aborts the registered waits and waits for them to end
-before it releases the buffer. Every frame wait is bounded by its timeout, so a frame wait delays a stop by at
-most that timeout. `[limitation]` A property call (`setvalue`, `setexposuretime!`, `setroi!` and the others) holds the lock
+before it releases the buffer. A frame wait's DCAM wait is bounded by its timeout; after it, the reader may still
+copy a frame and close its wait handle before it unregisters, and a stop waits for that too. `[limitation]` A property call (`setvalue`, `setexposuretime!`, `setroi!` and the others) holds the lock
 across its DCAM call, which has no timeout, so a hung property call delays a stop or `shutdown` until it returns.
 The comments on the struct's fields state the invariant in full.
 """

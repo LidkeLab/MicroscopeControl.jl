@@ -20,7 +20,8 @@ A Thorlabs scientific camera (CS-series) driven through the Thorlabs TSI camera 
 
 **The keyword constructor opens the camera.** It initializes the SDK, has the SDK write the available camera ids
 into the `unique_id` buffer (5 bytes by default), and passes that buffer to the open call. A failed SDK step prints
-or logs an error and does not throw (an invalid exposure, or a missing DLL, still throws). `[limitation]` After a
+or logs an error and does not throw. A missing DLL still throws, and so does a negative exposure when
+`poll_timeout` is left to follow it (the default). `[limitation]` After a
 failed discovery, `camera_handle` keeps the keyword's value (`C_NULL` by default); after a failed open it holds
 whatever the SDK left in an uninitialized reference. So a non-null handle does not prove the camera opened. `[limitation]` There is no `initialize` method for this type, so
 `initialize(camera)` throws `"initialize not implemented"`. `shutdown` closes the camera and uninitializes the

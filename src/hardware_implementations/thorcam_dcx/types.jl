@@ -25,9 +25,9 @@ Frames are `UInt8`, `(roi.height, roi.width)` indexed `[y, x]`.
 
 `[limitation]` `getdata` does not wait for a sequence: it copies every sequence buffer at once, without checking
 the frame count or the copy status, then calls `abort`, so a `getdata` right after `sequence` can return a stack of
-the right shape whose later frames were never exposed. There is no completion flag to wait on: the sequence's
-polling task stops the capture when the frame count is reached but leaves `is_running` set, and prints
-"Sequence finished". `abort` stops the capture and frees the sequence buffers.
+the right shape whose later frames were never exposed. `sequence` returns the `Task` that polls the frame count
+and stops the capture when it is reached, so `t = sequence(camera); wait(t); getdata(camera)` reads a finished
+sequence; nothing else signals the end (the task leaves `is_running` set and prints "Sequence finished"). `abort` stops the capture and frees the sequence buffers.
 `live`, `sequence` and `abort` have no docstrings of their own.
 """
 mutable struct ThorcamDCXCamera <: Camera

@@ -274,16 +274,17 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
 
 - The documentation site has one API page per device class (cameras, stages, light sources, DAQ and FPGA boards,
   attenuators, spatial light modulators, Triggerscope), each with the interface, the simulated device and every
-  driver, then the driver internals. Every docstring in the package is on a page: before building, `docs/make.jl`
-  selects docstrings the way the pages' `@autodocs` and `@docs` blocks do and fails if any docstring of any
-  submodule lands on no page, since Documenter's own check (now an error, not a warning) can miss one whose name is
-  documented in several modules. A
+  driver, then the driver internals. Every docstring in the package is on a page: after building, `docs/make.jl`
+  compares the docstrings the built pages contain with every docstring of every submodule and fails before
+  deploying if one is missing, since Documenter's own check (now an error, not a warning) can miss one whose name
+  is documented in several modules. A
   quick-start page runs on the simulated devices at every docs build.
 - Docstrings for every public name that had none: every device type (`SimCamera`, `DCAM4Camera`,
   `ThorCamCSCCamera`, `ThorcamDCXCamera`, `MCLStage`, `SimStage1d`/`2d`/`3d`, `Triggerscope4`, `MLSLM`, `XEM`,
   `XEM_dac`), the driver modules, the SLM and Triggerscope interfaces, `start_live`, `start_sequence`, and the
-  exported driver functions. Each device type's docstring states where the device is opened (constructor or
-  `initialize`), the units of its fields, and its limitations.
+  exported driver functions. Each device type's docstring states where the device is opened (constructor,
+  `initialize`, or the driver's own SDK call), the units of its fields where the code gives them, and its
+  limitations.
 - README: pins `v0.2.6`, lists every supported device, and has a short example. `CLAUDE.md`: `setpower` on a
   `DiodeLaser` is deprecated (it forwards to `setcurrent!` in `ConstantCurrent` mode), not a throw in both modes.
 
