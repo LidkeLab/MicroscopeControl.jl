@@ -20,7 +20,10 @@ DAC Update Rate can be overclocked
 
 OPTIONS FOR CONTROL ARE DIRECT CONTROL OR SEQUENCE CONTROL
 =#
-
+"""
+The driver for the Advanced Research Consulting Triggerscope 4: [`Triggerscope4`](@ref), its direct-control and
+sequence commands, and the serial helpers.
+"""
 module Triggerscope
     using ...MicroscopeControl
     using ...MicroscopeControl.HardwareInterfaces.TrigInterface

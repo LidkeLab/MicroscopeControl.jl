@@ -1,3 +1,6 @@
+"""
+The driver for Opal Kelly XEM FPGA boards: [`XEM`](@ref) and bindings to the Opal Kelly FrontPanel library.
+"""
 module OK_XEM
     using ...MicroscopeControl.HardwareImplementations.NIDAQcard
 

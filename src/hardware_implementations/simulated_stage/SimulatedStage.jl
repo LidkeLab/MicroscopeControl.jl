@@ -1,3 +1,7 @@
+"""
+The simulated stages, [`SimStage1d`](@ref), [`SimStage2d`](@ref) and [`SimStage3d`](@ref), for tests and
+examples without hardware.
+"""
 module SimulatedStage
     using ...MicroscopeControl.HardwareInterfaces.StageInterface
     using GLMakie

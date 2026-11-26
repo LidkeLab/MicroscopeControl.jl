@@ -5,7 +5,10 @@ types and interface methods will be interacted with by the gui function in the S
 
 handle_methods.jl, standard_device_movement.jl, waveform_aquisition.jl, and device_information.jl will contain C language calls to the MCL DLL
 =#
-
+"""
+The driver for Mad City Labs Nano-Drive piezo stages: [`MCLStage`](@ref), its `Stage` interface methods, and
+bindings to the Madlib library.
+"""
 module MadCityLabs
     using ...MicroscopeControl.HardwareInterfaces.StageInterface
 

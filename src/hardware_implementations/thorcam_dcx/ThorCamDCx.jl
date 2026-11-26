@@ -1,5 +1,8 @@
 # Thorlabs DCx camera
-
+"""
+The driver for Thorlabs DCx cameras: [`ThorcamDCXCamera`](@ref), its `Camera` interface methods, and bindings to
+the uc480 SDK.
+"""
 module ThorCamDCx
 
 using ...MicroscopeControl.HardwareInterfaces.CameraInterface

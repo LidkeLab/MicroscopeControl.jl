@@ -1,5 +1,8 @@
 # Thorlabs compact scientific camera
-
+"""
+The driver for Thorlabs scientific cameras (CS series): [`ThorCamCSCCamera`](@ref), its `Camera` interface
+methods, and bindings to the Thorlabs TSI camera SDK.
+"""
 module ThorCamCSC
 
 using ...MicroscopeControl.HardwareInterfaces.CameraInterface

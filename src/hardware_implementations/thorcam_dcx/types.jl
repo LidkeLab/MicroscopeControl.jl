@@ -23,7 +23,6 @@ logs an error and returns without throwing. `shutdown` closes the camera.
 
 Frames are `UInt8`, `(roi.height, roi.width)` indexed `[y, x]`.
 """
-
 mutable struct ThorcamDCXCamera <: Camera
     unique_id::String
     camera_format::CameraFormat
