@@ -24,6 +24,15 @@ function dcamapi_init()
     return err, dci
 end
 
+"""
+    dcamapi_uninit() -> DCAMERR
+
+Call the DCAM-API's `dcamapi_uninit` through the library named by `Libraries.libdcam`, and return its
+`DCAMERR`. On failure an error is logged and the code is still returned, not thrown. It tears down the
+process-wide DCAM-API state; uninitializing while a device is still open or while another part of the
+process still uses the API is the caller's problem (the camera `shutdown` calls it when the last holder
+gives back its count of the API).
+"""
 function dcamapi_uninit()
     err = @dcamcall libdcam.dcamapi_uninit()::DCAMERR
     if is_failed(err)

@@ -166,6 +166,15 @@ function gui(camera::Camera)
     display(GLMakie.Screen(), control_fig)
 end
 
+"""
+    start_live(camera::Camera; on_close=nothing) -> Task
+
+Open a GLMakie window that shows the camera's live view. Calls `live(camera)`, then reads frames with
+`getlastframe` while `camera.is_running == 1` and shows each one scaled to its maximum, with `[min max]` in the
+corner (a `nothing` frame is skipped). Closing the window stops the reader, calls `abort(camera)` and then
+`on_close()` if one is given. Returns the task that updates the display. Needs a display (under `xvfb-run` on a
+headless machine).
+"""
 function start_live(camera::Camera; on_close=nothing)
     create_display(camera, live; on_close=on_close)
 end
@@ -196,6 +205,20 @@ function start_capture(camera::Camera)
     display(GLMakie.Screen(), imgplot)
 end
 
+"""
+    start_sequence(camera::Camera) -> nothing
+
+Open a GLMakie window, start `sequence(camera)`, and show frames read with `getlastframe` while
+`camera.is_running == 1`, as [`start_live`](@ref) does. The window is for watching a sequence, not for keeping
+it: it does not collect the stack, and closing it calls `abort(camera)`, which on `DCAM4Camera` and
+`ThorcamDCXCamera` releases the sequence buffers and on `ThorCamCSCCamera` shuts the camera down. `[limitation]` Do
+not read the stack with `getdata` around this window: on `ThorcamDCXCamera` `getdata` frees the same buffers the
+window's `abort` frees again, and on `ThorCamCSCCamera` the window and `getdata` take frames from the same queue. To
+keep a stack, call `sequence` and `getdata` without the window; on `ThorcamDCXCamera`, a `sequence` that starts
+returns the `Task` that polls the frame count, so `wait` it before `getdata` (see that type's docstring). `[limitation]` On `ThorcamDCXCamera`, closing the
+window frees the buffers while the window's reader may still be copying from one. `SimCamera`'s `getdata` returns
+new random frames of the right shape at any time; it keeps nothing.
+"""
 function start_sequence(camera::Camera)
     create_display(camera, sequence)
 

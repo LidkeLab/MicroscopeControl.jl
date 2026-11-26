@@ -32,6 +32,16 @@ include("modulation.jl")
 
 export TCubeLaser
 export red_laser_gui
+
+"""
+    red_laser_gui(laser) -> GLMakie.Screen
+
+The same function as `gui`, under the name this module exports for the `TCubeLaser`. A `TCubeLaser` is
+a `DiodeLaser`, so the call opens the panel for its regulation mode (`ConstantCurrent` or
+`ConstantPhotocurrent`) and issues no command and no read; the readout fills from the panel's Read button or
+its Poll toggle. Needs a display (GLMakie).
+"""
+red_laser_gui
 export light_on, light_off, shutdown, tcube_get_current
 # `tcube_refresh` is an exported name from before v0.2.3 and stays one: the
 # method now throws and explains itself rather than vanishing into an

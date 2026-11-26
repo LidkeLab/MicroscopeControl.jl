@@ -2,6 +2,12 @@
 #Each function should generate an ASCII String of the format of the command
 
 #arms the triggerscope with the script written to it
+"""
+    arm(scope::Triggerscope4) -> String
+
+Send `ARM` to arm the program written to the device (see `progdac`, `progttl`, [`trigmode`](@ref)) and
+return the response line.
+"""
 function arm(scope::Triggerscope4)
     #Build string
     commandstring = "ARM\n"
@@ -11,6 +17,11 @@ function arm(scope::Triggerscope4)
 end
 
 #Clears the program written to the triggerscope
+"""
+    clearall(scope::Triggerscope4) -> String
+
+Send `CLEAR_ALL`, which clears the program held on the device, and return the response line.
+"""
 function clearall(scope::Triggerscope4)
     #Build string
     commandstring = "CLEAR_ALL\n"
@@ -19,6 +30,14 @@ function clearall(scope::Triggerscope4)
     return readresponse(scope)
 end
 #Focus settings for the triggerscope, see manual for more information
+"""
+    progfocus(scope::Triggerscope4, startpos::Int, stepsize::Int, numsteps::Int, direction::Bool,
+              priority::Bool) -> String
+
+Send `PROG_FOCUS,<startpos>,<stepsize>,<numsteps>,<direction>,<priority>` (the two `Bool`s as 0 or 1) and
+return the response line. All values are passed to the device unchanged; the code gives no units.
+The source comment refers to the vendor manual for their meaning.
+"""
 function progfocus(scope::Triggerscope4, startpos::Int, stepsize::Int, numsteps::Int, direction::Bool, priority::Bool)
     #Build string
     commandstring = "PROG_FOCUS," * string(startpos) * "," * string(stepsize) * "," * string(numsteps) * "," * string(Int(direction)) * "," * string(Int(priority)) * "\n"
@@ -27,6 +46,14 @@ function progfocus(scope::Triggerscope4, startpos::Int, stepsize::Int, numsteps:
     return readresponse(scope)
 end
 
+"""
+    progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bool)
+
+Program TTL output `ttlnum` to go high or low at program line `programline` by sending
+`PROG_TTL,<line>,<ttl>,<0 or 1>`. `[limitation]` After the command is written the function assigns into
+`scope.ttloutputs`, which is an `Int` (the output count) rather than a vector, so the call throws a
+`MethodError` and never returns the response line; the command itself has already been sent.
+"""
 function progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bool)
     #Build string
     commandstring = "PROG_TTL," * string(programline) * "," * string(ttlnum) * "," * string(Int(ttlval)) * "\n"
@@ -36,6 +63,14 @@ function progttl(scope::Triggerscope4, programline::Int, ttlnum::Int, ttlval::Bo
     return readresponse(scope)
 end
 
+"""
+    progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::Float64) -> String
+
+Program DAC channel `dacnum` to `voltage` volts at program line `programline` by sending
+`PROG_DAC,<line>,<dac>,<code>`, and return the response line. The 16-bit code comes from the range in
+`scope.dacranges[dacnum]` (see [`setdac`](@ref)); `scope.dacvalues[dacnum]` is set to that code. The
+voltage is not range-checked.
+"""
 function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::Float64)
     dac_code = volttooutput(scope, dacnum, voltage)
     #Build string
@@ -47,6 +82,11 @@ function progdac(scope::Triggerscope4, programline::Int, dacnum::Int, voltage::F
 end
 
 #"Clears active program table"
+"""
+    cleartable(scope::Triggerscope4) -> String
+
+Send `CLEARTABLE`, which clears the active program table, and return the response line.
+"""
 function cleartable(scope::Triggerscope4)
     #Build string
     commandstring = "CLEARTABLE\n"
@@ -57,6 +97,13 @@ end
 
 #Add delay to specific line (in ms)
 # NOTE: Problems with both matlab and julia prog_delay with both 4 and 3B models
+"""
+    progdelay(scope::Triggerscope4, programline::Int, delayms::Int) -> String
+
+Add a delay of `delayms` milliseconds to program line `programline` by sending `PROG_DEL,<line>,<ms>`,
+and return the response line. `[limitation]` A source comment notes problems with this command on both
+the Triggerscope 4 and 3B, in both the Julia and the MATLAB implementations.
+"""
 function progdelay(scope::Triggerscope4, programline::Int, delayms::Int)
     #Build string
     commandstring = "PROG_DEL," * string(programline) * "," * string(delayms) * "\n"
@@ -64,18 +111,18 @@ function progdelay(scope::Triggerscope4, programline::Int, delayms::Int)
     writecommand(scope, commandstring)
     return readresponse(scope)
 end
-"""
-Can have two waveforms per line (0, 1)
-
-Waveforms are as follows:
-1: Sine
-2: Sawtooth
-3: Triangle
-4: Square
-
-Duty cycle in percent, phase in degrees
-"""
 # NOTE: Does not appear to function, also not present in offical documentation
+"""
+    progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform::Int, centervolt::Float64,
+             dutycycle::Int, phase::Int, trigtype::Int; programstep::Int=0) -> String
+
+Program a waveform on DAC channel `dacnum` by sending `PROG_WAVE,...` and return the response line.
+A program line holds two waveforms; `arrayindex` (sent as 0 or 1) selects which. `waveform` is 1 sine,
+2 sawtooth, 3 triangle, 4 square; `centervolt` (V) is converted to a DAC code with the channel's stored
+range; `dutycycle` is in percent and `phase` in degrees. `trigtype` and `programstep` are passed to the
+device unchanged. `[limitation]` A source comment says the command does not appear to function and is not in
+the official documentation.
+"""
 function progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform::Int, centervolt::Float64, dutycycle::Int, phase::Int, trigtype::Int; programstep::Int = 0)
     #Build string
     commandstring = "PROG_WAVE," * string(Int(arrayindex)) * "," * string(dacnum) * "," * string(waveform) * "," * string(volttooutput(scope, dacnum, centervolt)) * "," * string(dutycycle) * "," * string(phase) * "," * string(trigtype) * "," * string(programstep) * "\n"
@@ -85,6 +132,12 @@ function progwave(scope::Triggerscope4, arrayindex::Bool, dacnum::Int, waveform:
     
 end
 
+"""
+    timecycles(scope::Triggerscope4, cycles::Int) -> String
+
+Send `TIMECYCLES,<cycles>` and return the response line. The value is passed to the device unchanged;
+[`progarray`](@ref) passes its loop count here.
+"""
 function timecycles(scope::Triggerscope4, cycles::Int)
     #Build string
     commandstring = "TIMECYCLES," * string(cycles) * "\n"
@@ -93,6 +146,12 @@ function timecycles(scope::Triggerscope4, cycles::Int)
     return readresponse(scope)
 end
 
+"""
+    trigmode(scope::Triggerscope4, mode::TriggerMode) -> String
+
+Send `TRIGMODE,<code>` with the integer value of `mode` and return the response line.
+`scope.trigmode` is set to `mode` after the write and before the response is read.
+"""
 function trigmode(scope::Triggerscope4, mode::TriggerMode)
     #Build string
     commandstring = "TRIGMODE," * string(Int(mode)) * "\n"
@@ -103,15 +162,14 @@ function trigmode(scope::Triggerscope4, mode::TriggerMode)
 end
 
 """
-    genprogarray(scope::Triggerscope4, signalArr::SignalArray, NLoops::Int, Arm::bool)
+    progarray(scope::Triggerscope4, signalArr::SignalArray, NLoops::Int, arm::Bool)
 
-Programs an array of commands to the scanner's scope
-
-# Arguments
-- `scope::Triggerscope4`: The triggerscope object
-- `signalArr::SignalArray`: The array of commands to be sent
-- `NLoops::Int`: The number of times the program should loop
-- `Arm::bool`: If the "ARM" command should be run after the program
+Intended to program a [`SignalArray`](@ref) onto the device and optionally arm it: clear the device,
+set the trigger mode, save settings, reset, set the cycle count to `NLoops`, set DAC ranges from the
+voltages used, then send each command with `progdac` or `progttl`. `[limitation]` As written the function
+cannot complete. It first calls [`trigmode`](@ref) with an `Int`, which has no method (a `MethodError`),
+after `clearall` has already been sent; the later range-selection and programming loops also reference
+variables and fields that do not exist (`dacChannelVals` outside its loop, `command.progLine`).
 """
 function progarray(scope::Triggerscope4, signalArr::SignalArray, NLoops::Int, arm::Bool)
     # Basic Setting init

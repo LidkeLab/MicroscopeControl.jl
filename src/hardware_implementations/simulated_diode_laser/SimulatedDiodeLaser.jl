@@ -50,7 +50,7 @@ generic.
   straight to the clamp.
 - `tia_over_fault`, `tia_under_fault`: force the amplifier flags.
 - `settle_s`: real `sleep` after each command.
-- `modulator::Union{Nothing,AbstractModulationControl}`: as on [`TCubeLaser`](@ref), keyword
+- `modulator::Union{Nothing,AbstractModulationControl}`: as on [`TCubeLaser`](@ref MicroscopeControl.HardwareImplementations.TCubeLaserControl.TCubeLaser), keyword
   default `nothing`. With one, `initialize` opens it, `light_on` writes level 0, enables, then puts
   the request on it, `light_off` and `shutdown` write 0 first, and the level setters check and
   record as always but write only while the light is on (an `ArgumentError` from the modulator
@@ -103,10 +103,16 @@ LightSourceInterface.regulation_mode(::Type{SimDiodeLaser{M}}) where {M} = M()
 """
     SimDiodeLaser(; mode = ConstantCurrent(), kwargs...)
 
-Takes the same keywords with the same requirements as [`TCubeLaser`](@ref),
-minus the serial (both apply them through `diode_loop_from_keywords`), so one
-construction line serves a system and its simulated twin. `mode` defaults to
-`ConstantCurrent()`.
+Takes the mode and diode keywords of [`TCubeLaser`](@ref MicroscopeControl.HardwareImplementations.TCubeLaserControl.TCubeLaser),
+with the same meanings (both build the photodiode loop through `diode_loop_from_keywords`), but `TCubeLaser`
+checks some of them further against its controller, so a configuration the simulation accepts can still be refused
+by the hardware driver. The shared keywords: `mode`, `unique_id`,
+`properties`, `min_current`, `max_current`, `threshold_current`, the photodiode-loop keywords below and
+`modulator`. It does not take the serial number or `TCubeLaser`'s controller and DAQ keywords (`laser_color`,
+`controller_max_current`, `max_setcurrent`, `max_setpoint`, `drive_current`, `task_mod`, `daq`, `daq_device`,
+`ao_channel`),
+and it adds its own model and fault keywords, documented on the type; so a system's construction line and its
+twin's share the diode keywords but are not the same line. `mode` defaults to `ConstantCurrent()`.
 In `ConstantPhotocurrent` mode `wa_calibration`, `tia_range`, `tec_stabilised`,
 `properties` and `max_current` are required, and the loop keywords `ramp_step_mW`,
 `ramp_step_s`, `lock_check_s`, `lock_ratio`, `ref_current_mA`, `ref_photocurrent_A`
@@ -117,8 +123,8 @@ reference; it only stores them. `threshold_current` defaults to
 diode's numbers); the model fields are documented on the type.
 
 Unlike `TCubeLaser`, whose default `properties` are 0.2.4's `"mW"` labels, the
-default `properties` here are labelled `"mA"`: this type is new, has no 0.2.x
-behaviour to keep, and its values are mA.
+default `properties` here are labeled `"mA"`, as they have been since the type was added, because its values
+are mA.
 """
 function SimDiodeLaser(;
     mode::RegulationMode=ConstantCurrent(),

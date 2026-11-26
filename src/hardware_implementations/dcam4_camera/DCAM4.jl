@@ -1,10 +1,8 @@
 """
     DCAM4
 
-A module for controlling DCAM4 cameras within the MicroscopeAdapt.jl package. It offers functionalities 
-for capturing images, adjusting exposure times, setting regions of interest, and handling DCAM4-specific 
-errors. It interfaces directly with the DCAM4 API, providing a low-latency solution for high-speed 
-microscopy applications.
+The driver for Hamamatsu cameras through the DCAM-API: [`DCAM4Camera`](@ref), its `Camera` interface methods,
+exposure, ROI and trigger setters, and Julia bindings to the DCAM-API functions it calls.
 """
 module DCAM4
 using ...Libraries: libdcam

@@ -1,3 +1,7 @@
+"""
+The driver for SmarAct MCS2 positioners: [`MCS2Stage`](@ref), its `Stage` interface methods, and bindings to the
+SmarAct MCS2 library.
+"""
 module MCS2Stage_mod
 
 using ...MicroscopeControl.HardwareInterfaces.StageInterface

@@ -1,4 +1,8 @@
 # Spatial Light Modulator
+"""
+The spatial light modulator interface: the abstract type [`SLM`](@ref), [`Pupil`](@ref) and the display
+functions.
+"""
 module SLMInterface
 
 using GLMakie

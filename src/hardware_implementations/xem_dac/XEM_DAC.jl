@@ -1,4 +1,6 @@
-
+"""
+An Opal Kelly XEM board used as a four-channel DAC: [`XEM_dac`](@ref).
+"""
 module XEM_DAC
 
 

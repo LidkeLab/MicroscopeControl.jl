@@ -45,6 +45,13 @@ function releasehandle(stage::MCLStage)
 end 
 
 
+"""
+    releaseallhandles(stage::MCLStage) -> nothing
+
+Release every Nano-Drive handle this process holds (`MCL_ReleaseAllHandles`) and set `stage.connectionstatus`
+to `false`. The library call is not limited to `stage`: other `MCLStage` objects lose their handles too but
+keep their own `connectionstatus` and `id`. [`releasehandle`](@ref) releases only `stage.id`.
+"""
 function releaseallhandles(stage::MCLStage)
     @ccall libmadlib.MCL_ReleaseAllHandles()::Cvoid
     stage.connectionstatus = false

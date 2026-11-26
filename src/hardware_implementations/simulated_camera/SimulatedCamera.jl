@@ -1,3 +1,6 @@
+"""
+The simulated camera, [`SimCamera`](@ref), for tests and examples without hardware.
+"""
 module SimulatedCamera
 
 using ...MicroscopeControl.HardwareInterfaces.CameraInterface

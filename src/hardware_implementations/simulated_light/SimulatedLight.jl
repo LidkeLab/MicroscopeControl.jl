@@ -1,3 +1,6 @@
+"""
+The simulated light source, [`SimLight`](@ref), for tests and examples without hardware.
+"""
 module SimulatedLight
 
 using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface

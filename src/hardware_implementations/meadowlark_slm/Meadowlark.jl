@@ -1,3 +1,7 @@
+"""
+The driver for Meadowlark spatial light modulators: [`MLSLM`](@ref), its pattern generators, and bindings to the
+Blink SDK.
+"""
 module Meadowlark
 
 using ...MicroscopeControl.HardwareInterfaces.SLMInterface

@@ -37,6 +37,8 @@ Set the output voltages for all four channels of the DAC.
 - `vc::Float64`: The desired output voltage for channel C (in volts).
 - `vd::Float64`: The desired output voltage for channel D (in volts).
 
+Throws an `ErrorException` if any voltage is outside -10 to 10 V; all four are converted before any is
+written. A failed FPGA write is printed, not thrown. Returns `nothing`.
 """
 function setvoltageAll(fpga::XEM_dac, va::Float64, vb::Float64, vc::Float64, vd::Float64)
     a = volts_to_code(va)
@@ -60,6 +62,8 @@ Set the output voltage for channel A of the DAC.
 - `fpga::XEM_dac`: An instance of the XEM_dac hardware implementation.
 - `va::Float64`: The desired output voltage for channel A (in volts).
 
+Throws an `ErrorException` if `va` is outside -10 to 10 V. A failed FPGA write is printed, not thrown.
+Returns `nothing`.
 """
 function setvoltageA(fpga::XEM_dac, va::Float64)
     a = volts_to_code(va)
@@ -77,6 +81,8 @@ Set the output voltage for channel B of the DAC.
 - `fpga::XEM_dac`: An instance of the XEM_dac hardware implementation.
 - `vb::Float64`: The desired output voltage for channel B (in volts).
 
+Throws an `ErrorException` if `vb` is outside -10 to 10 V. A failed FPGA write is printed, not thrown.
+Returns `nothing`.
 """
 function setvoltageB(fpga::XEM_dac, vb::Float64)
     b = volts_to_code(vb)
@@ -94,6 +100,8 @@ Set the output voltage for channel C of the DAC.
 - `fpga::XEM_dac`: An instance of the XEM_dac hardware implementation.
 - `vc::Float64`: The desired output voltage for channel C (in volts).
 
+Throws an `ErrorException` if `vc` is outside -10 to 10 V. A failed FPGA write is printed, not thrown.
+Returns `nothing`.
 """
 function setvoltageC(fpga::XEM_dac, vc::Float64)
     c = volts_to_code(vc)
@@ -108,9 +116,11 @@ end
     setvoltageD(fpga::XEM_dac, vd::Float64)
 Set the output voltage for channel D of the DAC.
 # Arguments
-- `fpga::XEM_dac`: An instance of the XEM_dac hardware
+- `fpga::XEM_dac`: An instance of the XEM_dac hardware implementation.
 - `vd::Float64`: The desired output voltage for channel D (in volts).
 
+Throws an `ErrorException` if `vd` is outside -10 to 10 V. A failed FPGA write is printed, not thrown.
+Returns `nothing`.
 """
 function setvoltageD(fpga::XEM_dac, vd::Float64)
     d = volts_to_code(vd)
@@ -123,7 +133,8 @@ end
 # start DAC output
 """
     start(fpga::XEM_dac)
-Start the DAC output on the FPGA.
+Start the DAC output on the FPGA by writing `BIT_START` (1) to wire-in endpoint 5. A failed FPGA write is
+printed, not thrown.
 # Arguments
 - `fpga::XEM_dac`: An instance of the XEM_dac hardware implementation.
 
@@ -135,9 +146,10 @@ end
 
 """
     stop(fpga::XEM_dac)
-Stop the DAC output on the FPGA.
+Stop the DAC output on the FPGA by writing `BIT_STOP` (0) to wire-in endpoint 5. A failed FPGA write is
+printed, not thrown.
 # Arguments
-- `fpga::XEM_dac`: An instance of the XEM_dac hardware
+- `fpga::XEM_dac`: An instance of the XEM_dac hardware implementation.
 """
 function stop(fpga::XEM_dac)
     setwirein(fpga.xem, EP_WIREIN_START, BIT_STOP)

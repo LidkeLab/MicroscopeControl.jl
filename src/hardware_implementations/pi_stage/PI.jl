@@ -1,3 +1,7 @@
+"""
+The driver for Physik Instrumente stages on a C-867 controller: [`PIStage`](@ref), its `Stage` interface
+methods, and bindings to the PI GCS2 library.
+"""
 module PI
     using ...MicroscopeControl.HardwareInterfaces.StageInterface
 

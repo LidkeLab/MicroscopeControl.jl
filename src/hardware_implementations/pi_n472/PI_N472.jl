@@ -1,3 +1,7 @@
+"""
+The driver for the PI N-472 linear stage: [`N472`](@ref), its `Stage` interface methods, and bindings to the PI
+GCS2 library.
+"""
 module PI_N472
     using ...MicroscopeControl.HardwareInterfaces.StageInterface
     using GLMakie

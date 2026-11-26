@@ -115,7 +115,8 @@ lights_off(lights::LightSource...) = lights_off(lights)
     setpower(laser::DiodeLaser, x::Float64)
 
 Deprecated for a [`ConstantCurrent`](@ref) laser, where it forwards to
-[`setcurrent!`](@ref) (`x` in mA, as it always was on a TCube) and warns. The
+[`setcurrent!`](@ref) (`x` in mA, as it always was on a TCube) with a `Base.depwarn`. Julia shows that warning only
+when run with `--depwarn=yes` (as `Pkg.test` does), and with `--depwarn=error` the call throws before forwarding. The
 mode is a type parameter fixed at construction, so a forwarded call can never
 change unit. It throws for a [`ConstantPhotocurrent`](@ref) laser: an mA call
 must not become an mW one, so use [`setoutputpower!`](@ref) there, or the

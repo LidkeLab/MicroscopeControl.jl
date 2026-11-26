@@ -270,6 +270,25 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
   layout.
 
+### Documentation
+
+- The documentation site has one API page per device class (cameras, stages, light sources, DAQ and FPGA boards,
+  attenuators, spatial light modulators, Triggerscope), each with the interface, the simulated device and every
+  driver, then the driver internals. Every docstring in the package is on a page: after building, `docs/make.jl`
+  compares the docstrings the built pages contain with every docstring of every submodule and fails before
+  deploying if one is missing, since Documenter's own check (now an error, not a warning) can miss one whose name
+  is documented in several modules. A
+  quick-start page runs on the simulated devices at every docs build.
+- Docstrings for every public name that had none: every device type (`SimCamera`, `DCAM4Camera`,
+  `ThorCamCSCCamera`, `ThorcamDCXCamera`, `MCLStage`, `SimStage1d`/`2d`/`3d`, `Triggerscope4`, `MLSLM`, `XEM`,
+  `XEM_dac`), the driver modules, the SLM and Triggerscope interfaces, `start_live`, `start_sequence`, and the
+  exported driver functions. Each device type's docstring states where the device is opened (constructor,
+  `initialize`, or the driver's own SDK call), the units of its fields where the code gives them, and its
+  limitations.
+- README: pins `v0.2.6`, lists every supported device, and has a short example. `CLAUDE.md`: `setpower` on a
+  `DiodeLaser` is deprecated: in `ConstantCurrent` mode it forwards to `setcurrent!` after a deprecation warning
+  (and throws under `--depwarn=error`); it throws in `ConstantPhotocurrent` mode.
+
 ### Known issues
 
 - Camera (`DCAM4Camera`):
@@ -284,6 +303,21 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   1440 x 1080, is the full sensor); a larger value reads past the SDK's buffer, and a smaller one returns a sheared
   image. The fix is to ask the SDK for the image size (`tl_camera_get_image_width` and `_height`), which needs the
   Thorlabs camera SDK header; none is archived yet.
+- Found while documenting, not fixed (each docstring says so):
+  - `SimCamera`'s `capture` returns no frame, where every hardware driver returns one.
+  - `SimStage3d`'s and `SimStage2d`'s `getposition` return only the last axis, not the tuple the `Stage` interface
+    describes.
+  - The SLM interface's `displayimage`, `displayzernike` and `displayblaze` do not work on any SLM: one assigns to
+    the abstract type, two call functions that are not defined, and `MLSLM`'s own methods are in a file the package
+    does not include.
+  - `ThorCamCSCCamera` has no `initialize` method, so the generic one throws; its `abort` calls `shutdown`, so an
+    aborted camera (including one whose live window was closed) must be constructed again; and after a failed open
+    `camera_handle` is not reliably `C_NULL`.
+  - `ThorcamDCXCamera`'s `getdata` does not wait for a sequence and does not check its buffer copies, so a stack
+    read too early has frames that were never exposed.
+  - The stage control panel reads a `stagelabel` field the simulated stages do not have, so `gui` throws on them.
+  - Triggerscope sequence programming: `progttl` throws after sending its command, and `progarray` cannot complete.
+  - `genblazed!` with its default `blaze_end` throws `UndefVarError`.
 
 ## [0.2.6] - 2026-10-01
 

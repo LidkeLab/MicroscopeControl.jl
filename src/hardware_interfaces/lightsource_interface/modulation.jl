@@ -20,7 +20,7 @@ and a light; the claim in [`open_modulator!`](@ref) refuses a second light on th
 - `shutdown(mc)`: write 0 V, then release.
 - `output_id(mc)::String`: names the physical output, for the claim.
 
-[`export_state`](@ref)`(mc)` has a fallback (the type and `output_id`) and is a child of the light's.
+`export_state(mc)` has a fallback (the type and `output_id`) and is a child of the light's.
 
 # How a light takes one
 
@@ -122,7 +122,7 @@ holds_resources(mc::AbstractModulationControl) = false
     open_modulator!(light)
 
 Claim `output_id(light.modulator)` for `light` (refused if another light object holds it), then
-[`initialize`](@ref) the modulator, which leaves 0 V. If the initialize throws, the error is rethrown and the claim
+`initialize` the modulator, which leaves 0 V. If the initialize throws, the error is rethrown and the claim
 is released, unless the modulator still [`holds_resources`](@ref) (a task it could not delete): the claim, whether
 taken by this call or an earlier `initialize`, then stays until `close_modulator!` releases it. A no-op when
 `light.modulator === nothing`. A light calls it at the end of its own `initialize`, with its output off. Public, not
@@ -145,7 +145,7 @@ end
 """
     close_modulator!(light)
 
-[`shutdown`](@ref) `light.modulator` (0 V, then release), then release the claim. A failed `shutdown`
+`shutdown` `light.modulator` (0 V, then release), then release the claim. A failed `shutdown`
 keeps the claim and rethrows, so the next call retries it and no other light can take the output
 meanwhile. A no-op when there is no modulator or `light` holds no claim. A light calls it from its own
 `shutdown`, after switching off. Public, not exported.

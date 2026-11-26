@@ -17,7 +17,26 @@ module Libraries
 
 export libdcam, libmadlib
 
+"""
+    libdcam::String
+
+Name or path of the Hamamatsu DCAM-API shared library the DCAM4 driver calls. It is empty until the module's
+`__init__` runs, then set to the environment variable `MICROSCOPECONTROL_LIBDCAM` if defined, else
+`"dcamapi.dll"` on Windows or `"libdcamapi.so"` on Linux, else `""` on any other system.
+The bare names are left to the system's library search. Read it at call time (`@ccall libdcam.f(...)`);
+a copy taken during precompilation would hold the empty string.
+"""
 global libdcam::String = ""
+
+"""
+    libmadlib::String
+
+Path or name of the Mad City Labs Madlib shared library the Nano-Drive stage driver calls. It is empty until
+the module's `__init__` runs, then set to the environment variable `MICROSCOPECONTROL_LIBMADLIB` if defined,
+else `C:\\Program Files\\Mad City Labs\\NanoDrive\\Madlib.dll` on Windows or `"libmadlib.so"` on Linux,
+else `""` on any other system. Read it at call time; a copy taken during precompilation would hold the
+empty string.
+"""
 global libmadlib::String = ""
 
 _pick(key, win, linux) = get(ENV, "MICROSCOPECONTROL_" * uppercase(key),

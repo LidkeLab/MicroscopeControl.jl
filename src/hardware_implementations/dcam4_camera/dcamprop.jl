@@ -154,6 +154,17 @@ function dcamprop_getattr(hdcam::Ptr{Cvoid}, idprop::DCAM_IDPROP)
     return dcamprop_getattr(hdcam, Int32(idprop))
 end
 
+"""
+    dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32) -> (err::DCAMERR, value::Float64)
+    dcamprop_getvalue(hdcam::Ptr{Cvoid}, idprop::DCAM_IDPROP) -> (err::DCAMERR, value::Float64)
+
+Read the current value of DCAM property `iProp` (a property ID such as `DCAM_IDPROP_INTERNALFRAMERATE`, given
+as an `Int32` or a `DCAM_IDPROP` member) from the open camera `hdcam` with `dcamprop_getvalue` of the DCAM-API.
+Every property value comes back as a `Float64`, in the property's own unit (seconds, 1/second, a mode number).
+The returned `err` is the `DCAMERR` of the call; on failure an error is logged (nothing is thrown) and
+`value` is whatever the library left, `0.0` if it wrote nothing, so test `err` with `is_failed` before using
+it. `hdcam` is the handle of an opened device, not a `DCAM4Camera`.
+"""
 function dcamprop_getvalue(hdcam::Ptr{Cvoid},iProp::Int32)
     pValue = Ref{Float64}(0.0)
     err = @dcamcall libdcam.dcamprop_getvalue(hdcam::Ptr{Cvoid}, iProp::Int32, pValue::Ref{Float64})::DCAMERR

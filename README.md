@@ -25,10 +25,38 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 
 ---
 
+## Example
+
+The simulated devices need no hardware. The hardware drivers have the same functions, but their constructors,
+region-of-interest offsets and blocking behavior differ, so read a driver's docstring before running this on it.
+`using MicroscopeControl` loads GLMakie, so run it with a display (under `xvfb-run` on a headless machine).
+
+```julia
+using MicroscopeControl
+
+camera = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 48), sequence_length = 5)
+stage = SimStage3d()
+initialize(camera)
+initialize(stage)
+
+sequence(camera)
+stack = getdata(camera)          # (height, width, frames) = (48, 64, 5), indexed [y, x, frame]
+
+move(stage, 10.0, 20.0, 5.0)
+
+attributes, _, children = export_state(camera)  # the camera's settings; SimCamera's state holds no image
+wait(save_h5("state.h5", (attributes, stack, children)))   # settings plus the stack; save_h5 returns a Task
+```
+
+The [documentation](https://LidkeLab.github.io/MicroscopeControl.jl/dev/) has a longer quick start, one API page
+per device class, and the image layout convention.
+
+---
+
 ## Common Features
 
 1. **Constructor Methods**  
-   Each hardware component has a constructor that takes relevant parameters (like serial numbers or device addresses). After constructing the device object, you can call `initialize` or other methods to start interacting with the hardware.
+   Each hardware component has a constructor that takes relevant parameters (like serial numbers or device addresses). Some drivers open the device in the constructor and others in `initialize`; each driver's docstring says which.
 
 2. **Export State**  
    The function `export_state` gives you a structured overview of the device’s current settings:  
@@ -44,27 +72,34 @@ MicroscopeControl.jl is organized to ensure scalability and easy integration of 
 ## Supported Hardware
 
 ### Cameras
-- Hamamatsu DCAM4 compatible cameras
-- Thorlabs Scientific Cameras (CSC series)
-- Simulated camera for testing
+- Hamamatsu cameras through the DCAM-API (`DCAM4Camera`)
+- Thorlabs scientific cameras, CS series (`ThorCamCSCCamera`; Windows)
+- Thorlabs DCx cameras through the uc480 SDK (`ThorcamDCXCamera`; Windows)
+- Simulated camera for testing (`SimCamera`)
 
 ### Stages
-- Mad City Labs nanopositioning stages
-- Physik Instrumente (PI) stages
-- PI N-472 linear stage
-- Simulated stage for testing
+- Mad City Labs Nano-Drive piezo stages (`MCLStage`)
+- Physik Instrumente stages on a C-867 controller (`PIStage`)
+- PI N-472 linear stage (`N472`)
+- SmarAct MCS2 positioners (`MCS2Stage`)
+- Simulated one-, two- and three-axis stages for testing (`SimStage1d`, `SimStage2d`, `SimStage3d`)
 
 ### Light Sources
-- Thorlabs TCube laser diode controller (TLD001), open loop (constant current) or closed loop on the monitor photodiode (see `src/hardware_implementations/tcube_laser/CALIBRATION.md`)
-- Simulated laser diode (`SimDiodeLaser`) for testing either mode
-- CrystaLaser 561nm
-- Vortran 488nm laser
-- Simulated light source for testing
+- Thorlabs TCube laser diode controller (TLD001), open loop (constant current) or closed loop on the monitor photodiode (`TCubeLaser`; see `src/hardware_implementations/tcube_laser/CALIBRATION.md`)
+- Simulated laser diode for testing either mode (`SimDiodeLaser`)
+- CrystaLaser 561 nm on a DAQ output (`CrystaLaser`)
+- Vortran 488 nm laser on DAQ outputs (`VortranLaser`)
+- Transmitted light on a DAQ output (`DaqTrLight`)
+- Simulated light source for testing (`SimLight`)
+
+### DAQ, Timing and Modulation
+- National Instruments DAQ cards through DAQmx (`NIdaq`), and a DAQ output as a light's modulator (`NIDAQModulator`)
+- Advanced Research Consulting Triggerscope 4 DAC and TTL controller (`Triggerscope4`)
+- Opal Kelly XEM FPGA boards (`XEM`, `XEM_dac`)
 
 ### Other Hardware
-- National Instruments DAQ cards
-- Opal Kelly XEM FPGA boards
-- DAQ-based transmission light control
+- Thorlabs LCC1620 liquid crystal attenuator, driven from a Triggerscope DAC channel (`LCC1620`)
+- Meadowlark spatial light modulator (`MLSLM`)
 
 ---
 
@@ -74,7 +109,7 @@ Since this package is under active development and not yet registered, install i
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.6")
 ```
 
 **You must also declare this package's unregistered dependency in your own
@@ -89,7 +124,7 @@ writes both entries for you:
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.6")
 ```
 
 If you write the TOML by hand, `[sources]` alone is **not** enough — Julia

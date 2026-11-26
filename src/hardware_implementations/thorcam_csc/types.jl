@@ -11,6 +11,39 @@ end
 @enum TriggerMode AUTO SOFTWARE_TRIGGER HARDWARE_TRIGGER
 
 
+"""
+    ThorCamCSCCamera(; exposure_time=40, camera_format=CameraFormat(1440, 1080, 1, 0, "CMOS"),
+                     roi=CameraROI(1, 1, 1440, 1080), sequence_length=10, poll_timeout=nothing, kwargs...)
+
+A Thorlabs scientific camera (CS-series) driven through the Thorlabs TSI camera SDK
+(`thorlabs_tsi_camera_sdk.dll`, so Windows only).
+
+**The keyword constructor opens the camera.** It initializes the SDK, has the SDK write the available camera ids
+into the `unique_id` buffer (5 bytes by default), and passes that buffer to the open call. A failed SDK step prints
+or logs an error and does not throw. A missing DLL still throws, and so does a negative exposure when
+`poll_timeout` is left to follow it (the default). `[limitation]` After a
+failed discovery, `camera_handle` keeps the keyword's value (`C_NULL` by default); after a failed open it holds
+whatever the SDK left in an uninitialized reference. So a non-null handle does not prove the camera opened. `[limitation]` There is no `initialize` method for this type, so
+`initialize(camera)` throws `"initialize not implemented"`. `shutdown` closes the camera and uninitializes the
+SDK for the whole process, and returns both SDK codes. `[limitation]` `abort` calls `shutdown`, so after an `abort` (including closing a
+[`start_live`](@ref) window) the object cannot be used again; construct a new one.
+
+# Keywords and fields
+- `exposure_time::Clonglong = 40`: microseconds. `capture`, `live` and `sequence` write it to the camera before
+  they start; `setexposuretime!(camera, t::Clonglong)` writes it at once. (`setexposuretime!(camera)` with no
+  value is not implemented for this type.)
+- `poll_timeout::Union{Nothing,Cint} = nothing`: frame poll timeout in milliseconds. `nothing` follows the
+  exposure (two exposures plus one second); a value, or `setpolltimeout!`, fixes it.
+- `camera_format::CameraFormat`: must state the sensor size the camera delivers. The driver copies
+  `x_pixels * y_pixels` pixels from the SDK buffer on every frame, so a larger value reads past the buffer and a
+  smaller one shears the image.
+- `roi::CameraROI`: 1-based offsets; the full sensor frame is cropped to it in Julia.
+- `sequence_length::Int = 10`: frames per `sequence`.
+- `operation_mode`, `number_of_frames_to_buffer`: written when `capture`, `live` and `sequence` set up and arm
+  the camera. `frames_per_trigger_zero_for_unlimited` is written by `capture`; `live` and `sequence` set it to 0
+  (unlimited).
+- `frame_rate`: stored only. `trigger_mode`: stored and exported.
+"""
 mutable struct ThorCamCSCCamera <: Camera
     camera_handle::Ptr{Cvoid}
     exposure_time::Clonglong
