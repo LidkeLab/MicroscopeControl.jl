@@ -286,7 +286,8 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   `initialize`, or the driver's own SDK call), the units of its fields where the code gives them, and its
   limitations.
 - README: pins `v0.2.6`, lists every supported device, and has a short example. `CLAUDE.md`: `setpower` on a
-  `DiodeLaser` is deprecated (it forwards to `setcurrent!` in `ConstantCurrent` mode), not a throw in both modes.
+  `DiodeLaser` is deprecated: in `ConstantCurrent` mode it forwards to `setcurrent!` after a deprecation warning
+  (and throws under `--depwarn=error`); it throws in `ConstantPhotocurrent` mode.
 
 ### Known issues
 

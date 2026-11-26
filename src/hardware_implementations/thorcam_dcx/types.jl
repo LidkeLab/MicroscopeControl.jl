@@ -12,7 +12,7 @@ every default, and changing `roi` means passing the arguments before it.
 
 The constructor does not touch the hardware. `initialize` opens the first camera the SDK finds, reads the sensor
 size and pixel size into `camera_format`, sets 8-bit monochrome mode, sets the pixel clock near the top of its
-range, and applies `frame_rate` (storing the rate the camera accepted). If no camera is found or the open fails it
+range, and applies `frame_rate` (frames per second; it stores the rate the camera accepted). If no camera is found or the open fails it
 logs an error and returns without throwing. `shutdown` closes the camera.
 
 # Fields a caller sets
@@ -25,9 +25,11 @@ Frames are `UInt8`, `(roi.height, roi.width)` indexed `[y, x]`.
 
 `[limitation]` `getdata` does not wait for a sequence: it copies every sequence buffer at once, without checking
 the frame count or the copy status, then calls `abort`, so a `getdata` right after `sequence` can return a stack of
-the right shape whose later frames were never exposed. `sequence` returns the `Task` that polls the frame count
-and stops the capture when it is reached, so `t = sequence(camera); wait(t); getdata(camera)` reads a finished
-sequence; nothing else signals the end (the task leaves `is_running` set and prints "Sequence finished"). `abort` stops the capture and frees the sequence buffers.
+the right shape whose later frames were never exposed. When the capture starts, `sequence` returns the `Task`
+that polls the frame count and then tries to stop the capture (when a buffer or the start fails, it logs an error
+and returns `nothing`). So check that `t = sequence(camera)` is a `Task`, then `wait(t)` before `getdata(camera)`;
+nothing else signals the end. The task does not check whether the stop succeeded, leaves `is_running` set, and
+prints "Sequence finished" either way. `abort` stops the capture and frees the sequence buffers.
 `live`, `sequence` and `abort` have no docstrings of their own.
 """
 mutable struct ThorcamDCXCamera <: Camera

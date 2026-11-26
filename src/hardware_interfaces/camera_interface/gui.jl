@@ -214,8 +214,8 @@ it: it does not collect the stack, and closing it calls `abort(camera)`, which o
 `ThorcamDCXCamera` releases the sequence buffers and on `ThorCamCSCCamera` shuts the camera down. `[limitation]` Do
 not read the stack with `getdata` around this window: on `ThorcamDCXCamera` `getdata` frees the same buffers the
 window's `abort` frees again, and on `ThorCamCSCCamera` the window and `getdata` take frames from the same queue. To
-keep a stack, call `sequence` and `getdata` without the window; on `ThorcamDCXCamera`, `sequence` returns the
-`Task` that polls the frame count, so `wait` it before `getdata`. `[limitation]` On `ThorcamDCXCamera`, closing the
+keep a stack, call `sequence` and `getdata` without the window; on `ThorcamDCXCamera`, a `sequence` that starts
+returns the `Task` that polls the frame count, so `wait` it before `getdata` (see that type's docstring). `[limitation]` On `ThorcamDCXCamera`, closing the
 window frees the buffers while the window's reader may still be copying from one. `SimCamera`'s `getdata` returns
 new random frames of the right shape at any time; it keeps nothing.
 """

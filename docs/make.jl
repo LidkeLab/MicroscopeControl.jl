@@ -62,6 +62,12 @@ function rendered!(acc, node)
     foreach(child -> rendered!(acc, child), node.children)
     return acc
 end
+# Two source pages that build to the same HTML file (`api/cameras.md` and `api/cameras/index.md`, say) would both
+# count below while the second write replaces the first, so require distinct outputs first.
+let outputs = [replace(page, r"(^|/)index\.md$" => "", r"\.md$" => "") for page in keys(doc.blueprint.pages)]
+    clashes = [o for o in unique(outputs) if count(==(o), outputs) > 1]
+    isempty(clashes) || error("source pages that build to the same HTML file: " * join(clashes, ", "))
+end
 let shown = Base.IdSet{Base.Docs.DocStr}()
     foreach(page -> rendered!(shown, page.mdast), values(doc.blueprint.pages))
     left = ["$mod: $binding $sig" for mod in submodules(MicroscopeControl)

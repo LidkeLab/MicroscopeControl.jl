@@ -20,8 +20,9 @@ removed, so the string handed over has no terminating NUL.
 
 Fields: `exposure_bit` (us per exposure step, default 2.56), `exposure_time` (us, the last rounded exposure
 `setexposure` was asked for, stored before its DAQ write, default 30000), `enable` (default `0.0`; not updated by
-[`enable`](@ref)), `volt_bit` (the four exposure code bits of the last `setexposure(fpga, exposure_time)` request, as a string; the
-form that takes the digits directly updates neither field), `task_trigger` and `task_enable` (NI tasks created by
+[`enable`](@ref)), `volt_bit` (the four exposure code bits of the last `setexposure(fpga, exposure_time)` request that could be encoded,
+as a string, even if its DAQ write then failed; a request outside the encodable range throws before changing it,
+and the form that takes the digits directly updates neither field), `task_trigger` and `task_enable` (NI tasks created by
 [`setupIO`](@ref)), `devicehandle`, `bitfile` and `daq`.
 """
 mutable struct XEM 
