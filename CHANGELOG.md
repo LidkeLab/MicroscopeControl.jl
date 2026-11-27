@@ -270,14 +270,19 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
   layout.
 - Claude Code skills (`install_skills()`): every statement is rechecked against this version and corrected where it
-  had gone stale since v0.2.0. Each `[guarantee]` and `[limitation]` names the version it was checked at, or `suite`
-  where `test/skills.jl` checks it. That file now runs the skills' marked examples on the simulated devices and asserts
-  the results the skills state. Among the corrections:
+  had gone stale since v0.2.0. Each `[guarantee]` and `[limitation]` names the version it was checked at, or
+  `suite: GROUP` for a group of `test/skill_examples.jl`, which runs the skills' marked examples on the simulated
+  devices and asserts the results the skills state; `test/skills.jl` runs it in its own Julia process and checks every
+  label. Among the corrections:
   - `mc-acquire`: `getdata` on a `DCAM4Camera` in live mode returns the newest frame and leaves the live view running
-    (since 0.2.6); it no longer ends the live view.
-  - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to
-    `v0.2.6`; the example system's `release!` keeps a device whose `shutdown` threw, so a retry can close it; its
-    settings type is built by keyword.
+    (since 0.2.6); it no longer ends the live view. A finished sequence is read with
+    `t = sequence(cam); t isa Task && wait(t); getdata(cam)` on every camera driver. A throw from a light's level
+    setter or `light_off` does not mean the light is off.
+  - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to the
+    tag in the skills' `Installed from` line (for a `-DEV` install, the main commit the instrument was tested
+    against). The example system moves a device whose `shutdown` threw to a `stuck` list, retries it at the next
+    shutdown, and refuses `initialize` until it has shut down; it treats the camera as unavailable when `abort`
+    leaves it running; its settings type is built by keyword.
 
 ### Removed
 
