@@ -33,9 +33,16 @@ fail with `DAQmx has no known versions`. Add `DAQmx` by URL **before**
 MicroscopeControl and Pkg writes both entries for you:
 
 ```julia
-Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git")
-Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.4")
+Pkg.add(url="https://github.com/LidkeLab/DAQmx.jl.git", rev="039003306bf34047678e9dc229b6dc035c880fe6")
+Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.6")
 ```
+
+Pin both. `DAQmx.jl` has no tags, so its pin is a commit: the one above is the
+head of its `main` (version 0.1.0, unchanged since 2026-01-30). MicroscopeControl's
+pin is a release tag: `v0.2.6` is the latest, or use the tag these skills were
+installed from (the `Installed from` line at the top of this file). Without a
+`rev`, `Pkg.add` follows the default branch, and the next `Pkg.update` moves
+the instrument to whatever was pushed since.
 
 Writing the TOML by hand needs **both** a `[deps]` and a `[sources]` entry —
 `[sources]` alone is rejected with `Sources for DAQmx not listed in deps or
@@ -46,7 +53,7 @@ extras section`:
 DAQmx = "bc903ccc-f951-4f60-9748-ff64248ad6aa"
 
 [sources]
-DAQmx = {url = "https://github.com/LidkeLab/DAQmx.jl.git"}
+DAQmx = {url = "https://github.com/LidkeLab/DAQmx.jl.git", rev = "039003306bf34047678e9dc229b6dc035c880fe6"}
 ```
 
 It surfaces on an environment that has not already resolved `DAQmx`, which is
@@ -424,8 +431,9 @@ MC.shutdown(l::DaqLikeLight) = (l.level_staged = false; light_off(l))
 MC.export_state(l::DaqLikeLight) = (Dict{String,Any}("power" => l.level_requested,
     "power_requested" => l.level_requested, "power_unit" => "V", "is_on" => l.properties.is_on), nothing, Dict())
 
-struct BenchState <: AbstractSystemState          # REQUESTED configuration, nothing measured. IMMUTABLE: a request is a
-    exposure_time::Float64                        # value; get_state hands it back and nobody can edit the record in place
+Base.@kwdef struct BenchState <: AbstractSystemState  # REQUESTED configuration, nothing measured; built by keyword
+                                                  # (lab decision 0035). IMMUTABLE: a request is a value; get_state
+    exposure_time::Float64                        # hands it back and nobody can edit the record in place
     z::Float64
     laser_power::Float64
 end
@@ -458,15 +466,18 @@ function MC.initialize(sys::Bench)                # MC. prefix: extend the gener
 end
 
 function release!(sys::Bench)                     # shut down everything owned, newest first; report what stayed open
+    still_open = AbstractInstrument[]
     failed = Pair{DataType,Exception}[]
     for dev in reverse(sys.owned)
         try
             shutdown(dev)
         catch e
+            pushfirst!(still_open, dev)           # still holds hardware: stays owned, so the next release! retries it
             push!(failed, typeof(dev) => e)       # keep going: one stuck device must not leave the rest open
         end
     end
     empty!(sys.owned)
+    append!(sys.owned, still_open)                # only the devices whose shutdown threw, in acquisition order
     isempty(failed) || error("shutdown left devices open: " * join(string.(first.(failed)), ", "))
     return nothing
 end
@@ -559,14 +570,14 @@ DAQ-like request/line distinction was rechecked with the 0.2.7 example:
 |---|---|
 | **Rollback, first device fails**, camera claimed at construction | threw `initialize not implemented for BrokenLight`; `cam.open == false` afterwards, `owned` empty. |
 | **Rollback, last device fails** (`BrokenCam` third) | stage back to `connectionstatus == false`, laser back to `is_on == false`, `owned` empty. |
-| **Requested versus measured** with `DaqLikeLight`: `set_state(sys, BenchState(0.02, 1.0, 3.5))` | `get_state(sys).laser_power == 3.5`, `sys.laser.level_requested == 3.5`, `sys.laser.line_voltage == 0.0` while off, `isnan(measured_power(sys))`; export attribute `laser_power_requested == 3.5`. |
+| **Requested versus measured** with `DaqLikeLight`: `set_state(sys, BenchState(exposure_time=0.02, z=1.0, laser_power=3.5))` | `get_state(sys).laser_power == 3.5`, `sys.laser.level_requested == 3.5`, `sys.laser.line_voltage == 0.0` while off, `isnan(measured_power(sys))`; export attribute `laser_power_requested == 3.5`. |
 | **Immutable requested state**: `get_state(sys).laser_power = 4.5` | refused: `setfield!: immutable struct of type BenchState cannot be changed`. |
 | **Sequential acquisitions**: `acquire!(sys, 5)` then `acquire!(sys, 3)` | `(32, 64, 5)` in 0.15 s, `in_flight == false` after; then `(32, 64, 3)`. |
 | **In-flight guards** (flag set by hand; the example never runs two tasks) | `set_state`, `acquire!` and `shutdown` each refused with a message naming the in-flight acquisition. |
 | **Failing acquisition** (`acquire!(sys, -1)` makes `getdata` throw) | rethrew `ArgumentError`; `abort` had run (`is_running == false`), `in_flight == false`, camera still available; the next acquisition returned `(32, 64, 2)`. |
 | **Failing acquisition whose `abort` also fails** (`ArmThenThrowCam`) | rethrew `SDK: arm failed after start`; the next `acquire!` refused `camera unavailable ...`; `shutdown(sys); initialize(sys)` still refused; **reconstruction** (new `Bench`, new camera, stage and laser reused) acquired `(32, 64, 3)`. |
 | **Export with a failed child** | `complete == false`, `missing_children == "laser"`; through `save_h5` and back: groups `camera, data, laser, stage`, attr `missing_children == "laser"`. |
-| **Observable shutdown failure** (a device whose `shutdown` throws in `owned`) | threw `shutdown left devices open: BrokenLight` after finishing the loop; the stage was already disconnected. |
+| **Observable shutdown failure** (a device whose `shutdown` throws in `owned`) | threw `shutdown left devices open: BrokenLight` after finishing the loop; the stage was already disconnected; `owned` then held only the `BrokenLight`, so the next `shutdown(sys)` retried it. |
 | **Evidence for the limitation** | `sequence(SimCamera)` returned a `Task`; raising `exposure_time` mid-run stretched that task from ~0.2 s remaining to 0.93 s. |
 
 Provenance rule this example enforces **[policy]**: a saved record must

@@ -80,10 +80,13 @@ Two consequences of the same mechanism on `DCAM4Camera` (traced):
 
 - `live` itself calls `abort` first. Calling `live` while a reader is running is the
   same hazard. Stop and join first.
-- `getdata` in `LIVE` mode waits for a cycle-end event, sets `is_running = false`,
-  copies the last frame and releases the buffer. It ends the live view. Grab frames
-  during live view with `getlastframe`; use `getdata` only where the driver's
-  contract says it is valid (next section).
+- **[guarantee, 0.2.6]** `getdata` in `LIVE` mode returns the newest frame at once
+  and leaves the live view running: no stop, no buffer release, `is_running`
+  unchanged. It returns `nothing` when no frame can be read (with `last_error` set),
+  and `nothing` with one warning when a newer capture has replaced the live view.
+  Before 0.2.6 it waited for a cycle end, stopped the capture and released the
+  buffer, ending the live view; an instrument pinned to an older tag must not call
+  it during live view. Grab frames during live view with `getlastframe` either way.
 
 ## The three modes
 
