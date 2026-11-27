@@ -373,3 +373,524 @@ MicroscopeControl.export_state(r::_ParametricRig{T}) where {T} = (Dict{String,An
         @test_throws Exception MicroscopeControl.install_skills(bad_target)
     end
 end
+
+# ---------------------------------------------------------------------------------------------------------------
+# The skills' executed examples. A julia fence preceded by `<!-- mc-test: NAME -->` is run here, with every fence of
+# the same NAME (in file order, files in path order) joined and evaluated in one fresh module, after a prelude the
+# group needs and before its checks. The checks assert the values the skill states ("executed", result tables), so
+# a change that makes one false fails the suite; a statement checked here is labeled `suite` in the skill.
+# ---------------------------------------------------------------------------------------------------------------
+
+# name => the code of every fence marked with it, in order
+function skill_example_blocks(root::AbstractString)
+    groups = Dict{String,Vector{String}}()
+    files = String[]
+    for (dir, _, names) in walkdir(root), n in names
+        endswith(n, ".md") && push!(files, joinpath(dir, n))
+    end
+    for file in sort(files)
+        lines = readlines(file)
+        i = 1
+        while i < length(lines)
+            m = match(r"^\s*<!--\s*mc-test:\s*(\S+)\s*-->\s*$", lines[i])
+            if m !== nothing
+                fence = match(r"^(\s*)```julia\s*$", lines[i+1])
+                fence === nothing && error("$file:$i: an mc-test marker must sit on the line before a ```julia fence")
+                indent = length(fence.captures[1])
+                j = i + 2
+                code = String[]
+                while !occursin(r"^\s*```\s*$", lines[j])
+                    push!(code, lines[j][min(indent, length(lines[j]) - length(lstrip(lines[j])))+1:end])
+                    j += 1
+                end
+                push!(get!(groups, String(m.captures[1]), String[]), join(code, "\n"))
+                i = j
+            end
+            i += 1
+        end
+    end
+    return groups
+end
+
+# Evaluates `prelude`, the group's fences and `checks`, in this order, in one fresh module. Every top-level result of
+# the fences is recorded in the module's `block_values` (the testing fences return a testset).
+function run_skill_example(name, fences; prelude = "", checks = "")
+    modname = Symbol("SkillExample_", replace(name, '-' => '_'))
+    m = Module(modname)
+    Core.eval(Main, :($modname = $m))     # bound in Main so `subtypes` finds the types a fence defines, as in a script
+    Core.eval(m, :(using MicroscopeControl, Test))
+    Core.eval(m, :(import GLMakie))
+    Core.eval(m, :(const MC = MicroscopeControl))
+    Core.eval(m, :(block_values = Any[]))
+    for code in (prelude, fences...)
+        isempty(code) && continue
+        for ex in Meta.parseall(code).args
+            ex isa LineNumberNode && continue
+            val = redirect_stdout(() -> Core.eval(m, ex), devnull)   # the Sim stages print a line per call
+            Core.eval(m, :(push!(block_values, $(QuoteNode(val)))))
+        end
+    end
+    isempty(checks) || for ex in Meta.parseall(checks).args
+        ex isa LineNumberNode && continue
+        Core.eval(m, ex)
+    end
+    return m
+end
+
+# group name => (prelude, checks). Prelude runs before the fences, checks after; both in the fences' module.
+const SKILL_EXAMPLE_GROUPS = Dict{String,NamedTuple{(:prelude, :checks),Tuple{String,String}}}()
+
+SKILL_EXAMPLE_GROUPS["bench"] = (prelude = "", checks = raw"""
+mkcam() = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
+shutdown_message(e) = sprint(showerror, e)
+@testset "bench: rollback" begin
+    cam = ClaimedAtConstruction()
+    sys = Bench(cam, SimStage3d(), BrokenLight(); claimed_at_construction = (cam,))
+    e = try MC.initialize(sys); nothing catch e e end
+    @test occursin("initialize not implemented for", shutdown_message(e)) && occursin("BrokenLight", shutdown_message(e))
+    @test cam.open == false
+    @test isempty(sys.owned)
+
+    stage = SimStage3d(); laser = SimLight()
+    sys = Bench(BrokenCam(), stage, laser)
+    e = try MC.initialize(sys); nothing catch e e end
+    @test shutdown_message(e) == "BrokenCam: no device"
+    @test stage.connectionstatus == false
+    @test laser.properties.is_on == false
+    @test isempty(sys.owned)
+end
+@testset "bench: requested versus measured, acquisitions, guards" begin
+    laser = DaqLikeLight()
+    sys = Bench(mkcam(), SimStage3d(), laser); MC.initialize(sys)
+    MC.set_state(sys, BenchState(exposure_time = 0.02, z = 1.0, laser_power = 3.5))
+    @test MC.get_state(sys).laser_power == 3.5
+    @test laser.level_requested == 3.5
+    @test laser.line_voltage == 0.0
+    @test isnan(measured_power(sys))
+    @test MC.export_state(sys)[1]["laser_power_requested"] == 3.5
+    e = try (MC.get_state(sys).laser_power = 4.5; nothing) catch e e end
+    @test shutdown_message(e) == "setfield!: immutable struct of type BenchState cannot be changed"
+
+    t = @elapsed first_stack = acquire!(sys, 5)
+    @test size(first_stack) == (32, 64, 5)
+    @test t >= 5 * 0.01
+    @test sys.in_flight == false
+    @test size(acquire!(sys, 3)) == (32, 64, 3)
+
+    sys.in_flight = true
+    for f in (() -> MC.set_state(sys, BenchState(exposure_time = 0.02, z = 1.0, laser_power = 3.5)),
+              () -> acquire!(sys, 1), () -> MC.shutdown(sys))
+        e = try f(); nothing catch e e end
+        @test e !== nothing && occursin("in flight", shutdown_message(e))
+    end
+    sys.in_flight = false
+
+    e = try acquire!(sys, -1) catch e e end
+    @test e isa ArgumentError
+    @test sys.cam.is_running == false
+    @test sys.in_flight == false && sys.cam_unavailable == false
+    @test size(acquire!(sys, 2)) == (32, 64, 2)
+
+    bad = Bench(ArmThenThrowCam(), SimStage3d(), laser)
+    e = try acquire!(bad, 3) catch e e end
+    @test shutdown_message(e) == "SDK: arm failed after start"
+    @test bad.cam_unavailable
+    e = try acquire!(bad, 3) catch e e end
+    @test startswith(shutdown_message(e), "camera unavailable")
+    MC.shutdown(bad)
+    e = try (MC.initialize(bad); acquire!(bad, 3)) catch e e end
+    @test startswith(shutdown_message(e), "camera unavailable")
+    rebuilt = Bench(mkcam(), sys.stage, laser); MC.initialize(rebuilt)
+    @test size(acquire!(rebuilt, 3)) == (32, 64, 3)
+end
+@testset "bench: export with a failed child, shutdown failure" begin
+    sys = Bench(mkcam(), SimStage3d(), BrokenLight())
+    attributes, data, children = MC.export_state(sys)
+    @test attributes["complete"] == false
+    @test attributes["missing_children"] == "laser"
+    file = joinpath(mktempdir(), "bench.h5")
+    wait(save_h5(file, (attributes, data, children)))
+    MC.HDF5.h5open(file, "r") do h
+        @test sort(collect(keys(h["Main"]))) == ["camera", "laser", "stage"]
+        @test MC.HDF5.attrs(h["Main"])["missing_children"] == "laser"
+    end
+
+    stage = SimStage3d()
+    sys = Bench(mkcam(), stage, SimLight()); MC.initialize(sys)
+    pushfirst!(sys.owned, BrokenLight())
+    e = try MC.shutdown(sys) catch e e end
+    @test startswith(shutdown_message(e), "shutdown left devices open: ") && endswith(shutdown_message(e), "BrokenLight")
+    @test stage.connectionstatus == false
+    @test length(sys.owned) == 1 && sys.owned[1] isa BrokenLight
+    e = try MC.shutdown(sys) catch e e end
+    @test startswith(shutdown_message(e), "shutdown left devices open: ")
+end
+@testset "bench: the camera task reads the exposure as it runs" begin
+    cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01, sequence_length = 20)
+    t0 = time()
+    task = sequence(cam)
+    @test task isa Task
+    cam.exposure_time = 0.05
+    wait(task)
+    @test time() - t0 > 0.5
+end
+@testset "bench: a DiodeLaser in the laser field" begin
+    laser = SimDiodeLaser()
+    sys = Bench(mkcam(), SimStage3d(), laser); MC.initialize(sys)
+    MC.set_state(sys, BenchState(exposure_time = 0.02, z = 1.0, laser_power = 0.5))
+    @test laser.drive_current == laser.min_current + 0.5 * (laser.max_current - laser.min_current)
+    @test isnan(measured_power(sys))
+    pm = SimDiodeLaser(mode = ConstantPhotocurrent(), wa_calibration = 224.2, tia_range = 1e-3, tec_stabilised = missing,
+        max_current = 150.0, properties = LightSourceProperties("mW", 0.0, false, 0.0, 70.0))
+    sys = Bench(mkcam(), SimStage3d(), pm); MC.initialize(sys)
+    MC.set_state(sys, BenchState(exposure_time = 0.02, z = 1.0, laser_power = 0.5))
+    light_on(pm)
+    @test isfinite(measured_power(sys)) && measured_power(sys) > 0
+end
+""")
+
+SKILL_EXAMPLE_GROUPS["testing"] = (prelude = "", checks = raw"""
+@testset "testing: the blocks' own testsets" begin
+    sets = [v for v in block_values if v isa Test.DefaultTestSet]
+    @test length(sets) == 4                      # the dispatch check and the three behavioral testsets
+    dispatch = sets[1]
+    @test dispatch.description == "devices satisfy the lifecycle contract"
+    counts = Test.get_test_counts(dispatch)
+    @test counts.passes == 24 && counts.fails == 0 && counts.errors == 0     # "All 24 assertions pass for these six types"
+    @test all(t -> Test.get_test_counts(t).fails + Test.get_test_counts(t).errors == 0, sets)
+end
+@testset "testing: the CSC camera has no initialize but exports its settings" begin
+    @test !has_specific(initialize, ThorCamCSCCamera)
+    @test has_specific(export_state, ThorCamCSCCamera)
+    @test has_specific(shutdown, ThorCamCSCCamera)
+end
+@testset "testing: SimCamera" begin
+    cam = SimCamera(exposure_time = 0.05, roi = CameraROI(1, 1, 64, 32))
+    @test (cam.exposure_time, cam.sequence_length, cam.capture_mode, cam.is_running) ==
+          (0.05, 10, MC.HardwareImplementations.SimulatedCamera.LIVE, false)
+    roi_tuple(c) = (c.roi.x_start, c.roi.y_start, c.roi.width, c.roi.height)
+    @test roi_tuple(cam) == (1, 1, 64, 32)
+    @test SimCamera().exposure_time == 0.1 && roi_tuple(SimCamera()) == (1, 1, 1024, 1024)
+    @test capture(cam) == MC.HardwareImplementations.SimulatedCamera.SINGLE_FRAME     # the enum, not a frame
+    @test @elapsed(getdata(cam)) < 0.04                                                # getdata does not sleep
+    @test @elapsed(getlastframe(cam)) >= 0.05                                          # getlastframe sleeps exposure_time
+    @test size(getlastframe(cam)) == (32, 64) && eltype(getlastframe(cam)) == UInt16
+    cam.exposure_time = 0.01; cam.sequence_length = 5
+    task = sequence(cam)
+    @test cam.is_running == true
+    @test size(getdata(cam)) == (32, 64, 5)                                            # at once, while it still runs
+    wait(task)
+    @test cam.is_running == false
+    for f in (setexposuretime!, setroi!, settriggermode!)
+        @test_throws ErrorException f(cam)
+    end
+end
+@testset "testing: Sim stages" begin
+    for (T, dims) in ((SimStage1d, 1), (SimStage2d, 2), (SimStage3d, 3))
+        stage = T()
+        @test stage.dimensions == dims && stage.range_x == (0.0, 100.0) && stage.connectionstatus == false
+        @test hasfield(T, :label) && !hasfield(T, :stagelabel)
+        err = try gui(stage); nothing catch e e end
+        @test err isa FieldError && err.field === :stagelabel                          # the unguarded stagelabel read
+    end
+    stage = SimStage3d()
+    redirect_stdout(devnull) do
+        move(stage, 1.0, 2.0, 3.0)
+        @test getposition(stage) == 3.0                                                # a scalar, the last assignment
+        @test (stage.real_x, stage.real_y, stage.real_z) == (1.0, 2.0, 3.0)
+        move(stage, 1e6, 0.0, 0.0)                                                     # no range enforcement
+        @test stage.targ_x == 1e6
+        home(stage)
+        @test stage.real_x == 0.0 && stage.targ_x == 1e6                               # home zeroes real_*, not targ_*
+        @test_throws MethodError move(stage, 1, 2, 3)
+        @test getrange(stage) == ((0.0, 100.0), (0.0, 100.0), (0.0, 100.0))
+    end
+    two = SimStage2d()
+    err = redirect_stdout(devnull) do
+        try move(two, 1.0, 2.0, 3.0); nothing catch e e end
+    end
+    @test err isa ErrorException && err.msg == "move not implemented for SimStage2d"   # the interface fallback, not a MethodError
+end
+@testset "testing: SimLight" begin
+    light = SimLight()
+    p = light.properties
+    @test (p.power_unit, p.power, p.is_on, p.min_power, p.max_power) == ("mW", 0.0, false, 0.0, 100.0)
+    initialize(light); @test light.properties.is_on == true
+    setpower(light, 500.0); @test light.properties.power == 500.0                       # no clamp
+    shutdown(light); @test light.properties.is_on == false
+    @test_throws MethodError light_on(light, 1.0)
+    @test SimLight().modulator === nothing
+end
+@testset "testing: the shared panels open" begin
+    for T in (SimCamera, SimLight, PIStage, MCLStage, MCS2Stage)
+        @test (gui(T()); true)
+        GLMakie.closeall()
+    end
+end
+@testset "testing: SimDiodeLaser" begin
+    SDL = MC.HardwareImplementations.SimulatedDiodeLaser
+    sim = SimDiodeLaser()
+    @test (sim.threshold_current, sim.max_current, sim.min_current, sim.efficiency) == (65.0, 160.0, 0.0, 1.2)
+    @test sim.properties.power_unit == "mA"
+    @test_throws ErrorException setcurrent!(sim, 100.0)                                 # before initialize
+    @test_throws ErrorException measured_current(sim)
+    initialize(sim)
+    setcurrent!(sim, 100.0); light_on(sim)
+    @test SDL.true_output_power(sim) ≈ 1.2 * (100.0 - 65.0)                              # P = efficiency * max(0, I - threshold)
+    @test measured_photocurrent(sim) ≈ sim.responsivity * (1 + sim.responsivity_drift) * SDL.true_output_power(sim) / 1000
+    empty!(sim.log); loop_status(sim)
+    @test sim.log == [(:read, :loop_status)]                                            # reads are logged too
+    GLMakie.closeall()
+    empty!(sim.log); gui(sim); GLMakie.closeall()
+    @test isempty(sim.log)                                                              # opening the panel issues nothing
+    shutdown(sim)
+    @test_throws ErrorException light_on(sim)                                           # after shutdown
+
+    power = SimDiodeLaser(mode = ConstantPhotocurrent(), wa_calibration = 224.2, tia_range = 1e-3, tec_stabilised = missing,
+        max_current = 150.0, properties = LightSourceProperties("mW", 0.0, false, 0.0, 70.0))
+    initialize(power); setoutputpower!(power, 10.0); light_on(power)
+    @test indicated_output_power(power) ≈ SDL.true_output_power(power)
+    @test power.pd.photocurrent_requested != 10.0 / 224.2 / 1000                         # the TLD001's round-down encoding
+    power.responsivity_drift = 0.2
+    @test SDL.true_output_power(power) < 0.9 * indicated_output_power(power)             # the true power moves, the indication does not
+    power.responsivity_drift = 0.0; power.pd_blocked = true
+    @test measured_current(power) == power.pd.max_current_clamp && loop_status(power).saturated
+    GLMakie.closeall()
+end
+@testset "testing: Camera is the only name MicroscopeControl and GLMakie both export" begin
+    @test intersect(Set(names(MC)), Set(names(GLMakie))) == Set([:Camera])
+    both = Module(:CameraAmbiguity)
+    Core.eval(both, :(using MicroscopeControl))
+    Core.eval(both, :(using GLMakie))
+    @test_throws UndefVarError Core.eval(both, :(struct Rig; cam::Camera; end))       # `Camera` is ambiguous
+    narrow = Module(:CameraNarrow)
+    Core.eval(narrow, :(using MicroscopeControl))
+    Core.eval(narrow, :(using GLMakie: Figure, Axis))
+    Core.eval(narrow, :(struct Rig; cam::Camera; end))
+    @test fieldtype(narrow.Rig, :cam) === MC.Camera                                    # the narrow import fixes it
+end
+@testset "testing: a stub that logs and returns, and the cameras' panel fields" begin
+    @test_logs (:error, r"STOP MOTION NOT IMPLEMENTED") @test stopmotion(MCLStage()) === nothing
+    for T in (DCAM4Camera, SimCamera, ThorCamCSCCamera, ThorcamDCXCamera)
+        for f in (:unique_id, :exposure_time, :roi, :capture_mode, :trigger_mode, :sequence_length, :is_running)
+            @test hasfield(T, f)
+        end
+        @test fieldtype(T, :capture_mode) <: Enum && fieldtype(T, :trigger_mode) <: Enum
+    end
+    @test fieldtype(ThorCamCSCCamera, :unique_id) == Vector{UInt8}                  # the panel's `"Unique ID: " * id` cannot take it
+    for T in (SimStage3d, PIStage, MCLStage, MCS2Stage)
+        for f in (:dimensions, :connectionstatus, :stagelabel, :targ_x, :real_x, :range_x)
+            T === SimStage3d && f === :stagelabel && continue
+            @test hasfield(T, f)
+        end
+    end
+    @test !hasfield(N472, :real_x) && hasfield(N472, :pos)
+    @test which(gui, Tuple{N472}).sig.parameters[2] === N472                        # N472 ships its own panel
+    @test !has_specific(getrange, N472)                                              # only the interface fallback
+end
+""")
+
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (prelude = """
+cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
+latest = Ref{Any}(nothing)
+fps = 100
+""", checks = raw"""
+@test latest[] !== nothing && size(latest[]) == (32, 64)       # the reader read frames until stopped
+@test cam.is_running == false
+""")
+SKILL_EXAMPLE_GROUPS["acquire-snap"] = (prelude = "", checks = raw"""
+@test size(snap(SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01))) == (32, 64)
+@test snap(SimCamera(roi = CameraROI(1, 1, 64, 32))) isa Matrix{UInt16}
+@test which(snap, Tuple{SimCamera}).sig.parameters[2] === SimCamera
+@test which(snap, Tuple{DCAM4Camera}).sig.parameters[2] === Camera              # the hardware drivers take the generic method
+""")
+SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (prelude = "cam = SimCamera()", checks = raw"""
+@test cam.exposure_time == 0.02
+@test (cam.roi.x_start, cam.roi.y_start, cam.roi.width, cam.roi.height) == (1, 1, 512, 256)
+@test fieldtype(ThorCamCSCCamera, :exposure_time) == Clonglong                  # an integer field (microseconds)
+@test_throws InexactError convert(Clonglong, 0.02)
+@test fieldtype(DCAM4Camera, :exposure_time) == Float64 && fieldtype(ThorcamDCXCamera, :exposure_time) == Float64
+@test ThorcamDCXCamera().exposure_time == 0.01                                  # the constructor is pure
+""")
+SKILL_EXAMPLE_GROUPS["acquire-sequence"] = (prelude = "cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)", checks = raw"""
+@test size(stack) == (32, 64, 5) && eltype(stack) == UInt16
+@test cam.is_running == false
+""")
+SKILL_EXAMPLE_GROUPS["acquire-zstack"] = (prelude = "", checks = raw"""
+@test size(stack) == (32, 64, 5)
+@test stage.real_z == 8.0
+@test zs == 0.0:2.0:8.0
+""")
+SKILL_EXAMPLE_GROUPS["acquire-units"] = (prelude = "stage = SimStage3d()", checks = raw"""
+@test PIStage().units == "Milimeters" && MCLStage().units == "Microns" && N472().units == "mm"
+@test !hasfield(MCS2Stage, :units) && !hasfield(SimStage3d, :units)
+@test_throws FieldError MCS2Stage().units
+@test_throws FieldError SimStage3d().units
+@test_throws MethodError move(SimStage3d(), 1, 2, 3)
+""")
+SKILL_EXAMPLE_GROUPS["apimap"] = (prelude = "", checks = raw"""
+@test hasmethod(light_on, Tuple{TCubeLaser,Float64}) == false
+@test which(setpower, Tuple{TCubeLaser{ConstantCurrent},Float64}).sig == Tuple{typeof(setpower), DiodeLaser, Float64}
+@test hasmethod(setcurrent!, Tuple{TCubeLaser{ConstantPhotocurrent},Float64})
+@test which(setcurrent!, Tuple{TCubeLaser{ConstantPhotocurrent},Float64}).sig.parameters[2] === DiodeLaser     # the stub, not a driver method
+@test which(setcurrent!, Tuple{TCubeLaser{ConstantCurrent},Float64}).sig == Tuple{typeof(setcurrent!), TCubeLaser{ConstantCurrent}, Float64}
+@test which(export_state, Tuple{TCubeLaser}).sig == Tuple{typeof(export_state), TCubeLaser}
+@test hasmethod(export_state, Tuple{TCubeLaser,Any})                           # the deprecated forwarder is still there
+@test which(getdata, Tuple{SimCamera}).sig == Tuple{typeof(getdata), SimCamera}
+@test which(gui, Tuple{SimCamera}).sig == Tuple{typeof(gui), Camera}
+@test has_specific(initialize, SimCamera)
+@test !has_specific(initialize, ThorCamCSCCamera)
+@test has_specific(setpower, SimLight, Float64)
+@test !has_specific(setpower, TCubeLaser, Float64)
+@test has_specific(light_on, TCubeLaser)
+@test has_specific(setcurrent!, TCubeLaser{ConstantCurrent}, Float64)
+@test !has_specific(setcurrent!, TCubeLaser, Float64)
+""")
+SKILL_EXAMPLE_GROUPS["extend-shim"] = (prelude = "", checks = raw"""
+# the guard did not install the shim: dispatch lands on the driver's own method, not the abstract stub
+@test which(MC.export_state, Tuple{MC.TCubeLaser}).sig.parameters[2] === MC.TCubeLaser
+""")
+SKILL_EXAMPLE_GROUPS["extend-shadow"] = (prelude = "", checks = raw"""
+@test ShadowDriver.gui !== MicroscopeControl.gui
+@test which(MicroscopeControl.gui, Tuple{ShadowDriver.ShadowLED}).sig.parameters[2] === LightSource
+@test_throws r"^setpower not implemented for .*ShadowLED$" MicroscopeControl.setpower(ShadowDriver.ShadowLED(), 1.0)
+@test hasmethod(MicroscopeControl.setpower, Tuple{ShadowDriver.ShadowLED,Float64})
+@test ShadowDriver.setpower !== MicroscopeControl.setpower
+""")
+SKILL_EXAMPLE_GROUPS["scaffold"] = (prelude = "", checks = raw"""
+sets = [v for v in block_values if v isa Test.DefaultTestSet]
+@test length(sets) == 1 && sets[1].description == "SerialLED contract"
+counts = Test.get_test_counts(sets[1])
+@test counts.passes == 23 && counts.fails == 0 && counts.errors == 0            # "the 23-assertion contract testset"
+using .RigDrivers
+led = SerialLED()
+@test led.port.isopen == false                                                   # the constructor is pure
+initialize(led); setpower(led, 12.5); light_on(led)
+@test led.port.log == ["PWR 0", "OFF", "PWR 12", "ON"] && led.properties.power == 12.5
+@test_throws ArgumentError setpower(led, 500.0)
+shutdown(led)
+@test !led.port.isopen
+@test_throws "FakePort: write on closed port" setpower(led, 1.0)
+@test_throws "FakePort: device not present" initialize(SerialLED(port = FakePort(fail_open = true)))
+@test (GLMakie.closeall(); gui(led); GLMakie.closeall(); true)                   # opening the panel no longer commands the light
+file = joinpath(mktempdir(), "led.h5")
+a, d, c = export_state(led)
+save_attributes_and_data(file, "Main", a, d, c)
+MC.HDF5.h5open(file, "r") do h
+    @test MC.HDF5.attrs(h["Main"])["is_on"] == 0.0                              # Bool is stored as Float64
+    @test MC.HDF5.attrs(h["Main"])["power_requested"] == 12.5
+end
+""")
+SKILL_EXAMPLE_GROUPS["shutter"] = (prelude = "", checks = raw"""
+using .ShutterInterface, .SimulatedShutter
+struct NoMethodsShutter <: Shutter end
+has_specific(f, T, args...) = hasmethod(f, Tuple{T,args...}) && which(f, Tuple{T,args...}).sig.parameters[2] === T
+@test_throws r"^open_shutter! not implemented for .*NoMethodsShutter$" open_shutter!(NoMethodsShutter())
+@test_throws "initialize not implemented" initialize(NoMethodsShutter())
+@test_throws "gui not implemented" gui(NoMethodsShutter())
+sh = SimShutter()
+initialize(sh); open_shutter!(sh)
+@test is_open(sh) === true
+@test export_state(sh)[1]["is_open"] == true
+for f in (initialize, shutdown, export_state, open_shutter!, close_shutter!, is_open)
+    @test has_specific(f, SimShutter)
+end
+@test SimulatedShutter.open_shutter! === ShutterInterface.open_shutter!
+@test SimulatedShutter.export_state === MicroscopeControl.export_state
+using InteractiveUtils
+@test Set(subtypes(Shutter)) == Set([NoMethodsShutter, SimShutter])
+""")
+
+# Statements in the skills about the generated API map, the SLM stubs and the shared panel that no example block runs.
+@testset "Skill statements: the generated map and the stubs" begin
+    mktempdir() do tmp
+        MicroscopeControl.install_skills(tmp; quiet=true)
+        map_text = read(joinpath(tmp, ".claude", "skills", "mc-api-map", "references", "api-map.md"), String)
+        section(name) = match(Regex("### $(name)\\n(.*?)\\n(?:### |## |\\z)", "s"), map_text).captures[1]
+        @test occursin("`gui` is also exported as attenuator_gui, laser_488_gui, laser_561_gui, nidaq_gui, red_laser_gui and tr_light_gui", map_text)
+        for heading in ("## Stage", "## Camera", "## LightSource", "## DAQ", "## Attenuator", "## SLM", "## TRIG")
+            @test occursin(heading * "\n", map_text)
+        end
+        @test !occursin("XEM", map_text)                                   # outside the seven inventoried interfaces
+        csc = section("ThorCamCSCCamera")
+        fallback = csc[first(findfirst("**Interface fallback", csc)):end]
+        @test occursin("- `initialize(AbstractInstrument)`", fallback)
+        @test occursin("- `setroi!(Camera)`", fallback) && occursin("- `settriggermode!(Camera)`", fallback)
+        @test !occursin("export_state", fallback)
+        @test occursin("- `export_state(ThorCamCSCCamera)`", csc)
+        sim = section("SimCamera")
+        @test occursin("- `setexposuretime!(Camera)`", sim) && occursin("- `gui(Camera)`", sim) && occursin("- `start_live(Camera)`", sim)
+        tcube = section("TCubeLaser")
+        @test occursin("- `setcurrent!(TCubeLaser{ConstantCurrent}, Float64)`", tcube)
+        @test occursin("- `setoutputpower!(TCubeLaser{ConstantPhotocurrent}, Float64)`", tcube)
+        @test occursin("- `light_on(TCubeLaser)`", tcube)
+        @test occursin("- `export_state(TCubeLaser, Any)`", tcube)         # the deprecated forwarder is listed too
+        @test !occursin("setpower(", tcube) && !occursin("setlevel!(", tcube)   # the 2-arg blind spot
+        @test occursin("- `displayimage(SLM)`", section("MLSLM"))
+        @test occursin("- `move(MCS2Stage, Float64, Float64, Float64)`", section("MCS2Stage"))
+    end
+    slm = MLSLM()
+    @test displayimage(slm) === nothing                                    # the empty body
+    err = try displayimage(slm, zeros(2, 2)); nothing catch e e end
+    @test err isa ErrorException && occursin("setfield! fields of Types should not be changed", err.msg)
+    @test !isdefined(MicroscopeControl, :move!) && isdefined(MicroscopeControl.HardwareImplementations.MCS2Stage_mod, :move!)
+    @test hasmethod(initialize, Tuple{XEM}) && !hasmethod(export_state, Tuple{XEM}) && !hasmethod(gui, Tuple{XEM})
+    @test !(MLSLM <: AbstractInstrument) && !(Triggerscope4 <: AbstractInstrument)
+    @test !hasmethod(export_state, Tuple{Triggerscope4})
+    # `save_h5` facts the caveats file states
+    mktempdir() do dir
+        @test_throws MethodError redirect_stderr(devnull) do
+            save_attributes_and_data(joinpath(dir, "tuple.h5"), "Main", Dict{String,Any}("range" => (0.0, 100.0)), nothing, Dict{String,Any}())
+        end                                                                 # a Tuple attribute fails in HDF5
+        file = joinpath(dir, "stack.h5")
+        save_attributes_and_data(file, "Main", Dict{String,Any}("is_on" => true), rand(3, 2, 4), Dict{String,Any}())
+        MicroscopeControl.HDF5.h5open(file, "r") do h
+            @test MicroscopeControl.HDF5.attrs(h["Main"])["is_on"] === 1.0     # a Bool reads back as a Float64
+            a = MicroscopeControl.HDF5.attrs(h["Main/data"])
+            @test a["dimension_order"] == "y,x,frame"
+            @test a["dimension_order_convention"] == "column-major (Julia/MATLAB); C-order tools list it reversed"
+            @test a["dimension_labels"] == ["height", "width", "frames"] && a["memory_layout"] == "column_major_julia"
+            @test size(h["Main/data"]) == (3, 2, 4)
+        end
+    end
+    # The constructor builds a LibSerialPort object for the port name, and libserialport refuses a name that is not a
+    # port on this machine: the default "COM3" is not one on Linux.
+    Sys.islinux() && @test_throws ErrorException Triggerscope4()
+end
+
+# Every [guarantee] and [limitation] in the skills names the version it was checked at, or says the suite checks it
+# (the statements of the second kind are asserted by the examples below and cannot go stale). A label may not name a
+# version later than this package's, and none may say 0.2.0 except to describe history ("historical").
+@testset "Skill labels name a version or the suite" begin
+    root = joinpath(pkgdir(MicroscopeControl), "skills")
+    files = [joinpath(dir, n) for (dir, _, names) in walkdir(root) for n in names if endswith(n, ".md")]
+    @test length(files) >= 10
+    labels = 0
+    for file in files
+        for m in eachmatch(r"\[(?:guarantee|limitation)([^\]\n]*)\]", read(file, String))
+            labels += 1
+            body = m.captures[1]
+            versions = [VersionNumber(v) for v in (x.match for x in eachmatch(r"\d+\.\d+\.\d+(?:-DEV)?", body))]
+            named = body == ", V" || occursin("suite", body) || !isempty(versions)
+            named || @error "label names no version" file label = m.match
+            @test named
+            @test all(v -> v <= pkgversion(MicroscopeControl), versions)
+            @test !occursin("0.2.0", body) || occursin("historical", body)
+        end
+    end
+    @test labels > 150
+end
+
+@testset "Skill examples" begin
+    groups = skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))
+    @testset "every marked group has a harness entry" begin
+        @test sort(collect(keys(groups))) == sort(collect(keys(SKILL_EXAMPLE_GROUPS)))
+    end
+    for name in sort(collect(keys(SKILL_EXAMPLE_GROUPS)))
+        haskey(groups, name) || continue
+        spec = SKILL_EXAMPLE_GROUPS[name]
+        @testset "$name" begin
+            run_skill_example(name, groups[name]; prelude = spec.prelude, checks = spec.checks)
+        end
+    end
+end

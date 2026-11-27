@@ -15,8 +15,10 @@ implementation, and which land on an interface fallback. It is not hand-written.
 installed in the downstream environment, so it matches the pinned tag, not `main`
 and not this skill's prose; on method *existence* the map wins over any prose.
 Read it before calling anything on a device you have not used in this session.
-Labels as in `mc-system-design`: **[guarantee]** verified at v0.2.0,
-**[limitation]** current shortfall, **[policy]** recommended.
+Labels as in `mc-system-design`: **[guarantee, V]** checked at version `V` (or by
+the suite), **[limitation, V]** a shortfall as of `V`, **[policy]** recommended.
+The statements about what the generated map contains are asserted by `test/skills.jl`
+against a map it generates, so they follow the package (**suite**).
 
 ## What the map can and cannot tell you
 
@@ -25,18 +27,19 @@ Labels as in `mc-system-design`: **[guarantee]** verified at v0.2.0,
 | that a method for this exact type exists (device-specific), so the call will not hit a stub | that the method **does** anything: `stopmotion(::MCLStage)` is device-specific in the map, and its whole body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed: logs the error, returns `nothing`) |
 | that dispatch lands on a shared interface implementation (the panels) | that the shared implementation works for this device: `gui(::Stage)` reads `stage.stagelabel`, which the Sim stages lack, so `gui(SimStage3d())` throws `FieldError` although the map files it as inherited |
 | that a name resolves only to an interface fallback, so the call will throw or return silently | what the method returns, in what units, with what side effects: `capture` returns an enum on `SimCamera` and a frame on `DCAM4Camera`, both device-specific |
-| the signatures that exist for a name on this type | which **fields** the device has; the map has no field information at all. `references/gui-fields.md` beside this file catalogues the fields the shared panels read |
+| the signatures that exist for a name on this type | which **fields** the device has; the map has no field information at all. `references/gui-fields.md` beside this file catalogs the fields the shared panels read |
 
-Behaviour comes from the skill text (`mc-acquire`, `mc-system-design`'s
+Behavior comes from the skill text (`mc-acquire`, `mc-system-design`'s
 `references/driver-caveats.md`, `mc-extend`) or from the source, never from the
 map. The map answers "will this dispatch to code written for this type?"; it
 does not answer "will this work?".
 
 ## What bites first
 
-**[guarantee]** Every generic in the package resolves for every device of its interface. A stage
-always has a `move` method, a camera always has a `getdata`, every instrument has
-`initialize`, `shutdown`, `export_state` and `gui`. **Resolving is not
+**[guarantee, 0.2.7-DEV]** Every generic in the package resolves for every device of its interface. A stage
+always has a `move` method, a camera always has a `getdata`, every device under `AbstractInstrument` has
+`initialize`, `shutdown`, `export_state` and `gui`. (`MLSLM` and `Triggerscope4`, which sit outside it, do not:
+see "What the map does and does not show about lifecycle methods".) **Resolving is not
 implementing**, and implementing is not working (the `MCLStage` row above). The
 interface files define fallback stubs that `error("... not implemented for
 <Type>")`, so `hasmethod` says true and the call raises at runtime. The map exists
@@ -48,11 +51,11 @@ Each device section (`### SimCamera`, `### DCAM4Camera`, ...) under its interfac
 heading (`## Camera`, `## Stage`, `## LightSource`, `## DAQ`, `## Attenuator`,
 `## SLM`, `## TRIG`) lists exported generics in up to three groups:
 
-| Group | Meaning | Example (SimCamera, v0.2.0) |
+| Group | Meaning | Example (SimCamera, 0.2.7-DEV) |
 |---|---|---|
 | **Device-specific** | A method whose first argument is this concrete type. Real driver code. Each signature is listed, so `sequence(DCAM4Camera, Real)` and `sequence(DCAM4Camera)` both appear. | `getdata(SimCamera)`, `initialize(SimCamera)` |
 | **Inherited (shared implementation)** | Dispatch lands on a method written against the interface type that does real work for every device. Today that is the interface `gui` and the camera GUI helpers. | `gui(Camera)`, `start_live(Camera)` |
-| **Interface fallback (not a device implementation)** | **[guarantee]** Dispatch lands on the package's own interface-level fallback, not on code written for this device. The map's own note says it: most such fallbacks raise an error naming the type, a few return silently. The label promises "not this device's code", not "throws". | `setexposuretime!(Camera)`, `setroi!(Camera)` |
+| **Interface fallback (not a device implementation)** | **[guarantee, 0.2.7-DEV]** Dispatch lands on the package's own interface-level fallback, not on code written for this device. The map's own note says it: most such fallbacks raise an error naming the type, a few return silently. The label promises "not this device's code", not "throws". | `setexposuretime!(Camera)`, `setroi!(Camera)` |
 
 The third group is the reason the map exists: `setroi!(cam)` on a `SimCamera`
 compiles, dispatches and reaches the fallback (which in this case throws). On a
@@ -61,9 +64,9 @@ Same call, different group, different outcome. Which fallbacks throw and which
 return silently is a property of the fallback's source file, so when it matters,
 check with `which` (below) and read the method it names.
 
-This section was written against the map generated by `install_skills(mktempdir())`
-on this branch (v0.2.0, generator at commit 28eb791); the quoted headings, entries and
-the note under the third heading are copied from that file. If your installed map
+The quoted headings, entries and the note under the third heading are copied from the map
+that `install_skills(mktempdir())` generates at 0.2.7-DEV, and `test/skills.jl` checks that
+the headings and entries named here are in a map it generates. If your installed map
 prints these differently, the map is right and this prose is stale.
 
 ## What the map does and does not show about lifecycle methods
@@ -72,17 +75,16 @@ The lifecycle generics `initialize`, `shutdown` and `gui` have their fallbacks o
 `AbstractInstrument`; `export_state` additionally has a `Camera`-level stub. The map
 lists whichever fallback dispatch actually reaches, under the interface-fallback
 heading, **named by the declaring type**. Read from the file generated by
-`install_skills(mktempdir())` at commit 28eb791 of this branch, `ThorCamCSCCamera`'s
+`install_skills(mktempdir())` at 0.2.7-DEV, `ThorCamCSCCamera`'s
 fallback group is:
 
 ```
-- `export_state(Camera)`
 - `initialize(AbstractInstrument)`
 - `setroi!(Camera)`
 - `settriggermode!(Camera)`
 ```
 
-**[guarantee]** As of 0.2.7, `export_state(::ThorCamCSCCamera)` is concrete and no longer appears in this fallback group.
+**[guarantee, suite]** From 0.2.7, `export_state(::ThorCamCSCCamera)` is concrete: it is device-specific in the map and the fallback group has no `export_state(Camera)` entry. (On 0.2.6 and older the group had that entry as well.)
 
 So a name under the fallback heading means the device does not implement it, and the
 type in parentheses tells you which stub you will hit (for these two, both throw).
@@ -90,7 +92,7 @@ type in parentheses tells you which stub you will hit (for these two, both throw
 `setroi!(Camera)`, `settriggermode!(Camera)`; its lifecycle methods are all
 device-specific.
 
-**[limitation]** The remaining blind spot is **arity**. A device is filed as device-specific for a
+**[limitation, 0.2.7-DEV]** The remaining blind spot is **arity**. A device is filed as device-specific for a
 name as soon as *any* method of that name takes the concrete type, and the other
 arities are then not examined, so an entry names a signature the generator found and
 not necessarily the one you are about to call. The case that exposed this was
@@ -99,7 +101,7 @@ sth)`, the map listed that and nothing else, and the 1-arg `export_state(laser)`
 lifecycle loop calls fell through to the throwing `AbstractInstrument` stub.
 **[fixed in v0.2.3]** — `export_state(::TCubeLaser)` exists and
 `which(export_state, Tuple{TCubeLaser})` lands on it. v0.2.3 kept the 2-arg method
-as a deprecated forwarder; **[guarantee]** 0.2.5 keeps it (deprecated, removed
+as a deprecated forwarder; **[guarantee, 0.2.7-DEV]** 0.2.5 keeps it (deprecated, removed
 at the next breaking release), so `hasmethod(export_state, Tuple{TCubeLaser,Any})`
 is still true and an installed map lists both signatures. The blind spot is a property of the generator
 rather than of that driver, and an installed map generated against an older pinned
@@ -110,28 +112,28 @@ abstract intermediate (`setpower(::DiodeLaser, ::Float64)`, the deprecated forwa
 `TCubeLaser` or `SimDiodeLaser` section at all. When the listed signature is not the
 one you are calling, check the exact tuple with `hasmethod`/`which`.
 
-**[guarantee]** Parametric devices are listed once, under the bare name
+**[guarantee, 0.2.7-DEV]** Parametric devices are listed once, under the bare name
 (`### TCubeLaser`), and a method written against one instantiation is printed with
 it: `setcurrent!(TCubeLaser{ConstantCurrent}, Float64)`,
 `setoutputpower!(TCubeLaser{ConstantPhotocurrent}, Float64)`. A method written
 against the bare type (`light_on(TCubeLaser)`) serves both modes. The generator
 walks the type tree to its non-abstract leaves, so drivers beneath the abstract
 intermediate `DiodeLaser` are listed under `## LightSource`.
-**[limitation]** `InteractiveUtils.subtypes` is one level deep: downstream code that
+**[limitation, 0.2.7-DEV]** `InteractiveUtils.subtypes` is one level deep: downstream code that
 enumerates lights with `subtypes(LightSource)` gets `DiodeLaser` in place of
 `TCubeLaser` and `SimDiodeLaser`, silently. Walk to the leaves
 (`isabstracttype(S) ? recurse : keep`), as the map generator and `test/contract.jl` do.
 
-**[limitation]** `MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy (`SLM`
+**[limitation, 0.2.7-DEV]** `MLSLM` and `Triggerscope4` sit outside the `AbstractInstrument` hierarchy (`SLM`
 and `TRIG` are `abstract type ... end` with no supertype). A lifecycle name missing
 from their sections is a plain `MethodError`, not a fallback: `MLSLM` has no
-`initialize`, `shutdown` or `gui`; **[guarantee]** its `export_state` returns cached configuration attributes only. **[limitation]** `Triggerscope4` has `initialize`
+`initialize`, `shutdown` or `gui`; **[guarantee, 0.2.7-DEV]** its `export_state` returns cached configuration attributes only. **[limitation, 0.2.7-DEV]** `Triggerscope4` has `initialize`
 and `shutdown` but no `export_state`.
 
 One entry where the fallback neither throws nor implements anything, both
-signatures executed on `MLSLM()`:
+signatures run on `MLSLM()` (**[guarantee, 0.2.7-DEV]**, executed):
 
-| Call | Behaviour | Where the map puts it |
+| Call | Behavior | Where the map puts it |
 |---|---|---|
 | `displayimage(slm)` | empty body, returns `nothing`; no error, no effect | `displayimage(SLM)` under the interface-fallback heading; this is one of the "return silently" cases the heading's note warns about |
 | `displayimage(slm, phase::Matrix{Float64})` | throws `setfield! fields of Types should not be changed`: the body assigns to the abstract type `SLM.phase` instead of the instance | not listed separately; a bug in the interface file, not a contract stub |
@@ -143,6 +145,7 @@ Do not write code that expects a `not implemented` error from either form.
 The map is a snapshot. To check a specific call against the loaded package, ask
 where dispatch lands and whether that is the concrete type:
 
+<!-- mc-test: apimap -->
 ```julia
 using MicroscopeControl
 
@@ -178,6 +181,7 @@ which(gui, Tuple{SimCamera}).sig
 A one-line predicate for "implemented on this type", the same one `test/contract.jl`
 in the upstream repo uses:
 
+<!-- mc-test: apimap -->
 ```julia
 has_specific(f, T, args...) =
     hasmethod(f, Tuple{T, args...}) &&
@@ -211,13 +215,13 @@ per device.
 
 ## Arity traps the map makes visible
 
-- **[guarantee]** `light_on` takes the light only. Up to v0.2.4 the interface
+- **[guarantee, 0.2.7-DEV]** `light_on` takes the light only. Up to v0.2.4 the interface
   declared `light_on(::LightSource, ipower::Float64)`, which no driver implemented
   and which threw for every light; 0.2.5 replaced it with a 1-arg stub, so the 2-arg
   call is now a plain `MethodError`. Off `setpower` stages the next enable on
   `CrystaLaser` and `DaqTrLight`; without a stage, `light_on` uses the clamped
   1.0 V default. Live level changes do not stage the next enable.
-- **[guarantee]** `setpower` on a `DiodeLaser` (`TCubeLaser`, `SimDiodeLaser`)
+- **[guarantee, 0.2.7-DEV]** `setpower` on a `DiodeLaser` (`TCubeLaser`, `SimDiodeLaser`)
   resolves to the `DiodeLaser` method: on a `ConstantCurrent` laser it forwards to
   `setcurrent!` (mA) with a deprecation warning; on a `ConstantPhotocurrent` laser it
   throws and names `setoutputpower!` (mW at the laser output) and `setlevel!`
@@ -226,13 +230,13 @@ per device.
 - `move` takes `Float64` positions. `move(stage, 1, 2, 3)` with integers is a
   `MethodError`, not a stub error.
 - The SmarAct `MCS2Stage` has `move(MCS2Stage, Float64, Float64[, Float64])` in
-  micrometres in the map. Its `move!` (picometres, `Vector{Int64}`) is no longer
+  micrometers in the map. Its `move!` (picometres, `Vector{Int64}`) is no longer
   exported and is reachable only as
   `MicroscopeControl.HardwareImplementations.MCS2Stage_mod.move!`.
 
 ## Refreshing
 
-**[guarantee]** The map is regenerated on every `install_skills()` call. After moving the pinned
+**[guarantee, 0.2.7-DEV]** The map is regenerated on every `install_skills()` call. After moving the pinned
 tag in your `Project.toml`/`Manifest.toml`, run `install_skills()` again from the
 downstream repo root. The manifest hash check will refuse to overwrite a locally
 edited map; pass `install_skills(force=true)` if you edited it and want the
