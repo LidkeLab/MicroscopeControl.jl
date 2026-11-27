@@ -269,6 +269,17 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   `memory_layout` are kept and the array is written unpermuted, as before, so only the attribute value changes. This
   package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
   layout.
+- `ImageView` is no longer a dependency. No source file loaded it, and its `__init__` needs a display, so a
+  downstream package's checks that load every dependency needed `xvfb` for it.
+- Claude Code skills (`install_skills()`): every statement is rechecked against this version and corrected where it
+  had gone stale since v0.2.0. Each `[guarantee]` and `[limitation]` names the version it was checked at, or `suite`
+  where `test/skills.jl` checks it. That file now runs the skills' marked examples on the simulated devices and asserts
+  the results the skills state. Among the corrections:
+  - `mc-acquire`: `getdata` on a `DCAM4Camera` in live mode returns the newest frame and leaves the live view running
+    (since 0.2.6); it no longer ends the live view.
+  - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to
+    `v0.2.6`; the example system's `release!` keeps a device whose `shutdown` threw, so a retry can close it; its
+    settings type is built by keyword.
 
 ### Known issues
 
