@@ -40,7 +40,7 @@ Pkg.add(url="https://github.com/LidkeLab/MicroscopeControl.jl.git", rev="v0.2.6"
 Pin both. `DAQmx.jl` has no tags, so its pin is a commit: the one above is the
 head of its `main` (version 0.1.0, unchanged since 2026-01-30). MicroscopeControl's
 pin is a release tag: `v0.2.6` is the latest, or use the tag these skills were
-installed from (the `Installed from` line at the top of this file). Without a
+installed from (the `Installed from` line at the end of this file). Without a
 `rev`, `Pkg.add` follows the default branch, and the next `Pkg.update` moves
 the instrument to whatever was pushed since.
 
