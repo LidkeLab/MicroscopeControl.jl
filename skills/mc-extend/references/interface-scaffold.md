@@ -1,6 +1,6 @@
 # Interface scaffold: `Shutter`
 
-Companion to `mc-extend` (MicroscopeControl.jl, checked at 0.2.7-DEV). The scaffold below is run under `xvfb-run -a` by `test/skills.jl` (**suite**). The bar for a new interface, the wiring and the hand-registration edits are in the skill body.
+Companion to `mc-extend` (MicroscopeControl.jl, checked at 0.2.7-DEV). The scaffold below is run under `xvfb-run -a` by the suite (suite: shutter). The bar for a new interface, the wiring and the hand-registration edits are in the skill body.
 
 ## `SLM` and `TRIG` are NOT the template
 
@@ -15,7 +15,7 @@ sit *outside* `AbstractInstrument`. What that costs them today:
 | `gui` | none | `gui(::TRIG)` exists because `TrigInterface` imports `gui` and defines it |
 | in a system field typed `AbstractInstrument`, or a `Vector{AbstractInstrument}` rollback list | cannot be stored | cannot be stored |
 | upstream contract test | listed in `no_core_methods` for lifecycle/GUI gaps; export is checked independently | exempt from `export_state` |
-| SLM interface operations | `displayimage(::MLSLM)` resolves to the interface's own `displayimage(::SLM)`, whose body is **empty** (returns `nothing`, silently): Meadowlark's `interface_functions.jl` is never `include`d by its module (suite / traced). A non-throwing default is exactly what this skill tells you never to ship. | n/a |
+| SLM interface operations | `displayimage(::MLSLM)` resolves to the interface's own `displayimage(::SLM)`, whose body is **empty** (returns `nothing`, silently): Meadowlark's `interface_functions.jl` is never `include`d by its module (the empty return: suite: statements; the missing include: traced). A non-throwing default is exactly what this skill tells you never to ship. | n/a |
 
 A system cannot treat these two like the other devices: no uniform lifecycle
 loop, only MLSLM exports state, and an error type (`MethodError`) that a
@@ -23,7 +23,7 @@ loop, only MLSLM exports state, and an error type (`MethodError`) that a
 `<: AbstractInstrument` is an upstream follow-up. Your new interface goes under
 `AbstractInstrument`, full stop.
 
-## The scaffold (suite)
+## The scaffold (suite: shutter)
 
 A mechanical shutter. Written as downstream modules here so it runs anywhere;
 the comments give the upstream file layout.
@@ -107,7 +107,7 @@ module SimulatedShutter
 end
 ```
 
-**[guarantee, suite]** What the run showed (asserted by `test/skills.jl`, group `shutter`):
+**[guarantee, suite: shutter]** What the run showed:
 
 | Call | Result |
 |---|---|
@@ -122,9 +122,9 @@ end
 
 **[policy]** Each stub's docstring is the contract. State, for every operation:
 
-- **signature and units** (`Float64` seconds, millimeters; be explicit, the
-  package has stages in millimeters and micrometers and a `light_on` stub whose
-  arity no driver implements);
+- **signature and units** (`Float64` seconds, millimeters; be explicit: the
+  package has stages in millimeters and micrometers, and up to v0.2.4 it had a
+  `light_on` stub whose arity no driver implemented);
 - **return value** (`nothing`, a `Bool`, an array shape): `getposition`'s
   docstring promises a tuple and the Sim returns a scalar, so this is where
   drift starts;

@@ -10,10 +10,12 @@ something about *your instrument*: that it comes up and goes down in the right
 order, refuses unsafe requests, records what it did, and fails visibly. Choose
 the simulator or fake that lets you assert that, then write down what the test
 did **not** prove, because that is the hardware acceptance list. Labels as in
-`mc-system-design`: **[guarantee, V]** checked at version `V` (or by the suite),
-**[limitation, V]** a shortfall as of `V`, **[policy]** recommended. What is marked
-*suite* is asserted by `test/skills.jl`, which runs this file's marked examples under
-`xvfb-run -a` with the package's other tests.
+`mc-system-design`: a guarantee names the version it was checked at, or the suite
+group that checks it; a limitation is a shortfall as of the version it names; a
+policy is a recommendation. What is marked with a suite group is asserted by that group
+of `test/skill_examples.jl`, which `test/skills.jl` runs in its own Julia process,
+under `xvfb-run -a` with the package's other tests; this file's marked examples are
+the `testing` group.
 
 ## What to establish, with what, and what remains
 
@@ -21,7 +23,7 @@ did **not** prove, because that is the hardware acceptance list. Labels as in
 |---|---|---|
 | every device the system holds has its **own** `initialize`/`shutdown`/`export_state` method, so no lifecycle call lands on the throwing `AbstractInstrument` stub | the dispatch check below, on the *hardware* types too (it needs no hardware) | that the method works: dispatch establishes method selection only. A concrete method can throw on the hardware path (`initialize(::Triggerscope4)` opens the serial port with `LibSerialPort.open`, which throws on a missing port; traced), log and return (`initialize(::PIStage)` `@error`s and leaves `connectionstatus == false`), or do nothing useful (`stopmotion(::MCLStage)` logs `STOP MOTION NOT IMPLEMENTED` and returns `nothing`; executed). The check does catch the fourth case, a missing method: `ThorCamCSCCamera` has no `initialize`, so dispatch reaches the throwing stub |
 | `initialize` rolls back what it opened when a later device fails, including devices claimed at construction | Sim devices plus a bare `struct Broken <: LightSource end` whose stubs throw, and a fake that is "open" from its constructor (`mc-system-design`, worked example) | that a real SDK's failure surfaces as an exception rather than an `@error` and a normal return, which most drivers do (`mc-extend`, section 1) |
-| the camera is used single-owner and single-acquisition: one blocking acquisition at a time, `set_state` refused in flight, a failed abort makes it unavailable until rebuilt | `SimCamera` (`sequence_length = -1` makes `getdata` throw; a fake whose `abort` throws) | frame timing, trigger behavior, buffer lifetime; and nothing about stopping early, because the drivers' own tasks cannot be joined (`mc-system-design`, Decision 3) |
+| the camera is used single-owner and single-acquisition: one blocking acquisition at a time, `set_state` refused in flight, an abort that throws or leaves `is_running` set makes it unavailable until rebuilt | `SimCamera`, and a fake camera whose read fails and whose `abort` works, throws, or returns with the capture still running (`mc-system-design`'s `FailingCam`) | frame timing, trigger behavior, buffer lifetime; and nothing about stopping early, because the drivers' own tasks cannot be joined (`mc-system-design`, Decision 3) |
 | the saved record names what is missing | a child whose `export_state` throws, through `save_h5`, read back | that hardware attributes are readbacks rather than cached requests |
 | array shapes and the `(H, W, N)` convention survive to the file | `SimCamera` with a non-square `roi` (`CameraROI(1, 1, 64, 32)` gives `(32, 64)`) | that the vendor buffer was converted correctly: test `CameraInterface.rowmajor_to_yx` on a non-square array whose values encode row and column, with and without a stride wider than the width (`mc-acquire`); `SimCamera` returns random pixels, so its shape is all it can show |
 | ordering and units of a z-stack | `SimStage3d` (`move` writes `targ_*`, `getposition` copies to `real_*`) | motion time, settling, range limits, direction sign |
@@ -30,7 +32,7 @@ did **not** prove, because that is the hardware acceptance list. Labels as in
 ## What bites first: the load needs a display
 
 `using MicroscopeControl` pulls in GLMakie, and every panel (`gui(dev)`) opens a window.
-**[limitation, 0.2.7-DEV]** With GLMakie 0.13.17 and GLFW 4.0.1 (what this checkout resolves), on a headless Linux box
+**[limitation, 0.2.7-DEV]** Observed with GLMakie 0.13.17 and GLFW 4.0.1, on a headless Linux box
 (executed with `DISPLAY` and `WAYLAND_DISPLAY` unset) the load succeeds with a warning that GLFW fell back to its
 NULL platform, and the first window fails:
 
@@ -54,7 +56,7 @@ machine with no hardware or DLLs loads the package fine.
 | `SimCamera` | keyword, all defaulted | `exposure_time=0.1` (s), `roi=CameraROI(1, 1, 1024, 1024)`, `sequence_length=10`, `capture_mode=LIVE`, `is_running=false` |
 | `SimStage3d` / `SimStage2d` / `SimStage1d` | `Base.@kwdef` | `dimensions=3/2/1`, `range_*=(0, 100)`, `real_*=0.0`, `targ_*=0.0`, `connectionstatus=false`, `label` |
 | `SimLight` | keyword | `properties=LightSourceProperties("mW", 0.0, false, 0.0, 100.0)` |
-| `SimDiodeLaser{M}` (since 0.2.5) | keyword, the same keywords with the same requirements as `TCubeLaser` minus the serial, and its default `properties` are labeled `"mA"`: `mode` defaults to `ConstantCurrent()`; in `ConstantPhotocurrent` also `wa_calibration`, `tia_range`, `tec_stabilised`, `properties` and `max_current` are required, and the ramp and lock keywords are stored but not simulated | `threshold_current=65.0`, `max_current=160.0` (mA, open loop), `min_current=0.0`, `efficiency=1.2` (mW/mA above threshold), `responsivity=1/wa_calibration` (calibration starts true); fault fields `pd_blocked`, `responsivity_drift`, `tia_range_A` (the simulated DIP switch), `tia_over_fault`, `tia_under_fault`, `key`, `interlock`; `log` |
+| `SimDiodeLaser{M}` (since 0.2.5) | keyword: `TCubeLaser`'s mode, loop and closed-loop keywords with the same requirements, none of its hardware keywords, and model keywords of its own (below); its default `properties` are labeled `"mA"`: `mode` defaults to `ConstantCurrent()`; in `ConstantPhotocurrent` also `wa_calibration`, `tia_range`, `tec_stabilised`, `properties` and `max_current` are required, and the ramp and lock keywords are stored but not simulated | `threshold_current` and `max_current` (mA, open loop) as its docstring gives them, `min_current=0.0`, `efficiency=1.2` (mW/mA above threshold), `responsivity=1/wa_calibration` (calibration starts true); fault fields `pd_blocked`, `responsivity_drift`, `tia_range_A` (the simulated DIP switch), `tia_over_fault`, `tia_under_fault`, `key`, `interlock`; `log` |
 
 All implement `initialize`, `shutdown`, `export_state` **[guarantee, 0.2.7-DEV]**. There is no
 simulated DAQ, attenuator, Triggerscope or SLM; for those, write a fake behind
@@ -83,13 +85,27 @@ Honestly, per device (executed):
   `shutdown` off. 2-arg `light_on(light, power)` is a `MethodError` from 0.2.5
   (up to v0.2.x it hit a throwing interface stub). `SimLight` is a plain
   `LightSource`, so it is **not** the simulator for a `TCubeLaser`.
-- **SimDiodeLaser** (since 0.2.5; the values below are asserted by `test/skills.jl`, **[guarantee, suite]**). The simulator for any `DiodeLaser` system: same
-  abstract type, same constructor keywords and validation, same `loop_status`
-  layout and `export_state` attribute names as `TCubeLaser`, so a field typed
-  `::DiodeLaser` takes either. **[guarantee, 0.2.7-DEV]** every command and read throws
-  before `initialize` and after `shutdown`; power-mode `initialize` refuses on a
-  missing key or interlock or a `tia_range_A` that differs from `tia_range`, and
-  sets the clamp to `max_current`. The model is three lines: `P = efficiency *
+- **SimDiodeLaser** (since 0.2.5). The simulator for any `DiodeLaser` system: the
+  same abstract type as `TCubeLaser`, so a field typed `::DiodeLaser` takes either.
+  **[guarantee, 0.2.7-DEV]** (checked once against the fake Kinesis SDK) it is not a
+  drop-in twin. It shares `TCubeLaser`'s mode, loop and closed-loop keywords and
+  their validation, and `loop_status`'s field names, but `below_threshold` is
+  `missing` while `threshold_current` is `NaN` (`TCubeLaser`'s default) and a `Bool`
+  once it is set (the Sim's default is a number). It takes none of the hardware
+  keywords (`daq`, `daq_device`, `ao_channel`, `laser_color`,
+  `controller_max_current`, `max_setcurrent`, `max_setpoint`, `drive_current`,
+  `task_mod`), so a `TCubeLaser` construction line with its serial removed can
+  throw a `MethodError`. Its `export_state` attribute names are a subset of
+  `TCubeLaser`'s: the TCube adds `serialNo`, `laser_color`, `daq_device`,
+  `ao_channel`, `controller_max_current`, `max_setcurrent`, `max_setpoint` and
+  0.2.4's `min_current`, `max_current`, `power`, `power_unit`, `min_power` and
+  `max_power`, so a record check written against the Sim misses them.
+  **[guarantee, 0.2.7-DEV]** every command and read throws before `initialize` and
+  after `shutdown` (traced; the suite checks a command and a read before, and
+  `light_on` after); power-mode `initialize` refuses on a missing key or interlock
+  or a `tia_range_A` that differs from `tia_range`, and sets the clamp to
+  `max_current` (traced). **[guarantee, suite: testing]** The rest of this item, to
+  "Not modeled", is asserted. The model is three lines: `P = efficiency *
   max(0, I - threshold_current)`; photocurrent `= responsivity * (1 +
   responsivity_drift) * P / 1000`; in power mode the loop settles instantly at
   the setpoint or at the clamp (`saturated`). `pd_blocked = true` drives the
@@ -121,7 +137,7 @@ not behavior (`mc-system-design`, Principle 6). Two rules make it honest:
 1. **Match dimensionality.** `PIStage` is two-axis (`dimensions = 2`,
    `move(stage, x, y)`), so its simulator is `SimStage2d`, not `SimStage3d`. A
    3-axis Sim would let `move(stage, x, y, z)` pass in tests and hit the throwing
-   `Stage` fallback on the rig.
+   `Stage` fallback on the instrument.
 2. **Adapt where semantics differ, in one tested place.** `capture` returns an
    enum on `SimCamera` and the frame on `DCAM4Camera`/`ThorcamDCXCamera`
    (traced, `mc-acquire`). Code that does `frame = capture(cam)` works on one
@@ -136,7 +152,7 @@ const MC = MicroscopeControl
 
 mutable struct Rig <: AbstractSystem
     cam::Camera
-    stage::Stage           # two-axis on this rig; the Sim MUST be two-axis too
+    stage::Stage           # two-axis on this instrument; the Sim MUST be two-axis too
     laser::LightSource
 end
 
@@ -193,9 +209,9 @@ has_specific(f, T, args...) =
 end
 ```
 
-All 24 assertions pass for these six types (**[guarantee, suite]**). Substitute your rig's
+All 24 assertions pass for these six types (**[guarantee, suite: testing]**). Substitute your instrument's
 types; today the same loop fails for `ThorCamCSCCamera` (`initialize`;
-**[guarantee, 0.2.7-DEV]** `export_state` now returns cached settings), naming the device that would throw during `shutdown` before it
+**[guarantee, 0.2.7-DEV]** since 0.2.7 its `export_state` returns cached settings), naming the device that would throw during `shutdown` before it
 does. `TCubeLaser` failed the `export_state` assertion too until **v0.2.3**, whose
 `export_state(::TCubeLaser)` is the 1-argument method that was missing; the old
 `export_state(::TCubeLaser, sth)` stays as a deprecated forwarder in
@@ -221,8 +237,8 @@ Behavioral tests on top, executed:
     rig = Rig(simulate=true); initialize(rig)
     @test size(snap(rig.cam)) == (32, 64)                 # (H, W): roi height 32, width 64
     rig.cam.sequence_length = 5
-    sequence(rig.cam)
-    while rig.cam.is_running == 1; sleep(0.01); end        # join the completion signal before reading
+    t = sequence(rig.cam)
+    t isa Task && wait(t)                                  # join the Sim's task before reading (mc-acquire)
     @test size(getdata(rig.cam)) == (32, 64, 5)
     shutdown(rig)                                          # MC.shutdown(::Rig), defined above
 end
@@ -258,14 +274,16 @@ if it bothers CI; it is not an error.
 
 ## GUI smoke tests: possible for cameras and lights, not for Sim stages
 
-**[limitation, suite]**: `gui(SimStage1d())`, `gui(SimStage2d())` and
-`gui(SimStage3d())` all throw `FieldError: type SimStage3d has no field stagelabel`.
-The shared stage panel reads `stage.stagelabel` unguarded for its window title
-and the Sim stages carry `label`. So a "every panel opens" smoke test cannot be
-written against the simulated stages as of 0.2.1; `gui(SimCamera())` and
-`gui(SimLight())` open (**suite**), as do `gui(PIStage())`, `gui(MCLStage())` and
-`gui(MCS2Stage())` with no hardware attached (**suite**), because those constructors are
-pure. **Fixed in 0.2.1:** `gui(::LightSource)` used to call
+**[limitation, suite: testing]**: `gui(SimStage1d())`, `gui(SimStage2d())` and
+`gui(SimStage3d())` all throw on the missing field: on Julia 1.12 and later
+`FieldError: type SimStage3d has no field stagelabel`, on 1.11 an `ErrorException`
+whose message is `type SimStage3d has no field stagelabel`. The shared stage panel
+reads `stage.stagelabel` unguarded for its window title and the Sim stages carry
+`label`. So an "every panel opens" smoke test cannot be written against the
+simulated stages; `gui(SimCamera())` and `gui(SimLight())` open a window (each
+returns a `GLMakie.Screen`; suite: testing), as do `gui(PIStage())`,
+`gui(MCLStage())` and `gui(MCS2Stage())` with no hardware attached, because those
+constructors are pure. **Fixed in 0.2.1:** `gui(::LightSource)` used to call
 `setpower(light, 0.5)` on open (executed against a fake-transport light,
 before the fix); opening **the shared light panel** is now observably
 read-only. That is the scope of the fix: it says nothing about the other
@@ -308,12 +326,13 @@ Upstream's `.github/workflows/CI.yml` (Ubuntu):
 Both halves matter: the background `Xvfb :99` plus `DISPLAY` covers
 precompilation in `julia-buildpkg`, the `xvfb-run -a` prefix covers the test
 process. Add `RIG_SIMULATE: "true"` to the job `env`. Pin MicroscopeControl.jl
-to a tag (`Pkg.add(url=..., rev="v0.2.6")`, the latest at this writing) and rerun `install_skills()` after
-moving it so the API map matches what CI tests against.
+as `mc-system-design`'s "Before anything" says (the tag, or the tested `main`
+commit, from the `Installed from` line) and rerun `install_skills()` after moving
+the pin, so the API map matches what CI tests against.
 
 ## What hardware acceptance must still establish
 
-**[policy]** Write this list into the rig repo and tick it on the instrument,
+**[policy]** Write this list into the instrument repo and tick it on the instrument,
 because nothing above touches it:
 
 - each device's `initialize` leaves it *usable*, not just returned
@@ -326,10 +345,10 @@ because nothing above touches it:
   state the next acquisition can use (the Sim cannot show this). (Opening a
   light panel no longer commands power as of 0.2.1, so that is no longer a
   hardware-acceptance item — see the GUI smoke test section above.)
-- SDK failure paths: **[guarantee, 0.2.7-DEV]** DCAM4 exposure/ROI read-backs throw; other DCAM4 acquisition errors
+- SDK failure paths: **[guarantee, 0.2.7-DEV]** (since 0.2.7) DCAM4 exposure/ROI read-backs throw; other DCAM4 acquisition errors
   can return `nothing`. DCx failures can return `nothing`;
-  **[guarantee, 0.2.7-DEV]** CSC capture and sequence reads throw on timeout, while `getlastframe` returns `nothing`;
-- **[guarantee, 0.2.7-DEV]** stage exports attempt a position read without motion; check `position_fresh` rather than
+  **[guarantee, 0.2.7-DEV]** (since 0.2.7) CSC capture and sequence reads throw on timeout, while `getlastframe` returns `nothing`;
+- **[guarantee, 0.2.7-DEV]** (since 0.2.7) stage exports attempt a position read without motion; check `position_fresh` rather than
   assuming every saved position was freshly measured. Disconnected stages/channels and failed reads warn and retain cached values;
 - shared-connection ownership: two attenuators on one `Triggerscope4`, and that
   `shutdown(att)` means 0 V, full transmission, on an LCC1620;

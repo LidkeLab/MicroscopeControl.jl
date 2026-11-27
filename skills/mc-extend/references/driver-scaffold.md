@@ -1,8 +1,8 @@
 # Driver scaffold and contract tests
 
-Companion to `mc-extend` (MicroscopeControl.jl, checked at 0.2.7-DEV). The scaffold and its contract testset are run under `xvfb-run -a` by `test/skills.jl` (**suite**); labels `[guarantee, V]`/`[limitation, V]`/`[policy]` as in `mc-system-design`.
+Companion to `mc-extend` (MicroscopeControl.jl, checked at 0.2.7-DEV). The scaffold and its contract testset are run under `xvfb-run -a` by the suite (suite: scaffold); labels as in `mc-system-design`.
 
-## The complete scaffold (suite)
+## The complete scaffold (suite: scaffold)
 
 A serial-controlled LED as a `LightSource`, written downstream over a fake
 transport so it runs anywhere. The section comments say which upstream file each
@@ -91,7 +91,7 @@ What the run showed:
 | `shutdown(led)` then `setpower(led, 1.0)` | port closed; `setpower` throws `FakePort: write on closed port` instead of pretending |
 | `initialize(SerialLED(port=FakePort(fail_open=true)))` | throws `FakePort: device not present`; nothing to clean up because nothing opened |
 | `export_state` -> `save_attributes_and_data` -> read back | `is_on` reads back `0.0` (Bool becomes Float64), `power_requested == 12.5` |
-| `gui(led)` after `shutdown(led)` (recorded against MC 0.2.0, before the panel's `lift`->`on` fix; on 0.2.1 and later it opens, asserted by the suite) | **threw from inside `gui`**: the shared light panel called `setpower(light, 0.5)` when it opened (see the "Fixed in 0.2.1" note in the GUI section of the parent `SKILL.md`). On 0.2.1+, constructing the panel no longer calls `setpower`/`light_on`/`light_off` at all, so `gui(led)` here no longer throws for this reason. |
+| `gui(led)` after `shutdown(led)` (recorded against MC 0.2.0, before the panel's `lift`->`on` fix; on 0.2.1 and later it opens a window and sends nothing to the port; suite: scaffold) | **threw from inside `gui`**: the shared light panel called `setpower(light, 0.5)` when it opened (see the "Fixed in 0.2.1" note in the GUI section of the parent `SKILL.md`). On 0.2.1+, constructing the panel no longer calls `setpower`/`light_on`/`light_off` at all, so `gui(led)` here no longer throws for this reason. |
 
 The interface stub signature is the contract you are satisfying **[guarantee, 0.2.7-DEV]**:
 `setpower(::LightSource, ::Float64)`, `light_on(::LightSource)` and
@@ -160,7 +160,7 @@ has_specific(f, T, args...) = hasmethod(f, Tuple{T,args...}) && which(f, Tuple{T
 end
 ```
 
-All of these pass for the scaffold (**[guarantee, suite]**: 23 assertions, run by `test/skills.jl`). What they establish, and what
+All of these pass for the scaffold (**[guarantee, suite: scaffold]**: 23 assertions). What they establish, and what
 they do not:
 
 | Simulation or fake transport establishes | Only hardware acceptance establishes |
@@ -172,5 +172,5 @@ they do not:
 | GUI field compatibility (`hasfield`, or open the panel under `xvfb-run -a`) | that the panel's actions do the right physical thing |
 
 **[policy]** record hardware acceptance (device, firmware, pinned MC tag, what
-was checked) in the rig repo, as upstream's CLAUDE.md says it is not tracked in
+was checked) in the instrument repo, as upstream's CLAUDE.md says it is not tracked in
 MC.

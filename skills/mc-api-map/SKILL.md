@@ -15,17 +15,18 @@ implementation, and which land on an interface fallback. It is not hand-written.
 installed in the downstream environment, so it matches the pinned tag, not `main`
 and not this skill's prose; on method *existence* the map wins over any prose.
 Read it before calling anything on a device you have not used in this session.
-Labels as in `mc-system-design`: **[guarantee, V]** checked at version `V` (or by
-the suite), **[limitation, V]** a shortfall as of `V`, **[policy]** recommended.
-The statements about what the generated map contains are asserted by `test/skills.jl`
-against a map it generates, so they follow the package (**suite**).
+Labels as in `mc-system-design`: a guarantee names the version it was checked at, or
+the suite group that checks it; a limitation is a shortfall as of the version it
+names; a policy is a recommendation. The statements about what the generated map
+contains are asserted against a map the suite generates, so they follow the package
+(suite: statements).
 
 ## What the map can and cannot tell you
 
 | The map tells you | The map cannot tell you |
 |---|---|
 | that a method for this exact type exists (device-specific), so the call will not hit a stub | that the method **does** anything: `stopmotion(::MCLStage)` is device-specific in the map, and its whole body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed: logs the error, returns `nothing`) |
-| that dispatch lands on a shared interface implementation (the panels) | that the shared implementation works for this device: `gui(::Stage)` reads `stage.stagelabel`, which the Sim stages lack, so `gui(SimStage3d())` throws `FieldError` although the map files it as inherited |
+| that dispatch lands on a shared interface implementation (the panels) | that the shared implementation works for this device: `gui(::Stage)` reads `stage.stagelabel`, which the Sim stages lack, so `gui(SimStage3d())` throws (a `FieldError` on Julia 1.12 and later, an `ErrorException` on 1.11) although the map files it as inherited |
 | that a name resolves only to an interface fallback, so the call will throw or return silently | what the method returns, in what units, with what side effects: `capture` returns an enum on `SimCamera` and a frame on `DCAM4Camera`, both device-specific |
 | the signatures that exist for a name on this type | which **fields** the device has; the map has no field information at all. `references/gui-fields.md` beside this file catalogs the fields the shared panels read |
 
@@ -43,7 +44,7 @@ see "What the map does and does not show about lifecycle methods".) **Resolving 
 implementing**, and implementing is not working (the `MCLStage` row above). The
 interface files define fallback stubs that `error("... not implemented for
 <Type>")`, so `hasmethod` says true and the call raises at runtime. The map exists
-so you find out before the call, not on the rig.
+so you find out before the call, not on the instrument.
 
 ## The three groups
 
@@ -65,8 +66,8 @@ return silently is a property of the fallback's source file, so when it matters,
 check with `which` (below) and read the method it names.
 
 The quoted headings, entries and the note under the third heading are copied from the map
-that `install_skills(mktempdir())` generates at 0.2.7-DEV, and `test/skills.jl` checks that
-the headings and entries named here are in a map it generates. If your installed map
+that `install_skills(mktempdir())` generates at 0.2.7-DEV, and the suite checks that
+the headings and entries named here are in a map it generates (suite: statements). If your installed map
 prints these differently, the map is right and this prose is stale.
 
 ## What the map does and does not show about lifecycle methods
@@ -84,7 +85,7 @@ fallback group is:
 - `settriggermode!(Camera)`
 ```
 
-**[guarantee, suite]** From 0.2.7, `export_state(::ThorCamCSCCamera)` is concrete: it is device-specific in the map and the fallback group has no `export_state(Camera)` entry. (On 0.2.6 and older the group had that entry as well.)
+**[guarantee, suite: statements]** From 0.2.7, `export_state(::ThorCamCSCCamera)` is concrete: it is device-specific in the map and the fallback group has no `export_state(Camera)` entry. (On 0.2.6 and older the group had that entry as well.)
 
 So a name under the fallback heading means the device does not implement it, and the
 type in parentheses tells you which stub you will hit (for these two, both throw).
@@ -131,7 +132,7 @@ from their sections is a plain `MethodError`, not a fallback: `MLSLM` has no
 and `shutdown` but no `export_state`.
 
 One entry where the fallback neither throws nor implements anything, both
-signatures run on `MLSLM()` (**[guarantee, 0.2.7-DEV]**, executed):
+signatures run on `MLSLM()` (**[guarantee, suite: statements]**, executed):
 
 | Call | Behavior | Where the map puts it |
 |---|---|---|
@@ -144,6 +145,8 @@ Do not write code that expects a `not implemented` error from either form.
 
 The map is a snapshot. To check a specific call against the loaded package, ask
 where dispatch lands and whether that is the concrete type:
+
+**[guarantee, suite: apimap]** The suite runs both fences below and asserts every `# -> ` value.
 
 <!-- mc-test: apimap -->
 ```julia
@@ -159,23 +162,25 @@ hasmethod(light_on, Tuple{TCubeLaser,Float64})
 which(setpower, Tuple{TCubeLaser{ConstantCurrent},Float64}).sig
 # -> Tuple{typeof(setpower), DiodeLaser, Float64}
 
-# mode-specific: exists only on the instantiation for that mode
+# mode-specific: a driver method exists only on the instantiation for that mode. hasmethod is
+# true on the other mode too, because it finds the throwing DiodeLaser stub; which(...).sig shows it
 hasmethod(setcurrent!, Tuple{TCubeLaser{ConstantPhotocurrent},Float64})
-# -> true, but it is the throwing DiodeLaser stub; check which(...).sig
+# -> true
+which(setcurrent!, Tuple{TCubeLaser{ConstantPhotocurrent},Float64}).sig
+# -> Tuple{typeof(setcurrent!), DiodeLaser, Float64}
 which(setcurrent!, Tuple{TCubeLaser{ConstantCurrent},Float64}).sig
 # -> Tuple{typeof(setcurrent!), TCubeLaser{ConstantCurrent}, Float64}
 
+# real driver code from v0.2.3 (up to v0.2.2, the throwing stub); Tuple{TCubeLaser,Any}
+# is the deprecated forwarder, kept in 0.2.5
 which(export_state, Tuple{TCubeLaser}).sig
-# -> Tuple{typeof(export_state), TCubeLaser}           (real driver code from v0.2.3;
-#                                                       up to v0.2.2, the throwing stub.
-#                                                       Tuple{TCubeLaser,Any} is the
-#                                                       deprecated forwarder, kept in 0.2.5)
+# -> Tuple{typeof(export_state), TCubeLaser}
 
-which(getdata, Tuple{SimCamera}).sig
-# -> Tuple{typeof(getdata), SimCamera}                 (real driver code)
+which(getdata, Tuple{SimCamera}).sig            # real driver code
+# -> Tuple{typeof(getdata), SimCamera}
 
-which(gui, Tuple{SimCamera}).sig
-# -> Tuple{typeof(gui), Camera}                        (shared implementation)
+which(gui, Tuple{SimCamera}).sig                # shared implementation
+# -> Tuple{typeof(gui), Camera}
 ```
 
 A one-line predicate for "implemented on this type", the same one `test/contract.jl`
@@ -187,12 +192,12 @@ has_specific(f, T, args...) =
     hasmethod(f, Tuple{T, args...}) &&
     Base.unwrap_unionall(which(f, Tuple{T, args...}).sig).parameters[2] === T
 
-has_specific(initialize, SimCamera)          # true
-has_specific(initialize, ThorCamCSCCamera)   # false
-has_specific(setpower, SimLight, Float64)    # true
-has_specific(setpower, TCubeLaser, Float64)  # false: lands on the DiodeLaser method
-has_specific(light_on, TCubeLaser)           # true: mode-shared, written on the bare type
-has_specific(setcurrent!, TCubeLaser{ConstantCurrent}, Float64)   # true: mode-specific
+has_specific(initialize, SimCamera)                               # -> true
+has_specific(initialize, ThorCamCSCCamera)                        # -> false
+has_specific(setpower, SimLight, Float64)                         # -> true
+has_specific(setpower, TCubeLaser, Float64)                       # -> false   # lands on the DiodeLaser method
+has_specific(light_on, TCubeLaser)                                # -> true    # mode-shared, on the bare type
+has_specific(setcurrent!, TCubeLaser{ConstantCurrent}, Float64)   # -> true    # mode-specific
 ```
 
 The `unwrap_unionall` matters from 0.2.5: a `where`-method has a `UnionAll`
@@ -218,19 +223,19 @@ per device.
 - **[guarantee, 0.2.7-DEV]** `light_on` takes the light only. Up to v0.2.4 the interface
   declared `light_on(::LightSource, ipower::Float64)`, which no driver implemented
   and which threw for every light; 0.2.5 replaced it with a 1-arg stub, so the 2-arg
-  call is now a plain `MethodError`. Off `setpower` stages the next enable on
-  `CrystaLaser` and `DaqTrLight`; without a stage, `light_on` uses the clamped
-  1.0 V default. Live level changes do not stage the next enable.
+  call is now a plain `MethodError`. What `light_on` writes on the DAQ voltage lights
+  is in `mc-system-design`'s `references/driver-caveats.md`, "DAQ voltage-light state".
 - **[guarantee, 0.2.7-DEV]** `setpower` on a `DiodeLaser` (`TCubeLaser`, `SimDiodeLaser`)
   resolves to the `DiodeLaser` method: on a `ConstantCurrent` laser it forwards to
-  `setcurrent!` (mA) with a deprecation warning; on a `ConstantPhotocurrent` laser it
+  `setcurrent!` (mA) with a deprecation warning (`Base.depwarn`, shown only under
+  `Pkg.test` or with `--depwarn=yes`); on a `ConstantPhotocurrent` laser it
   throws and names `setoutputpower!` (mW at the laser output) and `setlevel!`
   (unit-free `0..1`). It is unchanged on
   the other lights. None of this shows in the map (the 2-arg blind spot above).
 - `move` takes `Float64` positions. `move(stage, 1, 2, 3)` with integers is a
   `MethodError`, not a stub error.
 - The SmarAct `MCS2Stage` has `move(MCS2Stage, Float64, Float64[, Float64])` in
-  micrometers in the map. Its `move!` (picometres, `Vector{Int64}`) is no longer
+  micrometers in the map. Its `move!` (picometers, `Vector{Int64}`) is no longer
   exported and is reachable only as
   `MicroscopeControl.HardwareImplementations.MCS2Stage_mod.move!`.
 

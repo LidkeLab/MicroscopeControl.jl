@@ -2,10 +2,11 @@
 
 Companion to `mc-system-design`. Everything here is a **current limitation** of a
 specific driver: something a system must work around today, not a pattern to
-copy into new code. Labels as in `mc-system-design`: **[guarantee, V]**, **[limitation, V]**
-and **[policy]**, with `V` a version or `suite`. Rows marked *executed* were run against the Sim
-devices (**suite** where `test/skills.jl` asserts them); rows marked *traced* were read from the driver
-source (`types.jl`, `interface_methods.jl`) and not run, because the hardware is not present.
+copy into new code. Labels as in `mc-system-design`: a guarantee or limitation names the version
+it was checked at, or the suite group that checks it; a policy is a recommendation. Rows marked
+*executed* were run against the Sim devices (with the suite group where a group of
+`test/skill_examples.jl` asserts them); rows marked *traced* were read from the driver source
+(`types.jl`, `interface_methods.jl`) and not run, because the hardware is not present.
 Re-check this file against `mc-api-map`'s generated `references/api-map.md`
 after moving the pinned tag; the map wins on method existence, this file on
 behavior.
@@ -22,12 +23,12 @@ the connection; the table shows which drivers currently follow it.
 | `PIStage()`, `N472()`, `MCLStage()`, `MCS2Stage()` | pure (`connectionstatus=false`; `PIStage` and `N472` default `id = -1`, since 0.2.6 and 0.2.5, because 0 is a valid GCS id) | none until `initialize` | executed (constructors), traced (initialize) |
 | `ThorcamDCXCamera()` | pure | none until `initialize` | traced |
 | `TCubeLaser(serialNo; daq=NIdaq(), daq_device=nothing, ao_channel=nothing, ...)` | pure; stores the Kinesis serial number, a DAQ handle and (from v0.2.3) the DAQ device/AO channel names `setupIO` should use. `mode` defaults to `ConstantCurrent()` (0.2.x behavior; closed loop is `mode = ConstantPhotocurrent()`) and the result is a `TCubeLaser{M} <: DiodeLaser` (from 0.2.5). Power mode also requires `max_current` (the clamp `initialize` programs; no default there), `wa_calibration` (W/A at the laser output), `tia_range` (A, the TLD001 DIP switch: `10e-6`, `100e-6`, `1e-3`, `10e-3`), `tec_stabilised` (`Bool` or `missing`) and `properties`, whose `min_power`/`max_power` become enforced mW bounds; the constructor validates them (`max_power` must fit `tia_range * wa_calibration`). `threshold_current` (mA, `NaN` unknown) is optional in both modes. The pre-0.2.5 positional arities still construct, as `ConstantCurrent`. | none until `initialize` | traced |
-| `SimDiodeLaser(; mode = ConstantCurrent(), ...)` | pure; the simulated `DiodeLaser`, takes the same keywords with the same requirements as `TCubeLaser`, minus the serial, and its default `properties` are labeled `"mA"` (the same `mode` default, and in `ConstantPhotocurrent` the same required keywords including `max_current`; the ramp and lock keywords are stored, not simulated); every command and read throws before `initialize` and after `shutdown` | none | traced (0.2.5) |
-| `Triggerscope4(; portname="COM3")` | creates a `LibSerialPort.SerialPort` object for the port; does not open it. **[limitation, suite]** libserialport refuses a name that is not a port on this machine, so on Linux the default `portname="COM3"` throws at construction (executed): pass the real name, or put a fake behind the transport in a test (and `LCC1620()` with no `scope` builds a default `Triggerscope4()`, so it throws the same way) | `shutdown`, if `initialize` opened it | traced (Windows), executed (Linux) |
+| `SimDiodeLaser(; mode = ConstantCurrent(), ...)` | pure; the simulated `DiodeLaser`. **[guarantee, 0.2.7-DEV]** (since 0.2.5; checked once against the fake Kinesis SDK) it takes `TCubeLaser`'s mode, loop and closed-loop keywords with the same requirements (the same `mode` default, and in `ConstantPhotocurrent` the same required keywords including `max_current`; the ramp and lock keywords are stored, not simulated), but none of its hardware keywords (`daq`, `daq_device`, `ao_channel`, `laser_color`, `controller_max_current`, `max_setcurrent`, `max_setpoint`, `drive_current`, `task_mod`), and adds model keywords (`efficiency`, `responsivity`, `key`, `interlock`, `pd_blocked`, ...); its default `properties` are labeled `"mA"`; every command and read throws before `initialize` and after `shutdown` | none | traced; keywords checked once |
+| `Triggerscope4(; portname="COM3")` | creates a `LibSerialPort.SerialPort` object for the port; does not open it. **[limitation, suite: statements]** libserialport refuses a name that is not a port on this machine, so on Linux the default `portname="COM3"` throws at construction (executed): pass the real name, or put a fake behind the transport in a test (and `LCC1620()` with no `scope` builds a default `Triggerscope4()`, so it throws the same way) | `shutdown`, if `initialize` opened it | traced (Windows), executed (Linux) |
 | `LCC1620(; scope=Triggerscope4(), dac_channel=1)` | constructs its own `Triggerscope4` unless you pass `scope`; validates `dac_channel` against `scope.dacoutputs` with `@error` (does not throw) | as for the scope it holds | traced |
-| **`DCAM4Camera(dev_id::Int = 0)`** | **calls `dcamapi_init` and `dcamdev_open`, reads sensor size and exposure.** The camera is claimed before `initialize`; `initialize(::DCAM4Camera)` is then a no-op. **Fixed in 0.2.1:** both failure paths now throw an `ErrorException` naming the device id and the `DCAMERR` code, instead of returning a non-camera value; on each of those two checked paths the constructor calls `dcamapi_uninit()` before it throws. **Existing guarantee, from 0.2.7 (tested against a fake SDK, not on a rig):** the API is reference-counted per process, so one camera's `shutdown` leaves another camera's API up; a constructor that fails gives back only its own count; an exception after `dcamdev_open` succeeds closes the device and gives the count back before it propagates. **Current limitation:** the uninitialize is only *attempted*: `dcamapi_uninit()` checks its own SDK result and logs an `@error` when it fails, but the constructor throws its own error either way, so a failed uninitialize is visible in the log and, from `shutdown`, in its return value. (Before 0.2.1, neither failure path returned a camera: if `dcamapi_init` failed the constructor called `dcamapi_uninit` itself and returned the `DCAMERR` code; if init succeeded but `dcamdev_open` failed it `@error`d "Could not open camera" and returned `nothing`, **leaving the DCAM API initialized**.) | On success: `shutdown(cam)` (aborts and joins any frame wait, stops the capture, `dcamdev_close`, then gives back its count of the API, which is uninitialized by the last holder; it returns that `dcamapi_uninit` code, or `DCAMERR_SUCCESS` while another camera holds the API) even if you never called `initialize`. On an installed copy older than 0.2.1, a `nothing` return needs a manual `MicroscopeControl.HardwareImplementations.DCAM4.dcamapi_uninit()` call, or the next `DCAM4Camera()` in the session starts from a half-initialized SDK; check `cam isa DCAM4Camera` before storing it. | traced (hardware verification: NOT DONE for the 0.2.1 fix — no Hamamatsu camera available) |
+| **`DCAM4Camera(dev_id::Int = 0)`** | **calls `dcamapi_init` and `dcamdev_open`, reads sensor size and exposure.** The camera is claimed before `initialize`; `initialize(::DCAM4Camera)` is then a no-op. **Fixed in 0.2.1:** both failure paths now throw an `ErrorException` naming the device id and the `DCAMERR` code, instead of returning a non-camera value; on each of those two checked paths the constructor calls `dcamapi_uninit()` before it throws. **[guarantee, 0.2.7-DEV]** (since 0.2.7; tested against a fake SDK, not on hardware) the API is reference-counted per process, so one camera's `shutdown` leaves another camera's API up; a constructor that fails gives back only its own count; an exception after `dcamdev_open` succeeds closes the device and gives the count back before it propagates. **[limitation, 0.2.7-DEV]** the uninitialize is only *attempted*: `dcamapi_uninit()` checks its own SDK result and logs an `@error` when it fails, but the constructor throws its own error either way, so a failed uninitialize is visible in the log and, from `shutdown`, in its return value. (Before 0.2.1, neither failure path returned a camera: if `dcamapi_init` failed the constructor called `dcamapi_uninit` itself and returned the `DCAMERR` code; if init succeeded but `dcamdev_open` failed it `@error`d "Could not open camera" and returned `nothing`, **leaving the DCAM API initialized**.) | On success: `shutdown(cam)` (aborts and joins any frame wait, stops the capture, `dcamdev_close`, then gives back its count of the API, which is uninitialized by the last holder; it returns that `dcamapi_uninit` code, or `DCAMERR_SUCCESS` while another camera holds the API) even if you never called `initialize`. On an installed copy older than 0.2.1, a `nothing` return needs a manual `MicroscopeControl.HardwareImplementations.DCAM4.dcamapi_uninit()` call, or the next `DCAM4Camera()` in the session starts from a half-initialized SDK; check `cam isa DCAM4Camera` before storing it. | traced (hardware verification: NOT DONE for the 0.2.1 fix — no Hamamatsu camera available) |
 | **`ThorCamCSCCamera()`** | **initializes the Thorlabs SDK, discovers cameras, and opens the first one.** The camera is claimed at construction. There is no `initialize` method, so a lifecycle loop that calls `initialize(cam)` throws *after* the device is already open. | `shutdown(cam)` (closes the camera and uninitializes the SDK) | traced |
-| `CrystaLaser(; daq, channel)`, `DaqTrLight(; daq, channel, device_index=2)`, `VortranLaser(; daq, ao_channel, do_channel)` | **[guarantee, 0.2.7-DEV]** named outputs skip discovery; `daq::DAQ` defaults to `NIdaq()`. **[limitation, 0.2.7-DEV]** unnamed outputs still discover devices and AO then DO in one `try`, keeping any partial AO result and warning on discovery errors. Legacy defaults: device 1 for Crysta/Vortran, device 2 for DaqTrLight; AO index 1 for single-line lights, AO index 2 and DO index 12 for Vortran. | **[guarantee, 0.2.7-DEV]** `initialize` writes 0 before recording off (Vortran: DO only), and throws on missing channels or transport failure. Tasks are per operation; cleanup is always attempted after a write. **[policy]** inspect the selected channel fields and use named wiring. | tested against a recording `DAQ`, no hardware |
+| `CrystaLaser(; daq, channel)`, `DaqTrLight(; daq, channel, device_index=2)`, `VortranLaser(; daq, ao_channel, do_channel)` | **[guarantee, 0.2.7-DEV]** (since 0.2.7) named outputs skip discovery; `daq::DAQ` defaults to `NIdaq()`. **[limitation, 0.2.7-DEV]** unnamed outputs still discover devices and AO then DO in one `try`, keeping any partial AO result and warning on discovery errors. Legacy defaults: device 1 for Crysta/Vortran, device 2 for DaqTrLight; AO index 1 for single-line lights, AO index 2 and DO index 12 for Vortran. | **[guarantee, 0.2.7-DEV]** `initialize` writes 0 before recording off (Vortran: DO only), and throws on missing channels or transport failure. Tasks are per operation; cleanup is always attempted after a write. **[policy]** inspect the selected channel fields and use named wiring. | tested against a recording `DAQ`, no hardware |
 
 So "construct all devices, then initialize" is right for the Sim, PI, MCL, N472,
 SmarAct, DCx and TCube devices, and wrong for DCAM4 and ThorCam CSC, which have already opened hardware by
@@ -46,8 +47,8 @@ The runtime constraints come from object ownership:
 |---|---|---|---|
 | `LCC1620` | `scope::Triggerscope4` | keyword `scope=`; defaults to a fresh `Triggerscope4()` on `COM3` | construct the scope first if you want to share it. `initialize(att)` calls `initialize(att.scope)` itself when the scope's port is not open, then sets the DAC range and drives to `min_voltage`. `shutdown(att)` drives the channel to `min_voltage` (0 V, which is **full transmission** on the LCC1620) and leaves the port open. |
 | `XEM` (module `OK_XEM`) | `daq::NIdaq` | keyword `daq=`; defaults to `NIdaq()` | none: `NIdaq` holds no connection (tasks are created and deleted per operation, `initialize`/`shutdown` are no-ops) |
-| `TCubeLaser` | `daq::NIdaq` for the modulation channel | keyword `daq=` | none, as above. `TCubeLaserControl.setupIO(laser)` creates the AO task and picks the **second** discovered device and its **second** AO channel unless you pass `daq_device=`/`ao_channel=` (those keywords, and a validating error message in place of a bare `BoundsError`, are v0.2.3); **[limitation, 0.2.7-DEV]** `setupIO` and `set_modvoltage` now warn that they are deprecated, and a laser built with `modulator = NIDAQModulator(...)` is the replacement (`mc-extend`, "A light that takes a modulator"). **[guarantee, 0.2.7-DEV]** (since 0.2.5, traced) `initialize` in `ConstantPhotocurrent` mode is a protected sequence and never enables the output: it requires key switch and interlock; requires the controller's TIA range bits to match `tia_range`; zeroes the setpoint and disables the output first, in both modes and before the mode command (the TLD001 ignores setpoints while the output is off, so `light_on` sends the setpoint right after enabling and `light_off` zeroes it before disabling); leaves the max-current potentiometer at the highest position whose controller-reported limit is `<= max_current` and records that limit in `pd.max_current_clamp`; enters closed loop and verifies the status bit; writes and reads back the W/A factor. Any failed step throws and closes the handle. `light_on` and `setoutputpower!` refuse until the clamp is verified, and re-read the closed-loop bit and the controller's limit before emitting (not yet run on hardware); since 0.2.6 every fresh read of the controller sends its request twice (`request_twice`, `REQUEST_WAIT_S` = 0.1 s each), because the TLD001 answers one request behind, so several calls take longer than in 0.2.5 (changelog 0.2.6, "Changed"). Both modes start Kinesis polling (50 ms), so the readbacks are cache reads. On the hardware (output off and on): polling refreshes the setpoint cache, the pot needs adjust mode, setpoints only take with the output on, and closed loop has run with single-write setpoints. An optional ramp (the `ramp_step_mW` and `ramp_step_s` keywords; since 0.2.5 they replaced the `RAMP_STEP_mW` global) is kept because a jump up from 0 can lock the controller's loop at one power, intermittently (the controller facts are in `src/hardware_implementations/tcube_laser/CALIBRATION.md`); see `mc-extend/references/rig-causes.md` |
-| `CrystaLaser`, `VortranLaser`, `DaqTrLight` | `daq::DAQ` | **[guarantee, 0.2.7-DEV]** keyword `daq=NIdaq()` plus named outputs | **[guarantee, 0.2.7-DEV]** no persistent connection; one task per command. `setpower` is volts, recorded in `level_requested`; commands never read `properties.power`. |
+| `TCubeLaser` | `daq::NIdaq` for the modulation channel | keyword `daq=` | none, as above. `TCubeLaserControl.setupIO(laser)` creates the AO task and picks the **second** discovered device and its **second** AO channel unless you pass `daq_device=`/`ao_channel=` (those keywords, and a validating error message in place of a bare `BoundsError`, are v0.2.3); **[limitation, 0.2.7-DEV]** (since 0.2.7) `setupIO` and `set_modvoltage` are deprecated (`Base.depwarn`, so the warning shows only under `Pkg.test` or with `--depwarn=yes`), and a laser built with `modulator = NIDAQModulator(...)` is the replacement (`mc-extend`, "A light that takes a modulator"). **[guarantee, 0.2.7-DEV]** (since 0.2.5, traced) `initialize` in `ConstantPhotocurrent` mode is a protected sequence and never enables the output: it requires key switch and interlock; requires the controller's TIA range bits to match `tia_range`; zeroes the setpoint and disables the output first, in both modes and before the mode command (the TLD001 ignores setpoints while the output is off, so `light_on` sends the setpoint right after enabling and `light_off` zeroes it before disabling); leaves the max-current potentiometer at the highest position whose controller-reported limit is `<= max_current` and records that limit in `pd.max_current_clamp`; enters closed loop and verifies the status bit; writes and reads back the W/A factor. Any failed step throws and closes the handle. `light_on` and `setoutputpower!` refuse until the clamp is verified, and re-read the closed-loop bit and the controller's limit before emitting (not yet run on hardware); since 0.2.6 every fresh read of the controller sends its request twice (`request_twice`, `REQUEST_WAIT_S` = 0.1 s each), because the TLD001 answers one request behind (observed on hardware during 0.2.5's development; not re-run), so several calls take longer than in 0.2.5 (changelog 0.2.6, "Changed"). Both modes start Kinesis polling (50 ms), so the readbacks are cache reads. **[guarantee, observed on hardware during 0.2.5's development; not re-run]** with the output off and on: polling refreshes the setpoint read-back (the cache the driver confirms its setpoints against; whether it refreshes the readings caches that `measured_current`, `measured_photocurrent` and `loop_status` read is not established, `mc-system-design`, "Three kinds of state"), the pot needs adjust mode, setpoints take only with the output on, and closed loop ran with single-write setpoints. An optional ramp (the `ramp_step_mW` and `ramp_step_s` keywords; since 0.2.5 they replaced the `RAMP_STEP_mW` global) is kept because a jump up from 0 can lock the controller's loop at one power, intermittently (the controller facts are in `src/hardware_implementations/tcube_laser/CALIBRATION.md`); see `mc-extend/references/rig-causes.md` |
+| `CrystaLaser`, `VortranLaser`, `DaqTrLight` | `daq::DAQ` | **[guarantee, 0.2.7-DEV]** (since 0.2.7) keyword `daq=NIdaq()` plus named outputs | **[guarantee, 0.2.7-DEV]** no persistent connection; one task per command. `setpower` is volts, recorded in `level_requested`; commands never read `properties.power`. |
 
 Because `NIdaq` is a stateless handle, several devices each holding their own
 `NIdaq()` is fine. The only shared *connection* in the package is the
@@ -62,9 +63,9 @@ Each is confirmed by the exception sets in upstream `test/contract.jl`
 
 | Device | Missing | What the call does |
 |---|---|---|
-| `ThorCamCSCCamera` | `initialize` | throws (`AbstractInstrument` stub, `ErrorException("... not implemented ...")`); **[guarantee, 0.2.7-DEV]** `export_state` returns cached settings without SDK calls |
-| `Triggerscope4` | `export_state` | `TRIG` is outside `AbstractInstrument`, so there is no fallback at all: plain `MethodError` (suite: `hasmethod(export_state, Tuple{Triggerscope4})` is `false`) |
-| `MLSLM` | `initialize`, `shutdown`, `gui` | `MethodError` for all three; **[guarantee, 0.2.7-DEV]** `export_state` returns cached configuration attributes only, without SDK calls |
+| `ThorCamCSCCamera` | `initialize` | throws (`AbstractInstrument` stub, `ErrorException("... not implemented ...")`); **[guarantee, 0.2.7-DEV]** (since 0.2.7) `export_state` returns cached settings without SDK calls |
+| `Triggerscope4` | `export_state` | `TRIG` is outside `AbstractInstrument`, so there is no fallback at all: plain `MethodError` (suite: statements; `hasmethod(export_state, Tuple{Triggerscope4})` is `false`) |
+| `MLSLM` | `initialize`, `shutdown`, `gui` | `MethodError` for all three; **[guarantee, 0.2.7-DEV]** `export_state` returns cached configuration attributes only (since 0.2.7), without SDK calls |
 
 `TCubeLaser` was in this table up to v0.2.2: its only `export_state` was
 `export_state(::TCubeLaser, sth)`, with an unused second positional argument, so
@@ -80,9 +81,11 @@ at the next breaking release. The 0.2.5 export ADDS attribute names and keeps
 adds `power_reference` (`"laser output"`), `min_output_power_mW`,
 `max_output_power_mW`, `wa_calibration_W_per_A`, `tia_range_A`, `tec_stabilised`
 (`"true"`/`"false"`/`"unknown"`), `max_current_clamp_mA`,
-`output_power_requested_mW` and `photocurrent_requested_A`. `power` and
-`power_unit` are no longer written; a reader of older files must expect either
-set.
+`output_power_requested_mW` and `photocurrent_requested_A`. 0.2.4's keys are
+still written in both modes with 0.2.4's values, `power` (the deprecated
+uncalibrated guess, written only by open-loop `setcurrent!`) and `power_unit`
+included (traced from `export_state(::TCubeLaser)`); a reader of files written
+before 0.2.5 finds only 0.2.4's keys.
 
 `XEM` (Opal Kelly FPGA, module `OK_XEM`) is not an `AbstractInstrument` and so
 is absent from the API map, but it **does** extend the shared `initialize`
@@ -100,7 +103,7 @@ Resolving to a device-specific method is not the same as the operation working:
 - `stopmotion(::SimStage*)` prints a line and does nothing (executed).
 - `getposition(::SimStage3d)` returns the last assignment, a single `Float64`
   (`real_z`), not the `(x, y, z)` tuple the interface docstring promises
-  (suite: returned `3.0` after `move(s, 1.0, 2.0, 3.0)`). Read `real_*`
+  (suite: testing; returned `3.0` after `move(s, 1.0, 2.0, 3.0)`). Read `real_*`
   fields instead of the return value on the Sim stages.
 - `getposition(::N472)` returns the SDK success code and stores positions in
   `stage.pos`; `move(::N472, pos::Vector{Float64})` takes a vector, not
@@ -127,7 +130,8 @@ Resolving to a device-specific method is not the same as the operation working:
   implements, and the 2-arg call is a `MethodError`.
 - `setpower(::DiodeLaser, ::Float64)` (so on `TCubeLaser` and `SimDiodeLaser`)
   resolves: on a `ConstantCurrent` laser it forwards to `setcurrent!` with a
-  deprecation warning, on a `ConstantPhotocurrent` laser it throws, naming
+  deprecation warning (`Base.depwarn`: shown only under `Pkg.test` or with
+  `--depwarn=yes`), on a `ConstantPhotocurrent` laser it throws, naming
   `setoutputpower!` and `setlevel!` (traced, 0.2.5). The mode is fixed at
   construction, so a forwarded call never changes unit. `setlevel!` has methods only for
   `DiodeLaser` **[limitation, 0.2.7-DEV]**; on the plain lights it is the throwing stub.
@@ -139,7 +143,8 @@ Resolving to a device-specific method is not the same as the operation working:
 
 Owned by `mc-api-map`'s `references/gui-fields.md` (fields each panel reads,
 their types, per-device status). The two that still bite a system author:
-`gui(SimStage*())` throws `FieldError` on `stagelabel` (suite);
+`gui(SimStage*())` throws a missing-field error on `stagelabel` (a `FieldError`
+on Julia 1.12 and later, an `ErrorException` on 1.11; suite: testing);
 `gui(::Camera)` uses `capture`'s return value as the frame, so "Start Capture"
 misbehaves on `SimCamera`. `MLSLM` has no `gui`; `gui(::TRIG)` exists for
 `Triggerscope4`. **Fixed in 0.2.1:** `gui(::LightSource)` used to call
@@ -157,13 +162,13 @@ on open **[guarantee, 0.2.7-DEV]**.
   returns a `Task` (`@async`). `wait` it before reading the file or exiting.
   `save_attributes_and_data(filename, "Main", attributes, data, children)` is
   the synchronous form.
-- **[guarantee, 0.2.7-DEV]** `save_h5` copies the state tree synchronously before returning its task, then writes the
+- **[guarantee, 0.2.7-DEV]** (since 0.2.7) `save_h5` copies the state tree synchronously before returning its task, then writes the
   given path in place with HDF5's `"w"` open, following symlinks. Before writing it records whether the file the
   write lands on (a symlink's target) exists; every task failure, including an interrupt, logs once and rethrows.
   Cleanup removes a newly created target (the link's target for a symlink, keeping the link), or truncates an existing file to zero bytes in place, keeping its
   inode, owner, mode, ACLs and hard links. Cleanup failures log separately without hiding the original error.
   **[limitation, 0.2.7-DEV]** saves overwrite in place and are not atomic.
-- **[guarantee, 0.2.7-DEV]** Stage exports read the current position without moving and report `position_fresh`.
+- **[guarantee, 0.2.7-DEV]** (since 0.2.7) Stage exports read the current position without moving and report `position_fresh`.
   A disconnected stage/channel or failed read warns once with the error and exports the last-read position with false;
   simulated stages always report true. Negative MCL position/range returns throw before updating the cache.
 - `data` goes to a dataset named `data` in the node's group. For 2-D and 3-D
@@ -173,40 +178,67 @@ on open **[guarantee, 0.2.7-DEV]**.
   `(H, W, N)` arrays directly, `[y, x]` with `[1, 1]` top left (lab decision 0040,
   `docs/src/conventions.md`). Files written from 2026-01-29 until that change carry `"HW"` /
   `"HWN"`; a reader keeps accepting both.
-- `Bool` attributes are written as `Float64` (`is_on` reads back as `0.0`); suite.
+- `Bool` attributes are written as `Float64` (`is_on` reads back as `0.0`); suite: statements.
 - `Tuple` attributes fail in HDF5; the Sim stages `collect` their range tuples.
   Do the same in your own `attributes`.
 - A `children` value must be an `(attributes, data, children)` tuple, never a
   device object: `save_group_recursive` destructures it.
 
-## DAQ voltage-light state (0.2.7)
+## DAQ voltage-light state (since 0.2.7)
 
-**[guarantee, 0.2.7-DEV]** `CrystaLaser` and `DaqTrLight` stage an off `setpower` request
-without writing. The next successful `light_on` uses it and clears
-`level_staged`; with no staged request it writes and records 1.0 V clamped to
-the voltage range. Live changes do not stage the next enable. `initialize`
-and `shutdown` cancel a pending stage; `light_off` preserves it.
-Crysta and DaqTrLight preserve the last requested level for metadata; Vortran has no
-stage, and its `shutdown` writes AO 0 and records level 0.0. All three lights start
-with `level_requested = NaN`. Vortran writes AO even while off and enables
-through DO.
-**[guarantee, 0.2.7-DEV]** `export_state` reports `power` and `power_requested` from
-`level_requested`, unit `V`, voltage bounds and the selected channels. A supplied
-`properties` object is retained unchanged, without warning; default properties
-are in volts. Accepted commands update `properties.power` only when its unit
-is "V", and commands never read that field.
+This section is the one statement of these rules in the skills; the others point
+here. Traced from `nidaq/voltage_lights.jl` and `vortran_laser_488/interface_methods.jl`,
+and tested against a recording `DAQ` (`test/daq_lights.jl`), not on hardware. The
+single-line lights are `CrystaLaser` and `DaqTrLight`: one AO line carries both
+level and emission. `VortranLaser` has an AO level line and a DO enable line.
 
-**[guarantee, 0.2.7-DEV]** All writes use task cleanup in `finally`. State changes follow
-successful writes and cleanup. Any failed off/initialize/shutdown throws and
-records `is_on = true`; failed enable/live level writes try to darken, recording off only if
-that succeeds. Single-line `setpower` writes only when `line_enabled` is true;
-a successful enable sets it, and any off attempt, failed enable or failed live
-write clears it. Vortran failed DO off also tries AO 0, which lowers output
-but does not extinguish it; its shutdown tries both
-outputs independently and reports both failures in one error. **[limitation, 0.2.7-DEV]**
-these are commanded states, with no optical measurement or readback.
+**[guarantee, 0.2.7-DEV]** Requests and staging:
+
+- `setpower(light, v)` takes volts. A missing channel, or a `NaN` or out-of-range
+  `v` (`ArgumentError`), throws before anything is written or recorded. An
+  accepted request is kept in `level_requested` (`NaN` until the first) and
+  copied to `properties.power` only when `properties.power_unit == "V"`; no
+  command reads `properties.power`. A caller-supplied `properties` object is
+  kept unchanged, without warning; the default properties are in volts, with
+  the voltage bounds.
+- Single-line: `setpower` writes the line only while `line_enabled`, which only
+  a successful `light_on` sets; otherwise it stages the request
+  (`level_staged = true`) and writes nothing. `light_on` writes the staged
+  request or, with none staged, 1.0 V clamped to the voltage range, records it
+  and clears `level_staged`. A live level change does not stage the next
+  enable. `light_off` keeps `level_requested` and a pending stage; `initialize`
+  and `shutdown` cancel the stage and keep `level_requested`.
+- Vortran: `setpower` writes AO whether or not DO is enabled, and DO is the
+  enable; there is no stage.
+- `export_state` reports `power` and `power_requested` from `level_requested`,
+  `power_unit = "V"`, the voltage bounds and the selected channels. These are
+  commanded states, not optical measurements.
+
+**[guarantee, 0.2.7-DEV]** Writes and failures. Each command holds the light's lock,
+writes before it records, and deletes its DAQ task in `finally`; a failed
+deletion fails the command.
+
+- Single-line `initialize`, `light_off` and `shutdown` clear `line_enabled`, then
+  write AO 0: success records `is_on = false`; failure records `is_on = true`
+  (emission cannot be ruled out) and throws.
+- Vortran `initialize` and `light_off` write DO 0: success records
+  `is_on = false`, failure `is_on = true`. A failed `light_off` also tries AO 0,
+  recording level 0.0 if that works (AO 0 lowers the output but does not
+  extinguish it), and throws the DO error.
+- Vortran `shutdown` tries DO 0 and AO 0 independently. DO decides `is_on`
+  (`false` if its write worked, `true` if it failed); AO decides the level
+  (0.0 if its write worked, the previous request kept if it failed). It throws
+  one error naming each line that failed, so a `shutdown` that throws because
+  only AO failed leaves `is_on = false`.
+- A failed `light_on`, or a failed live level write, tries to darken (AO 0 on
+  the single-line lights, DO 0 on Vortran, which darkens after a failed level
+  write only while it is on), records `is_on = false` only if that worked, and
+  throws the original error. The single-line lights also leave `line_enabled`
+  cleared, so a later level change stages without writing.
+
 **[policy]** teardown uses `lights_off(lights)` to attempt every light; catch
-`MicroscopeControl.LightsOffError` to inspect its `failures` name/error pairs.
+`MicroscopeControl.LightsOffError` to inspect its `failures` name/error pairs, and
+treat every light named there as possibly emitting.
 
 **[limitation, 0.2.7-DEV]** A failed task deletion may leave the channel reserved and
 `light_off` throwing with `is_on = true`. DAQmx.jl's explicit `clear!` keeps
