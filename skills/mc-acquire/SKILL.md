@@ -108,7 +108,8 @@ flag, and the live view's `state`:
 - `:live`: `live_started` confirmed the start;
 - `:done`: `stop_reader!` has set it, just before it attempts the stop (if the start began), whether or not that
   stop then works; an interrupt between the two leaves the camera reserved, so it is still refused. A confirmed stop
-  ends the reservation; a start that was not confirmed, or a reader that failed, marks the camera unknown.
+  ends the reservation; a start that was not confirmed, or a reader that threw an ordinary error, marks the camera
+  unknown (the list beside the two sets says what marks a camera and what does not).
 
 A handle runs one live view: `start_reader!` refuses one that is not `:new`, and a call to `stop_reader!` on a `:done`
 handle does nothing. A handle left `:live` by an interrupted wait (case 1 of `stop_reader!`) still owes its stop: the
@@ -128,8 +129,9 @@ ReaderHandle(cam::Camera) = ReaderHandle(cam, nothing, Threads.Atomic{Bool}(fals
 
 Set the reader's flag, join the reader if one was launched, then, if the start began, attempt the stop, once; the handle
 ends `:done`, and a call on a `:done` handle does nothing. A confirmed stop ends the reservation; a start that was not
-confirmed, or a reader that failed, marks the camera unknown. `reader_error` is the reader's own failure (the camera is
-then marked unknown, as for any acquisition that threw) or `nothing`; `stop_error` is the ordinary error the stop threw,
+confirmed, or a reader that threw an ordinary error, marks the camera unknown (see the list beside the two sets).
+`reader_error` is the reader's own ordinary error (the camera is then marked unknown, as for any acquisition that
+threw) or `nothing`; a reader's interrupt is passed on instead; `stop_error` is the ordinary error the stop threw,
 or `nothing`; `camera_ok` is whether the camera is in service afterwards (`in_service`). A stop the driver does not
 confirm is logged (`attempt_stop!`) before anything is thrown. It throws in four cases:
 
@@ -461,7 +463,8 @@ end
 
 # Two sets, kept apart. CAMERA_UNKNOWN is the out-of-service mark: a camera in it is never started or read again (a
 # stop is still let through), and nothing removes it from the set: rebuild the camera. The one list of what marks it:
-# - any exception, an interrupt included, thrown inside `with_camera` or `with_stop`, or by their postcondition;
+# - any exception, an interrupt included, thrown by the function `with_camera` or `with_stop` runs, or by their
+#   postcondition (the refusal itself, which runs first, marks nothing);
 # - a postcondition that is false: `camera_ok` after a read, a snap or a stop (`attempt_stop!` logs that stop);
 # - an interrupt anywhere in a stop made through `attempt_stop!`;
 # - a live start that `live_started` did not confirm, marked at its stop;

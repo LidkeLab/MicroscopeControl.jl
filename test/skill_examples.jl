@@ -216,7 +216,7 @@ function misplaced_references!(out, ex, fname = :toplevel)
         return out
     end
     ex isa Expr || return out
-    if ex.head === :call && ex.args[1] === READER_LOOP        # a call of the reader loop: the walker judges where it is
+    if ex.head === :call && ex.args[1] === READER_LOOP && fname === :start_reader!   # the launch: the walker judges it
         foreach(a -> misplaced_references!(out, a, fname), ex.args[2:end])
         return out
     end
@@ -1061,6 +1061,10 @@ r = run_live(cam4; body = interrupt_reader)
 @test r.err isa InterruptException                              # plain, not a TaskFailedException
 @test cam4.is_running == false && in_service(cam4)              # the reader had ended, so the camera was stopped
 @test refused_new(reused(r))                                    # its handle again: refused, not the old interrupt
+quiet = RecLiveCam()                                            # the same on a recording camera: the retry calls nothing
+r = run_live(quiet; body = interrupt_reader)
+ncalls = length(quiet.calls)
+@test r.err isa InterruptException && refused_new(reused(r)) && length(quiet.calls) == ncalls
 failing = RecLiveCam(abort_mode = :throws)                      # the same, and the stop fails: logged, then rethrown
 r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(failing; body = interrupt_reader)
 @test r.err isa InterruptException && failing in CAMERA_UNKNOWN
@@ -1073,9 +1077,9 @@ for thrown in (InterruptException(), ErrorException("the wait timed out"))
     slow = RecLiveCam(frame_gate = gate)                        # a reader inside a long SDK call, until released
     h3 = ReaderHandle(slow)
     start_reader!(h3, Ref{Any}(nothing), 100)
-    timedwait(() -> :getlastframe in slow.calls, 10.0)          # the reader is inside its frame read
+    @test timedwait(() -> :getlastframe in slow.calls, 10.0) === :ok   # the reader is inside its frame read
     stopping = @async stop_reader!(h3)
-    timedwait(() -> h3.stop[], 10.0)                            # the stop has set the flag, and waits for the reader
+    @test timedwait(() -> h3.stop[], 10.0) === :ok              # the stop has set the flag, and waits for the reader
     schedule(stopping, thrown; error = true)                    # delivered to the task waiting for the reader
     local e = try join_task(stopping); nothing catch err err end
     @test thrown isa InterruptException ? e isa InterruptException : (e isa TaskFailedException && e.task.exception === thrown)
@@ -1529,6 +1533,8 @@ SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 135, prelude = "", checks = r
     @test rule("function f(h)\n    loop = read_frames!\n    @async loop(h, Ref{Any}(), 10)\nend") == [(:f, :read_frames!)]
     @test rule(starter("    loop = read_frames!\n" * guard * "    h.reader = @async loop(h, latest, fps)\n")) ==
           [(:start_reader!, :read_frames!)]                                                     # an alias, even here
+    @test rule("@async read_frames!(h, Ref{Any}(), 10)") == [(:toplevel, :read_frames!)]          # a top-level launch
+    @test !isempty(rule("let h = nothing\n    @async read_frames!(h, Ref{Any}(), 10)\nend"))      # or one in a let
     @test rule("function read_frames!(h, latest, fps)\n    t = @task getlastframe(h.cam)\n    yield(t)\nend") ==
           [(:read_frames!, :task)]
     @test isempty(rule("stop_reader!(h) = delete!(CAMERA_LIVE, h.cam)\nlive_view!(h) = (start_reader!(h); stop_reader!(h))"))
