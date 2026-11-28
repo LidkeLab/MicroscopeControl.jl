@@ -370,9 +370,10 @@ touches it; `ThorcamDCXCamera` and `ThorCamCSCCamera` have none, for the reasons
 `InterruptException` is never logged and dropped by the example's own code: one that lands in the caller's own task
 unwinds it, one that lands in a task the example joins is rethrown at the join, and `release!` first finishes shutting
 down the other devices. The DCAM4 driver can lose one: in the sequence poller nobody joins, in the `catch` in the
-cleanup of `getdata` and `capture`, and, with its SDK tracing enabled, in `trace_line`. And from Julia 1.12, Julia's
-logging can lose one that lands while the logger writes a record, such as the failed stop `acquire!` logs, for a logger
-that catches exceptions, as the default console logger does (`mc-acquire`'s limitations).
+cleanup of `getdata` and `capture`, and, with its SDK tracing enabled, in `trace_line`. And Julia's logging can lose
+one while a record is logged, such as the failed stop `acquire!` logs, for a logger that catches exceptions, as the
+default console logger does: on every version while the message is built, and from Julia 1.12 also while the logger
+writes the record (`mc-acquire`'s limitations).
 
 **[policy]** The upstream fix is concrete: the camera interface should require `sequence` (and `live`) to **return
 the task it spawns**, or expose a join, and report a failed stop or release as a failure, so a system can establish
@@ -395,16 +396,16 @@ retained record, and only another `set_state` can change it.
 against the fake DCAM SDK); any other camera, `ThorcamDCXCamera` and `ThorCamCSCCamera` included, is refused by
 `acquire!`, and for DCAM4 `camera_ok` reports only what the driver reports (`mc-acquire`'s limitation on `getdata`'s
 cleanup), and a Ctrl-C reaches the caller directly in its own task or through a join, and can be lost in the driver's
-places, and, from Julia 1.12, in Julia's logging while a failed stop is logged (`mc-acquire`'s limitations on the
-sequence poller, the cleanup, SDK tracing and logging). Lights and stages: those whose `initialize` and `shutdown` throw
-when they fail. The shutdown rule is a floor, not knowledge of the drivers: `release!` treats a `shutdown` that returns
-as a close that worked, and some drivers report a failed close through a return value instead
-(`shutdown(::ThorCamCSCCamera)` returns the two SDK status codes; `shutdown(::DCAM4Camera)` returns the `dcamapi_uninit`
-code, and closes the device whether or not its stop worked, recording that in `last_error`), which `release!` discards.
-A driver's `shutdown` can also close its handle even when it throws (`TCubeLaser` without a modulator: a failed disable
-throws after the connection is closed, and the driver's docstring has the caller reconnect with `initialize` to retry
-the disable, which this example refuses while the laser is stuck, so rebuild instead) (traced). Check the drivers you
-hold, and record what their `shutdown` reports.
+places, and in Julia's logging while a failed stop is logged (while its message is built, on every version; while the
+logger writes it, from Julia 1.12) (`mc-acquire`'s limitations on the sequence poller, the cleanup, SDK tracing and
+logging). Lights and stages: those whose `initialize` and `shutdown` throw when they fail. The shutdown rule is a floor,
+not knowledge of the drivers: `release!` treats a `shutdown` that returns as a close that worked, and some drivers
+report a failed close through a return value instead (`shutdown(::ThorCamCSCCamera)` returns the two SDK status codes;
+`shutdown(::DCAM4Camera)` returns the `dcamapi_uninit` code, and closes the device whether or not its stop worked,
+recording that in `last_error`), which `release!` discards. A driver's `shutdown` can also close its handle even when it
+throws (`TCubeLaser` without a modulator: a failed disable throws after the connection is closed, and the driver's
+docstring has the caller reconnect with `initialize` to retry the disable, which this example refuses while the laser is
+stuck, so rebuild instead) (traced). Check the drivers you hold, and record what their `shutdown` reports.
 
 <!-- mc-test: bench -->
 ```julia

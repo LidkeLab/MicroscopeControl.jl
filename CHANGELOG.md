@@ -285,12 +285,12 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
     `stop_camera!`, and the `getlastframe` in `read_frames!`, the reader loop `start_reader!` launches; and only the
     functions that own them refer to the failure mark and the live view's reservation. A live view reserves its
     camera, in a set apart from the failure mark, before `live`, and ends the reservation only on its own confirmed
-    stop, so a Ctrl-C at any instant leaves the camera unstarted, reserved, marked or confirmed stopped; a failure (an
-    unconfirmed start or a reader that threw included) marks the camera unknown, which nothing removes, so it
-    outlasts the live view; each set is defined once, so evaluating the examples again keeps every mark; and a stop
-    whose wait for the reader is interrupted while the reader still runs leaves the reader and the camera alone,
-    reserved. A throw
-    from a light's level setter, `light_on` or `light_off` does not mean the light is off.
+    stop, so a Ctrl-C at any instant leaves the camera unstarted, reserved, marked or confirmed stopped; a failure
+    marks the camera unknown, which nothing removes, so it outlasts the live view, and what marks a camera and what
+    does not (a reader's interrupt, a DCAM4 frame read reported failed) is listed once, beside the two sets; each set
+    is defined once, so evaluating the examples again keeps every mark and reservation; and a stop whose wait for the
+    reader is interrupted while the reader still runs leaves the reader and the camera alone, reserved. A throw from
+    a light's level setter, `light_on` or `light_off` does not mean the light is off.
   - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to the
     tag in the skills' `Installed from` line (for a `-DEV` install, the commit the instrument was tested with,
     from its Manifest or its checkout). The example system moves a device whose `initialize` or `shutdown` threw to
