@@ -79,13 +79,14 @@ function stated_values(code::AbstractString)
     return out
 end
 
-# The camera calls the examples may make only inside `with_camera` (mc-acquire, "Finite ordered sequence"), and the two
-# exceptions, each with its reason:
-# - the reader loop: a `getlastframe` inside the `@async` task `start_reader!` launches, which `stop_reader!` joins
-#   before it stops the camera through `stop_camera!`;
-# - `refuse = false`, which lets a stop through on a camera marked unknown: accepted only in a `stop_camera!` method.
+# The camera calls the examples may make only inside a wrapper (mc-acquire, "Finite ordered sequence"): `with_camera`,
+# which refuses a camera marked unknown and has no switch to turn that off, or `with_stop`, which lets a stop through
+# and is accepted only inside a `stop_camera!` method. The one other exception: a `getlastframe` inside `read_frames!`,
+# the reader loop, which only `start_reader!` may launch, inside a task and after its `with_camera` in the code;
+# `stop_reader!` joins it before it stops the camera.
 const CAMERA_CALLS = (:live, :sequence, :capture, :getdata, :getlastframe, :abort)
-const READER_LOOP = (:start_reader!, :getlastframe)
+const CAMERA_WRAPPERS = (:with_camera, :with_stop)
+const READER_LOOP = :read_frames!
 
 last_name(f) = f isa Symbol ? f : f isa Expr && f.head === :. && f.args[end] isa QuoteNode ? f.args[end].value : nothing
 callee_name(ex) = ex isa Expr && ex.head === :call ? last_name(ex.args[1]) : nothing
@@ -106,20 +107,22 @@ function signature_defaults(sig, out = Any[])
     return out
 end
 
-# A `with_camera` call's eagerly evaluated arguments, its function argument (the do-block's, or a lambda), and whether
-# it passes `refuse` other than `true`.
+# The wrapper a call is (`with_camera` or `with_stop`, called or with a do-block), or `nothing`.
+function wrapper_name(ex)
+    ex isa Expr || return nothing
+    name = ex.head === :do ? callee_name(ex.args[1]) : callee_name(ex)
+    return name in CAMERA_WRAPPERS ? name : nothing
+end
+
+# A wrapper call's eagerly evaluated arguments, keywords included, and its function argument (the do-block's, or a
+# lambda).
 function wrapper_parts(ex)
     call, fn = ex.head === :do ? (ex.args[1], Any[ex.args[2]]) : (ex, Any[])
     eager = Any[]
-    off = false
     for a in call.args[2:end]
         if a isa Expr && a.head === :parameters
-            for p in a.args
-                p isa Expr && p.head === :kw && p.args[1] === :refuse && p.args[2] !== true && (off = true)
-                push!(eager, p isa Expr && p.head === :kw ? p.args[2] : p)
-            end
+            append!(eager, [p isa Expr && p.head === :kw ? p.args[2] : p for p in a.args])
         elseif a isa Expr && a.head === :kw
-            a.args[1] === :refuse && a.args[2] !== true && (off = true)
             push!(eager, a.args[2])
         elseif is_lambda(a)
             push!(fn, a)
@@ -127,38 +130,43 @@ function wrapper_parts(ex)
             push!(eager, a)
         end
     end
-    return eager, fn, off
+    return eager, fn
 end
-is_wrapper(ex) = ex isa Expr && ((ex.head === :do && callee_name(ex.args[1]) === :with_camera) ||
-                                 (ex.head === :call && callee_name(ex) === :with_camera))
 
-# Walk one function's code. `found` collects camera calls outside the guard, `inside` those inside it; `in_task` is
-# whether the walk is inside an `@async`/`@spawn` task.
-function walk_camera_calls!(found, inside, fname, ex; guarded = false, in_task = false)
+# Walk one function's code, in source order. `found` collects camera calls outside a wrapper (and a misplaced
+# `with_stop` or reader launch), `inside` those inside one; `in_task` is whether the walk is inside an
+# `@async`/`@spawn` task; `seen[]` whether a `with_camera` has been walked yet, so a reader launch can be checked to
+# come after it.
+function walk_camera_calls!(found, inside, fname, ex, seen; guarded = false, in_task = false)
     ex isa Expr || return
-    if is_wrapper(ex)
-        eager, fn, off = wrapper_parts(ex)
-        foreach(a -> walk_camera_calls!(found, inside, fname, a; guarded, in_task), eager)   # they run before the guard
-        off && fname !== :stop_camera! && push!(found, :refuse)                               # the off switch, misplaced
-        for f in fn
-            walk_camera_calls!(found, inside, fname, f; guarded = guarded || !off || fname === :stop_camera!, in_task)
-        end
+    wrapper = wrapper_name(ex)
+    if wrapper !== nothing
+        eager, fn = wrapper_parts(ex)
+        foreach(a -> walk_camera_calls!(found, inside, fname, a, seen; guarded, in_task), eager)   # before the guard
+        allowed = wrapper === :with_camera || fname === :stop_camera!
+        allowed || push!(found, :with_stop)                                                      # a stop, misplaced
+        foreach(f -> walk_camera_calls!(found, inside, fname, f, seen; guarded = guarded || allowed, in_task), fn)
+        wrapper === :with_camera && (seen[] = true)
         return
     end
     name = callee_name(ex)
     if name in CAMERA_CALLS
-        allowed = (fname, name) == READER_LOOP && in_task
-        guarded || allowed ? push!(inside, name) : push!(found, name)
+        exempt = name === :getlastframe && fname === READER_LOOP
+        guarded || exempt ? push!(inside, name) : push!(found, name)
+    elseif name === READER_LOOP
+        launched = fname === :start_reader! && in_task && seen[]
+        launched ? push!(inside, name) : push!(found, name)
     end
     task = in_task || is_task_macro(ex)
-    foreach(a -> walk_camera_calls!(found, inside, fname, a; guarded, in_task = task), ex.args)
+    foreach(a -> walk_camera_calls!(found, inside, fname, a, seen; guarded, in_task = task), ex.args)
 end
 
 # Every function defined in `code` (long or short form, at any depth, documented or not), as
-# `(offenders, wrapped)`: `offenders` holds (function, call) for each camera call that runs outside `with_camera`
-# (in the body, in a default argument, or in an eager argument of `with_camera`), and (function, :refuse) for a
-# `refuse = false` outside `stop_camera!`; `wrapped` names the functions whose camera calls are all guarded. A method
-# of a camera call itself is a driver, not a caller, and is not checked.
+# `(offenders, wrapped)`: `offenders` holds (function, call) for each camera call that runs outside a wrapper (in the
+# body, in a default argument, or in an eager argument of a wrapper), (function, :with_stop) for a `with_stop` outside
+# `stop_camera!`, and (function, :read_frames!) for a reader launch anywhere but in a task in `start_reader!` after
+# its `with_camera`; `wrapped` names the functions whose camera calls are all guarded. A method of a camera call itself
+# is a driver, not a caller, and is not checked.
 function camera_call_report(code::AbstractString)
     offenders = Tuple{Symbol,Symbol}[]
     wrapped = Set{Symbol}()
@@ -167,9 +175,9 @@ function camera_call_report(code::AbstractString)
         if ex.head in (:function, :(=)) && length(ex.args) == 2
             name = signature_name(ex.args[1])
             if name !== nothing && !(name in CAMERA_CALLS)
-                found, inside = Symbol[], Symbol[]
-                foreach(d -> walk_camera_calls!(found, inside, name, d), signature_defaults(ex.args[1]))
-                walk_camera_calls!(found, inside, name, ex.args[2])
+                found, inside, seen = Symbol[], Symbol[], Ref(false)
+                foreach(d -> walk_camera_calls!(found, inside, name, d, seen), signature_defaults(ex.args[1]))
+                walk_camera_calls!(found, inside, name, ex.args[2], seen)
                 foreach(c -> push!(offenders, (name, c)), unique(found))
                 isempty(found) && !isempty(inside) && push!(wrapped, name)
             end
@@ -278,7 +286,7 @@ const SKILL_GROUP_USES = Dict("acquire-reader" => ["camera"], "bench" => ["camer
 # A group's fences: those of the groups it uses, then its own.
 skill_group_fences(groups, name) = vcat((groups[u] for u in get(SKILL_GROUP_USES, name, String[]))..., get(groups, name, []))
 
-SKILL_EXAMPLE_GROUPS["bench"] = (min_passes = 103, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["bench"] = (min_passes = 105, prelude = "", checks = raw"""
 mkcam() = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 message(e) = sprint(showerror, e)
 stuck_devices(sys) = first.(sys.stuck)
@@ -309,7 +317,7 @@ MC.initialize(c::RecordingCam) = (push!(c.calls, :initialize); nothing)
 MC.shutdown(c::RecordingCam) = (push!(c.calls, :shutdown); nothing)
 MC.CameraInterface.abort(c::RecordingCam) = (push!(c.calls, :abort); nothing)
 read_sequence(c::RecordingCam, n::Integer) = (push!(c.calls, :read); zeros(UInt16, 2, 3, n))
-stop_camera!(c::RecordingCam) = (push!(c.calls, :stop); nothing)
+stop_camera!(c::RecordingCam) = (push!(c.calls, :stop); true)
 camera_ok(c::RecordingCam) = (push!(c.calls, :camera_ok); true)
 struct NotOkBenchCam <: Camera                   # records calls; the fallback stop, and camera_ok says no
     calls::Vector{Symbol}
@@ -493,14 +501,14 @@ end
     for (mode, running) in ((:keeps_running, true), (:clears_flag, false))
         cam = FailingCam(abort_mode = mode)
         bad = held(cam)
-        e = try acquire!(bad, 3) catch e e end
+        e = @test_logs (:error, r"the stop after a failed acquisition: the camera is not known stopped") match_mode = :any (try acquire!(bad, 3) catch e e end)
         @test message(e) == "SDK: read failed"
         @test cam.aborts == 1 && cam.is_running == running && unknown(bad)
     end
 
     cam = FailingCam(abort_mode = :clears_then_throws)
     bad = held(cam)
-    e = @test_logs (:error, r"the stop after a failed acquisition threw") match_mode = :any (try acquire!(bad, 3) catch e e end)
+    e = @test_logs (:error, r"the stop after a failed acquisition: the camera is not known stopped") match_mode = :any (try acquire!(bad, 3) catch e e end)
     @test message(e) == "SDK: read failed"
     @test camera_ok(cam) && unknown(bad)                          # camera_ok would say yes; the throws decided
 
@@ -764,107 +772,158 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 31, prelude = FAKE_DCAM_PRELUDE * """
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 46, prelude = FAKE_DCAM_PRELUDE * """
 cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 latest = Ref{Any}(nothing)
 fps = 100
 """, checks = raw"""
 @test latest[] !== nothing && size(latest[]) == (32, 64)       # the reader read frames until stopped
-@test istaskdone(reader) && !istaskfailed(reader)               # joined, and it ended on its own flag
+@test istaskdone(h.reader) && !istaskfailed(h.reader)           # joined, and it ended on its own flag
 @test outcome[] == (reader_error = nothing, stop_error = nothing, camera_ok = true) && !(cam in CAMERA_UNKNOWN)
-@test cam.is_running == false
-cam2 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
-live(cam2)
-failing = @async error("reader: SDK read failed")               # a reader that throws
-r = stop_reader!(cam2, failing, Threads.Atomic{Bool}(false))
-@test r.reader_error isa TaskFailedException && occursin("reader: SDK read failed", sprint(showerror, r.reader_error))
-@test r.stop_error === nothing && r.camera_ok && cam2.is_running == false   # the camera was still stopped
-mutable struct StopFailsCam <: Camera                           # its stop throws; mutable, so each is its own camera
-    kind::Symbol                                                # :error or :interrupt
-end
-StopFailsCam() = StopFailsCam(:error)
-stop_camera!(c::StopFailsCam) = with_camera(c; refuse = false) do
-    c.kind === :interrupt ? throw(InterruptException()) : error("SDK: stop failed")
-end
-camera_ok(::StopFailsCam) = true                                # it would say yes; the throw decides
-done_reader = @async nothing
-failsstop = StopFailsCam()
-r = @test_logs (:error, r"not known stopped") match_mode = :any stop_reader!(failsstop, done_reader, Threads.Atomic{Bool}(false))
-@test r.reader_error === nothing && r.stop_error isa ErrorException && r.camera_ok == false   # logged, and returned
-@test failsstop in CAMERA_UNKNOWN                               # a stop that threw marks the camera
-intstop = StopFailsCam(:interrupt)                              # a stop that throws an interrupt, on its own camera
-e = @test_logs min_level = Base.CoreLogging.Warn (try stop_reader!(intstop, @async(nothing), Threads.Atomic{Bool}(false)); nothing catch err err end)
-@test e isa InterruptException && intstop in CAMERA_UNKNOWN     # rethrown, not logged, and the camera marked
+@test cam.is_running == false && h.stopped
+live(cam)
+@test stop_reader!(h).stop_error === nothing && cam.is_running == true   # a second stop_reader!(h) stops nothing
+abort(cam)
 
-# start_reader! refuses a camera marked unknown, here by a standalone stop that returned with camera_ok false.
-struct LiveRecCam <: Camera                                     # records every call made to it
-    calls::Vector{Symbol}
+Base.@kwdef mutable struct RecLiveCam <: Camera                 # records every call made to it; each step fails as chosen
+    calls::Vector{Symbol} = Symbol[]
+    live_mode::Symbol = :works                                  # :works, :throws (an ordinary error) or :interrupt
+    started::Any = true                                         # what live_started says, or :interrupt to throw one
+    abort_mode::Symbol = :works                                 # :works, :throws or :interrupt
+    stopped::Bool = true                                        # what camera_ok says
+    frame_fails::Bool = false                                   # getlastframe throws, as an SDK read that failed
 end
-MC.CameraInterface.live(c::LiveRecCam) = (push!(c.calls, :live); nothing)
-MC.CameraInterface.getlastframe(c::LiveRecCam) = (push!(c.calls, :getlastframe); nothing)
-MC.CameraInterface.abort(c::LiveRecCam) = (push!(c.calls, :abort); nothing)
-camera_ok(c::LiveRecCam) = (push!(c.calls, :camera_ok); false)
-lrc = LiveRecCam(Symbol[])
-stop_camera!(lrc)
-@test lrc in CAMERA_UNKNOWN
-empty!(lrc.calls)
-e = try start_reader!(lrc, Ref{Any}(nothing), 100); nothing catch err err end
-@test e isa ErrorException && startswith(e.msg, "camera unavailable: it is marked unknown")
-@test isempty(lrc.calls)                                        # no call reached the camera
-notlive = LiveRecCam(Symbol[])                                  # live returns, and live_started says no
-e = try start_reader!(notlive, Ref{Any}(nothing), 100); nothing catch err err end
-sleep(0.05)
-@test e isa ErrorException && notlive in CAMERA_UNKNOWN          # marked
-@test notlive.calls == [:live, :abort, :camera_ok]              # stopped (the fallback stop), and no reader launched
+fail_as(mode, what) = mode === :throws ? error("SDK: $what failed") : mode === :interrupt ? throw(InterruptException()) : nothing
+MC.CameraInterface.live(c::RecLiveCam) = (push!(c.calls, :live); fail_as(c.live_mode, "live"))
+MC.CameraInterface.getlastframe(c::RecLiveCam) = (push!(c.calls, :getlastframe); c.frame_fails && error("reader: SDK read failed"); nothing)
+MC.CameraInterface.abort(c::RecLiveCam) = (push!(c.calls, :abort); fail_as(c.abort_mode, "stop"))
+live_started(c::RecLiveCam) = (push!(c.calls, :live_started); c.started === :interrupt ? throw(InterruptException()) : c.started)
+camera_ok(c::RecLiveCam) = (push!(c.calls, :camera_ok); c.stopped)
+
+# The recipe above, on any camera: the handle before live, the stop in a finally. `before()` runs first in the try,
+# `body(h)` once the reader is up. Returns the handle, the outcome (`nothing` when the stop threw) and what was thrown.
+function run_live(c; before = () -> nothing, body = h -> sleep(0.05))
+    h = ReaderHandle(c)
+    outcome = Ref{Any}(nothing)
+    err = try
+        try
+            before()
+            start_reader!(h, Ref{Any}(nothing), 100)
+            body(h)
+        finally
+            outcome[] = stop_reader!(h)
+        end
+        nothing
+    catch e
+        e
+    end
+    return (; h, outcome = outcome[], err)
+end
+
+# A reader that throws: still joined, the camera still stopped, and the outcome carries the reader's error.
+r = run_live(RecLiveCam(frame_fails = true))
+@test r.err === nothing && r.outcome.reader_error isa TaskFailedException
+@test occursin("reader: SDK read failed", sprint(showerror, r.outcome.reader_error))
+@test r.outcome.stop_error === nothing && r.outcome.camera_ok && r.h.cam.calls[end-1:end] == [:abort, :camera_ok]
+# A stop that throws an ordinary error: in the outcome, logged, and the camera marked.
+r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(RecLiveCam(abort_mode = :throws))
+@test r.err === nothing && r.outcome.stop_error isa ErrorException && r.outcome.camera_ok == false
+@test r.h.cam in CAMERA_UNKNOWN
+# A stop that throws an interrupt: the camera marked, the interrupt rethrown, nothing logged at warning level or above.
+r = @test_logs min_level = Base.CoreLogging.Warn run_live(RecLiveCam(abort_mode = :interrupt))
+@test r.err isa InterruptException && r.h.cam in CAMERA_UNKNOWN
+
+# A camera marked unknown is refused before any call reaches it, and the finally's stop calls nothing either.
+marked = RecLiveCam(); mark_unknown!(marked)
+r = run_live(marked)
+@test r.err isa ErrorException && startswith(r.err.msg, "camera unavailable: it is marked unknown")
+@test isempty(marked.calls) && !r.h.live_called
+early = RecLiveCam()                                            # an interrupt before start_reader!: nothing to stop
+r = run_live(early; before = () -> throw(InterruptException()))
+@test r.err isa InterruptException && isempty(early.calls) && !(early in CAMERA_UNKNOWN)
+
+# A live start that fails: the camera marked, a stop attempted, no reader launched.
+notlive = RecLiveCam(started = false)                           # live returns, and live_started says no
+r = @test_logs min_level = Base.CoreLogging.Warn run_live(notlive)   # a stop the driver confirms is not logged
+@test r.err isa ErrorException && occursin("did not start", r.err.msg) && occursin("a stop was attempted", r.err.msg)
+@test notlive.calls == [:live, :live_started, :abort, :camera_ok] && notlive in CAMERA_UNKNOWN && r.h.reader === nothing
+unconfirmed = RecLiveCam(started = false, stopped = false)      # the same, and the stop returns unconfirmed
+r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(unconfirmed)
+@test occursin("a stop was attempted", r.err.msg) && unconfirmed in CAMERA_UNKNOWN && r.h.reader === nothing
+throws = RecLiveCam(live_mode = :throws)                        # live throws: the stop runs, live's error comes out
+r = run_live(throws)
+@test r.err isa ErrorException && r.err.msg == "SDK: live failed"
+@test throws.calls == [:live, :abort, :camera_ok] && throws in CAMERA_UNKNOWN && r.h.reader === nothing
+intstop = RecLiveCam(started = false, abort_mode = :interrupt)  # the stop after a failed start throws an interrupt
+r = run_live(intstop)
+@test r.err isa InterruptException && intstop.calls == [:live, :live_started, :abort] && intstop in CAMERA_UNKNOWN
+inlive = RecLiveCam(live_mode = :interrupt)                     # an interrupt inside live
+r = run_live(inlive)
+@test r.err isa InterruptException && inlive.calls == [:live, :abort, :camera_ok] && inlive in CAMERA_UNKNOWN
+between = RecLiveCam(started = :interrupt)                      # an interrupt in live_started, after live returned
+r = run_live(between)
+@test r.err isa InterruptException && between.calls == [:live, :live_started, :abort, :camera_ok]
+@test between in CAMERA_UNKNOWN && r.h.reader === nothing
+mutable struct WindowCam <: Camera                              # its start is confirmed, then an interrupt lands in
+    calls::Vector{Symbol}                                       # start_reader!'s own check, before the reader launch
+    armed::Bool
+    fired::Bool
+end
+MC.CameraInterface.live(c::WindowCam) = (push!(c.calls, :live); nothing)
+MC.CameraInterface.getlastframe(c::WindowCam) = (push!(c.calls, :getlastframe); nothing)
+MC.CameraInterface.abort(c::WindowCam) = (push!(c.calls, :abort); nothing)
+live_started(c::WindowCam) = (c.armed = true; true)
+camera_ok(c::WindowCam) = true
+Base.in(c::WindowCam, s::Base.IdSet{Camera}) =                 # the hook: the first look at the mark after the start
+    c.armed ? (c.armed = false; c.fired = true; throw(InterruptException())) : invoke(in, Tuple{Any,Base.IdSet}, c, s)
+window = WindowCam(Symbol[], false, false)
+r = run_live(window)
+@test window.fired && r.err isa InterruptException && r.h.reader === nothing
+@test window.calls == [:live, :abort] && !(window in CAMERA_UNKNOWN)   # the stop was reached; stopped, so in service
+
 FK.reset!(); FK.codes["dcambuf_alloc"] = DCAM4.DCAMERR_NOMEMORY # DCAM4 over the fake SDK: a failed allocation
 nolive = fake_dcam(DCAM4.LIVE)
-e = try start_reader!(nolive, Ref{Any}(nothing), 100); nothing catch err err end
-sleep(0.05)
-@test e isa ErrorException && occursin("did not start", e.msg) && nolive in CAMERA_UNKNOWN && !nolive.is_running
-@test !("dcamwait_open" in FK.calls)                            # no reader: its getlastframe would open a frame wait
+r = run_live(nolive)
+@test r.err isa ErrorException && occursin("did not start", r.err.msg) && nolive in CAMERA_UNKNOWN && !nolive.is_running
+@test r.h.reader === nothing && !("dcamwait_open" in FK.calls)  # no reader: its getlastframe would open a frame wait
 FK.reset!()
 half = fake_dcam(DCAM4.LIVE)                                    # an error reported while the capture went ahead
 FK.on_start[] = mode -> (half.last_error = DCAM4.DCAMERR_NOTREADY; FK.status[] = DCAM4.DCAMCAP_STATUS_BUSY)
-e = try start_reader!(half, Ref{Any}(nothing), 100); nothing catch err err end
-sleep(0.05)
-@test e isa ErrorException && half in CAMERA_UNKNOWN
+r = run_live(half)
+@test r.err isa ErrorException && half in CAMERA_UNKNOWN && r.h.reader === nothing
 @test !half.is_running && "dcamcap_stop" in FK.calls && !("dcamwait_open" in FK.calls)   # stopped, and no reader
 FK.reset!()
-
-# A reader that died of a Ctrl-C and a stop that fails: the interrupt is rethrown, and the failed stop logged first.
-dead = @async sleep(5)
-yield(); schedule(dead, InterruptException(); error = true)
-timedwait(() -> istaskdone(dead), 5.0)
-failsstop2 = StopFailsCam()                                     # its own camera: mutable, so not the one above
-@test !(failsstop2 in CAMERA_UNKNOWN)
-e = @test_logs (:error, r"not known stopped") match_mode = :any (try stop_reader!(failsstop2, dead, Threads.Atomic{Bool}(false)); nothing catch err err end)
-@test e isa InterruptException && failsstop2 in CAMERA_UNKNOWN
+stuck = fake_dcam(DCAM4.LIVE)                                   # the same, and then the stop fails too
+FK.on_start[] = mode -> (stuck.last_error = DCAM4.DCAMERR_NOTREADY; FK.status[] = DCAM4.DCAMCAP_STATUS_BUSY)
+FK.codes["dcamcap_stop"] = DCAM4.DCAMERR_NOTREADY
+r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(stuck)
+@test occursin("a stop was attempted", r.err.msg) && stuck in CAMERA_UNKNOWN && r.h.reader === nothing
+@test stuck.is_running && stuck.last_error == DCAM4.DCAMERR_NOTREADY && "dcamcap_stop" in FK.calls   # still running
+FK.reset!()
 
 # A Ctrl-C lands in the reader, which wakes every frame: the body runs on, and the join rethrows it, plainly.
+interrupt_reader(h) = (sleep(0.05); schedule(h.reader, InterruptException(); error = true); sleep(0.05))
 cam4 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
-live(cam4)
-stop4 = Threads.Atomic{Bool}(false)
-reader4 = @async while !stop4[]
-    getlastframe(cam4)
-    sleep(0.01)
-end
-sleep(0.05)
-schedule(reader4, InterruptException(); error = true)
-e = try stop_reader!(cam4, reader4, stop4); nothing catch err err end
-@test e isa InterruptException                                  # plain, not a TaskFailedException
+r = run_live(cam4; body = interrupt_reader)
+@test r.err isa InterruptException                              # plain, not a TaskFailedException
 @test cam4.is_running == false && !(cam4 in CAMERA_UNKNOWN)     # the reader had ended, so the camera was stopped
+failing = RecLiveCam(abort_mode = :throws)                      # the same, and the stop fails: logged, then rethrown
+r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(failing; body = interrupt_reader)
+@test r.err isa InterruptException && failing in CAMERA_UNKNOWN
 
 # The wait itself ends with an exception while the reader still runs (a Ctrl-C, or anything else).
 for thrown in (InterruptException(), ErrorException("the wait timed out"))
     cam3 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
     live(cam3)
-    stuck_reader = @async sleep(3)                              # a reader inside a long SDK call: it ignores its flag
-    stopping = @async stop_reader!(cam3, stuck_reader, Threads.Atomic{Bool}(false))
+    h3 = ReaderHandle(cam3)
+    h3.live_called = true
+    h3.reader = @async sleep(3)                                 # a reader inside a long SDK call: it ignores its flag
+    stopping = @async stop_reader!(h3)
     sleep(0.1)
     schedule(stopping, thrown; error = true)                    # delivered to the task waiting for the reader
     local e = try join_task(stopping); nothing catch err err end
     @test thrown isa InterruptException ? e isa InterruptException : (e isa TaskFailedException && e.task.exception === thrown)
-    @test !istaskdone(stuck_reader) && cam3.is_running == true  # the camera was left alone
+    @test !istaskdone(h3.reader) && cam3.is_running == true     # the camera was left alone
     @test cam3 in CAMERA_UNKNOWN                                # and marked unknown
 end
 """)
@@ -911,7 +970,7 @@ SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (min_passes = 6, prelude = "using Mic
 @test fieldtype(DCAM4Camera, :exposure_time) == Float64 && fieldtype(ThorcamDCXCamera, :exposure_time) == Float64
 @test ThorcamDCXCamera().exposure_time == 0.01                                  # the constructor is pure
 """)
-SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 56, prelude = FAKE_DCAM_PRELUDE, checks = raw"""
+SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 68, prelude = FAKE_DCAM_PRELUDE, checks = raw"""
 cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 t = @elapsed stack = read_sequence(cam, 5)
 @test size(stack) == (32, 64, 5) && eltype(stack) == UInt16
@@ -934,7 +993,7 @@ timer = SIM_TIMER[slow]
 abort(slow)
 @test slow.is_running == false && !istaskdone(timer)                           # abort leaves the timer running
 @test camera_ok(slow) == false                                                  # so the camera is not yet known stopped
-stop_camera!(slow)
+@test stop_camera!(slow) === true                                               # the stop, confirmed
 @test istaskdone(timer) && camera_ok(slow)                                      # stop_camera! waited for it
 @test size(fetch(reading)) == (32, 64, 20)
 struct UnknownCam <: Camera end
@@ -950,8 +1009,21 @@ end
 MC.CameraInterface.abort(c::NotOkCam) = (push!(c.calls, :abort); nothing)
 camera_ok(c::NotOkCam) = (push!(c.calls, :camera_ok); false)
 nok = NotOkCam(Symbol[])
-stop_camera!(nok)                                                               # a standalone stop, the fallback's
+@test stop_camera!(nok) === false                                               # a standalone stop, the fallback's
 @test nok.calls == [:abort, :camera_ok] && nok in CAMERA_UNKNOWN                 # it returned, and marked the camera
+nok2 = NotOkCam(Symbol[])                                                       # attempt_stop!: an unconfirmed stop
+@test (@test_logs (:error, r"^here: the camera is not known stopped") attempt_stop!(nok2, "here")) === nothing
+mutable struct AbortFailsCam <: Camera                                          # mutable: each is its own camera
+    interrupt::Bool
+end
+MC.CameraInterface.abort(c::AbortFailsCam) = c.interrupt ? throw(InterruptException()) : error("SDK: abort failed")
+af = AbortFailsCam(false)
+e = @test_logs (:error, r"not known stopped") attempt_stop!(af, "here")         # a stop that throws: logged, returned
+@test e isa ErrorException && e.msg == "SDK: abort failed" && af in CAMERA_UNKNOWN
+ai = AbortFailsCam(true)
+e = @test_logs min_level = Base.CoreLogging.Warn (try attempt_stop!(ai, "here"); nothing catch err err end)
+@test e isa InterruptException && ai in CAMERA_UNKNOWN                          # rethrown, not logged
+@test (@test_logs min_level = Base.CoreLogging.Warn attempt_stop!(SimCamera(), "here")) === nothing   # confirmed: quiet
 simmarked = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 mark_unknown!(simmarked)
 @test_throws r"^camera unavailable: it is marked unknown" read_sequence(simmarked, 3)
@@ -963,7 +1035,10 @@ ic = SimCamera()
 @test_throws InterruptException with_camera(() -> throw(InterruptException()), ic)
 @test ic in CAMERA_UNKNOWN                                                      # an interrupt marks too, and is rethrown
 mc_ = SimCamera(); mark_unknown!(mc_)
-@test with_camera(() -> :stopped, mc_; refuse = false) === :stopped              # a stop is let through on a marked camera
+ran = Ref(false)
+@test_throws MethodError with_camera(() -> (ran[] = true), mc_; refuse = false)  # no keyword turns the refusal off
+@test !ran[]
+@test with_stop(() -> (ran[] = true), mc_) === true && ran[] && mc_ in CAMERA_UNKNOWN   # a stop is let through; marked still
 function fake_sequence!(; release_fails = false)          # a two-frame sequence, BUSY for 50 ms after its start
     FK.reset!(); FK.frames_transferred[] = 2
     t0 = Ref(0.0)
@@ -1136,8 +1211,8 @@ using InteractiveUtils
 
 # Statements about the generated API map, the SLM stubs, the exports and `save_h5` that no example block runs.
 # The floor is one under the count: one check runs on Linux only (Triggerscope4 refusing a port name not on the host).
-SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 88, prelude = "", checks = raw"""
-@testset "statements: every function in the examples calls a camera only inside with_camera" begin
+SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 94, prelude = "", checks = raw"""
+@testset "statements: every function in the examples calls a camera only inside a wrapper" begin
     fenced = Main.skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))
     offenders = Tuple{String,Int,Symbol,Symbol}[]
     wrapped = Set{Symbol}()
@@ -1146,9 +1221,9 @@ SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 88, prelude = "", checks = ra
         append!(offenders, [(basename(dirname(b.file)), b.line, f, c) for (f, c) in off])
         union!(wrapped, w)
     end
-    isempty(offenders) || @error "camera calls outside with_camera, as (skill, fence line, function, call)" offenders
+    isempty(offenders) || @error "camera calls outside a wrapper, as (skill, fence line, function, call)" offenders
     @test isempty(offenders)
-    @test wrapped == Set([:snap, :read_sequence, :stop_camera!, :start_reader!])   # the entries the skills teach
+    @test wrapped == Set([:snap, :read_sequence, :stop_camera!, :start_reader!, :read_frames!])   # the skills' entries
     # what the rule sees
     rule(code) = Main.camera_calls_outside_wrapper(code)
     @test rule("f(cam) = capture(cam)") == [(:f, :capture)]
@@ -1158,16 +1233,25 @@ SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 88, prelude = "", checks = ra
     @test rule("f(cam; frame = capture(cam)) = frame") == [(:f, :capture)]                      # a keyword default
     @test rule("f(cam) = with_camera(cam; ok = (capture(cam); camera_ok)) do\n    nothing\nend") == [(:f, :capture)]   # eager
     @test rule("f(cam) = with_camera(getdata(cam), cam)") == [(:f, :getdata)]                   # an eager argument
-    @test rule("function start_reader!(cam)\n    getlastframe(cam)\n    with_camera(cam) do\n        live(cam)\n    end\n" *
-               "    @async while true\n        getlastframe(cam)\n    end\nend") == [(:start_reader!, :getlastframe)]   # before the guard
-    @test rule("function reader_helper(cam)\n    @async getlastframe(cam)\nend") == [(:reader_helper, :getlastframe)]
-    @test Set(rule("snap(cam) = with_camera(cam; refuse = false) do\n    capture(cam)\nend")) ==
-          Set([(:snap, :refuse), (:snap, :capture)])                                            # the switch outside a stop
-    @test isempty(rule("stop_camera!(cam) = with_camera(cam; refuse = false) do\n    abort(cam)\nend"))   # the stop's switch
+    # the stop's wrapper, by name: only in a stop_camera! method, whatever it is passed
+    @test Set(rule("snap(cam) = with_stop(cam) do\n    capture(cam)\nend")) == Set([(:snap, :with_stop), (:snap, :capture)])
+    @test rule("f(cam) = with_stop(() -> nothing, cam)") == [(:f, :with_stop)]
+    @test isempty(rule("stop_camera!(cam) = with_stop(cam) do\n    abort(cam)\nend"))
+    # the reader: getlastframe only in read_frames!, launched only as a task in start_reader!, after its with_camera
+    guard = "    with_camera(h.cam) do\n        live(h.cam)\n    end\n"
+    launch = "    h.reader = @async read_frames!(h, latest, fps)\n"
+    starter(body) = "function start_reader!(h, latest, fps)\n" * body * "end"
+    @test isempty(rule(starter(guard * launch)))                                                 # the shape
+    @test isempty(rule("function read_frames!(h, latest, fps)\n    while true\n        getlastframe(h.cam)\n    end\nend"))
+    @test rule(starter("    @async getlastframe(h.cam)\n    refuse_unknown(h.cam)\n" * guard * launch)) ==
+          [(:start_reader!, :getlastframe)]                                                     # a task before the guard
+    @test rule(starter(guard * "    @async getlastframe(h.cam)\n")) == [(:start_reader!, :getlastframe)]   # not the loop
+    @test rule(starter(launch * guard)) == [(:start_reader!, :read_frames!)]                     # launched before the guard
+    @test rule(starter(guard * "    read_frames!(h, latest, fps)\n")) == [(:start_reader!, :read_frames!)]   # not a task
+    @test rule("peek(h) = @async read_frames!(h, Ref{Any}(), 10)") == [(:peek, :read_frames!)]   # launched elsewhere
+    @test rule("function read_frames!(h, latest, fps)\n    capture(h.cam)\nend") == [(:read_frames!, :capture)]
     @test isempty(rule("f(cam) = with_camera(cam) do\n    capture(cam)\nend"))
     @test isempty(rule("f(cam) = with_camera(() -> capture(cam), cam)"))
-    @test isempty(rule("function start_reader!(cam)\n    with_camera(cam) do\n        live(cam)\n    end\n" *
-                       "    @async while true\n        getlastframe(cam)\n    end\nend"))                # the reader loop
     @test isempty(rule("MC.CameraInterface.abort(c::X) = live(c)"))                              # a driver method
     @test isempty(rule("cam.exposure_time = 0.02; stop[] = true"))                               # not definitions
 end
@@ -1259,7 +1343,7 @@ end
 # Run as a script (by test/skills.jl, in its own process): every group, in name order, writing each group's counts to
 # the file named by the first argument. The fakes runtests.jl installs for the TCube, N-472 and PI stage wrappers come
 # first, so an example that reaches one of those wrappers reaches the recorder, and so do the DCAM4 wrappers
-# (`dcam4_fake_sdk.jl`), which the `camera` and `acquire-snap` checks drive on purpose; the other drivers' wrappers
+# (`dcam4_fake_sdk.jl`), which the `camera`, `acquire-snap` and `acquire-reader` checks drive on purpose; the other drivers' wrappers
 # (DCx, CSC and the rest) are not replaced, and no example calls them. Each include is its own top-level statement,
 # before anything runs, as those files require.
 const RUN_AS_SCRIPT = abspath(PROGRAM_FILE) == abspath(@__FILE__)
