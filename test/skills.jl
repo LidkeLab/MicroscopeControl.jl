@@ -373,3 +373,207 @@ MicroscopeControl.export_state(r::_ParametricRig{T}) where {T} = (Dict{String,An
         @test_throws Exception MicroscopeControl.install_skills(bad_target)
     end
 end
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The skills' executed examples run in their own Julia process (`test/skill_examples.jl`, which says how), so the
+# types and methods they define never reach the rest of this suite. Included here for the group names and the fence
+# extractor only; the checks below read files and run nothing from the skills.
+# ---------------------------------------------------------------------------------------------------------------
+include("skill_examples.jl")
+
+@testset "Skill example extraction" begin
+    groups = skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))
+    @testset "every marked group has a harness entry, and every entry but the fenceless ones a fence" begin
+        @test sort(collect(keys(groups))) == sort(setdiff(collect(keys(SKILL_EXAMPLE_GROUPS)), SKILL_FENCELESS_GROUPS))
+        @test all(g -> !haskey(groups, g), SKILL_FENCELESS_GROUPS)
+        @test all(u -> haskey(groups, u), reduce(vcat, values(SKILL_GROUP_USES)))
+        @test first(skill_group_fences(groups, "bench")).file == joinpath(pkgdir(MicroscopeControl), "skills", "mc-acquire", "SKILL.md")
+    end
+    @testset "markers are read only outside other fences, and a dangling one is an error" begin
+        mktempdir() do dir
+            write(joinpath(dir, "a.md"), """
+                ```markdown
+                <!-- mc-test: inside -->
+                ```julia
+                x = 1
+                ```
+                <!-- mc-test: outside -->
+                ```julia
+                y = 2  # -> 2
+                ```
+                """)
+            g = skill_example_blocks(dir)
+            @test collect(keys(g)) == ["outside"] && only(g["outside"]) == (file = joinpath(dir, "a.md"), line = 8, code = "y = 2  # -> 2")
+            write(joinpath(dir, "b.md"), "text\n<!-- mc-test: last -->")
+            @test_throws r"on the last line" skill_example_blocks(dir)
+            write(joinpath(dir, "b.md"), "<!-- mc-test: open -->\n```julia\nz = 3\n")
+            @test_throws r"not closed" skill_example_blocks(dir)
+        end
+        @test stated_values("a = 1\n# -> 1\nb = 2   # -> Tuple{Int, Float64}   # a note") ==
+              [(2, true, "1"), (3, false, "Tuple{Int, Float64}")]
+    end
+end
+
+# Every [guarantee] and [limitation] in the skills names the version it was checked at, or `suite: GROUP` for a
+# statement a group of `test/skill_examples.jl` asserts. The legend in mc-system-design's "How to read this skill" may
+# write the placeholder `V` (and `suite: GROUP`); nowhere else may. A version token is read whole, prerelease
+# included, and may not be later than this package's; one after "since" or "fixed in" may name the release this
+# version leads to. None may say 0.2.0 except to describe history ("historical"). Every "suite: NAME" anywhere names
+# a group, and no skill pins MicroscopeControl to a hard-coded tag (the install recipe takes the tag from the
+# `Installed from` line). Returns the problems found and the number of labels read.
+function skill_label_problems(text::AbstractString; groups, version::VersionNumber, legend::UnitRange{Int} = 1:0)
+    release = VersionNumber(version.major, version.minor, version.patch)
+    token = r"(since |fixed in )?v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)"
+    problems = String[]
+    labels = 0
+    for m in eachmatch(r"\[(?:guarantee|limitation)([^\]\n]*)\]", text)
+        labels += 1
+        body = m.captures[1]
+        m.offset in legend && body == ", V" && continue
+        if occursin("suite", body)
+            s = match(r"^, suite: ([a-z0-9-]+)$", body)
+            (s !== nothing && s.captures[1] in groups) ||
+                push!(problems, "$(m.match): a suite label is exactly [guarantee|limitation, suite: GROUP], GROUP a harness group")
+            continue
+        end
+        tokens = [(t.captures[1], rstrip(t.captures[2], '.')) for t in eachmatch(token, body)]   # `-` and `+` stay: VersionNumber reads them
+        isempty(tokens) && push!(problems, "$(m.match): names no version")
+        for (prefix, s) in tokens             # the whole token, prerelease and all, parsed by VersionNumber
+            v = tryparse(VersionNumber, s)
+            v === nothing && (push!(problems, "$(m.match): $s is not a version"); continue)
+            v <= (prefix === nothing ? version : release) || push!(problems, "$(m.match): $v is later than $version")
+        end
+        occursin("0.2.0", body) && !occursin("historical", body) && push!(problems, "$(m.match): 0.2.0 outside history")
+    end
+    for s in eachmatch(r"suite: ([A-Za-z0-9_-]+)", text)
+        s.offset in legend && s.captures[1] == "GROUP" && continue
+        s.captures[1] in groups || push!(problems, "suite: $(s.captures[1]): no such group in the harness")
+    end
+    occursin(r"MicroscopeControl\.jl\.git\",\s*rev\s*=\s*\"v\d", text) &&
+        push!(problems, "pins MicroscopeControl to a hard-coded tag")
+    return problems, labels
+end
+
+@testset "Skill labels name a version or a suite group" begin
+    groups = Set(keys(SKILL_EXAMPLE_GROUPS))
+    pv = pkgversion(MicroscopeControl)
+    @testset "the skills" begin
+        root = joinpath(pkgdir(MicroscopeControl), "skills")
+        files = sort([joinpath(dir, n) for (dir, _, names) in walkdir(root) for n in names if endswith(n, ".md")])
+        @test length(files) >= 10
+        labels = 0
+        for file in files
+            text = read(file, String)
+            legend = 1:0
+            if endswith(file, joinpath("mc-system-design", "SKILL.md"))
+                a = findfirst("## How to read this skill", text)
+                legend = first(a):first(findnext(r"\n## ", text, last(a)))
+            end
+            problems, n = skill_label_problems(text; groups, version = pv, legend)
+            labels += n
+            isempty(problems) || @error "label problems" file problems
+            @test isempty(problems)
+        end
+        @test labels > 150
+    end
+    @testset "the checker refuses what it should" begin
+        v = v"0.2.7-DEV"
+        bad(text) = !isempty(first(skill_label_problems(text; groups, version = v)))
+        @test !bad("[guarantee, 0.2.7-DEV] [limitation, fixed in 0.2.7 for DCAM4] [guarantee, since 0.2.6; checked 0.2.7-DEV]")
+        @test !bad("[guarantee, suite: bench] and (suite: testing)")
+        @test !bad("[limitation, historical: v0.2.0 to v0.2.3]")
+        @test bad("[guarantee, V]")                                  # the placeholder, outside the legend
+        @test isempty(first(skill_label_problems("x [guarantee, V] y"; groups, version = v, legend = 1:20)))  # in the legend
+        @test bad("[guarantee, checked in the suite]")               # a bare "suite"
+        @test bad("[guarantee, 0.2.7-DEV; suite]")
+        @test bad("[guarantee, suite: no-such-group]")
+        @test bad("prose (suite: no-such-group)")
+        @test bad("[guarantee, 0.2.7]")                              # later than 0.2.7-DEV
+        @test bad("[guarantee, 0.2.7-rc1]")                          # the prerelease is read: rc1 sorts after DEV
+        @test bad("[guarantee, 0.2.7-DEV-next]")                     # read whole, not cut at the first identifier
+        @test bad("[guarantee, 0.2.7-DEV-]")                         # `DEV-` is an identifier, sorting after `DEV`
+        @test bad("[guarantee, 0.2.7-DEV.1]")
+        @test !bad("[guarantee, 0.2.7-BETA]")                        # sorts before DEV: a parser that drops it would refuse
+        @test !bad("[guarantee, 0.2.5.]") && !bad("[limitation, checked at 0.2.6, traced]")   # end punctuation is not read
+        @test bad("[guarantee, since 0.2.8]")
+        @test bad("[guarantee, 0.2.0]")
+        @test bad("[guarantee, traced]")
+        @test bad("Pkg.add(url=\"https://github.com/LidkeLab/MicroscopeControl.jl.git\", rev=\"v0.2.6\")")
+        @test !bad("[guarantee, 0.2.6]")
+        @test isempty(first(skill_label_problems("[guarantee, 0.2.7-DEV]"; groups, version = v"0.2.7")))  # after the release
+    end
+end
+
+# The child must finish in bounded time and must have run every group: a zero exit alone is not enough, since a broken
+# script guard, an empty loop or a group whose checks were emptied also exits 0. The child writes one line per group
+# (`skill_group_line` in skill_examples.jl); every group of the harness must be there, with no failure or error and at
+# least its declared `min_passes`.
+const SKILL_EXAMPLES_DEADLINE_S = 900.0
+
+# Ends a child in bounded time: SIGTERM, a grace period, then SIGKILL (as test/gui.jl's `terminate_process!`).
+function stop_child!(proc; grace = 5.0, final = 10.0)
+    process_running(proc) && kill(proc, Base.SIGTERM)
+    timedwait(() -> !process_running(proc), grace; pollint = 0.05) === :ok && return true
+    process_running(proc) && kill(proc, Base.SIGKILL)
+    return timedwait(() -> !process_running(proc), final; pollint = 0.05) === :ok
+end
+
+# group => (pass, fail, error, broken), from the child's count lines.
+function skill_group_counts(text::AbstractString)
+    counts = Dict{String,NTuple{4,Int}}()
+    for m in eachmatch(r"^skill-group (\S+) pass=(\d+) fail=(\d+) error=(\d+) broken=(\d+)$"m, text)
+        counts[m.captures[1]] = Tuple(parse.(Int, m.captures[2:5]))
+    end
+    return counts
+end
+
+# What is wrong with the child's counts against the harness's groups and floors; empty when nothing is.
+function skill_group_problems(counts, groups)
+    problems = String[]
+    for (name, spec) in sort(collect(groups); by = first)
+        c = get(counts, name, nothing)
+        if c === nothing
+            push!(problems, "$name: no count line (the group did not run)")
+            continue
+        end
+        pass, fail, err, _ = c
+        (fail == 0 && err == 0) || push!(problems, "$name: $fail failed, $err errored")
+        pass >= spec.min_passes || push!(problems, "$name: $pass passed, below its floor of $(spec.min_passes)")
+    end
+    return problems
+end
+
+@testset "Skill examples, in their own process" begin
+    runner = joinpath(@__DIR__, "skill_examples.jl")
+    counts_file = tempname()
+    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(runner) $(counts_file)`
+    log = tempname()
+    io = open(log, "w")                       # one handle for both streams, so neither overwrites the other
+    proc = run(pipeline(ignorestatus(cmd); stdout = io, stderr = io); wait = false)
+    in_time = timedwait(() -> !process_running(proc), SKILL_EXAMPLES_DEADLINE_S; pollint = 0.5) === :ok
+    in_time || stop_child!(proc)
+    close(io)
+    out = read(log, String)
+    rm(log; force = true)
+    counts = isfile(counts_file) ? skill_group_counts(read(counts_file, String)) : Dict{String,NTuple{4,Int}}()
+    rm(counts_file; force = true)
+    problems = skill_group_problems(counts, SKILL_EXAMPLE_GROUPS)
+    ok = in_time && success(proc) && isempty(problems)
+    ok || println(out)
+    isempty(problems) || println("Skill example groups:\n  ", join(problems, "\n  "))
+    i = findlast("Test Summary:", out)
+    ok && i !== nothing && println(out[first(i):end])
+    @test in_time
+    @test isempty(problems)
+    @test ok
+    @testset "the counts are read per group, and every group is held to its floor" begin
+        text = "skill-group a pass=3 fail=0 error=0 broken=0\nskill-group b pass=0 fail=0 error=0 broken=5\nnoise\n"
+        @test skill_group_counts(text) == Dict("a" => (3, 0, 0, 0), "b" => (0, 0, 0, 5))
+        spec(n) = (min_passes = n, prelude = "", checks = "")
+        @test isempty(skill_group_problems(skill_group_counts(text), Dict("a" => spec(3))))
+        @test skill_group_problems(skill_group_counts(text), Dict("b" => spec(1))) == ["b: 0 passed, below its floor of 1"]
+        @test skill_group_problems(Dict("a" => (3, 1, 0, 0)), Dict("a" => spec(1))) == ["a: 1 failed, 0 errored"]
+        @test skill_group_problems(Dict{String,NTuple{4,Int}}(), Dict("c" => spec(1))) == ["c: no count line (the group did not run)"]
+    end
+end

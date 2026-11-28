@@ -269,6 +269,39 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   `memory_layout` are kept and the array is written unpermuted, as before, so only the attribute value changes. This
   package has no reader of `dimension_order`; a reader elsewhere should keep accepting `"HW"` and `"HWN"` as the same
   layout.
+- Claude Code skills (`install_skills()`): every statement is rechecked against this version and corrected where it
+  had gone stale since v0.2.0. Each `[guarantee]` and `[limitation]` names the version it was checked at, or
+  `suite: GROUP` for a group of `test/skill_examples.jl`, which runs the skills' marked examples on the simulated
+  devices and asserts the results the skills state; `test/skills.jl` runs it in its own Julia process and checks every
+  label. Among the corrections:
+  - `mc-acquire`: `getdata` on a `DCAM4Camera` in live mode returns the newest frame and leaves the live view running
+    (since 0.2.6); it no longer ends the live view. No one way reads a finished sequence on every driver: one table
+    says, per camera driver, what `sequence` returns, what `getdata` waits for and what `abort` does, and per-driver
+    `read_sequence`, `stop_camera!` and `camera_ok` functions cover the simulated and Hamamatsu cameras; the DCx
+    and CSC cameras have none, for reasons stated there. Every function in the examples that calls a camera does so
+    through `with_camera`, which refuses a camera marked unknown and marks it after any throw or a failed
+    postcondition, and has no switch to turn the refusal off; the suite checks that rule on the examples' code, with
+    two exceptions confined by name: `with_stop`, which lets a stop through on a marked camera, accepted only in
+    `stop_camera!`, and the `getlastframe` in `read_frames!`, the reader loop `start_reader!` launches; and only the
+    functions that own them refer to the failure mark and the live view's reservation. A live view reserves its
+    camera, in a set apart from the failure mark, before `live`, and ends the reservation only on its own confirmed
+    stop, so a Ctrl-C at any instant leaves the camera unstarted, reserved, marked or confirmed stopped; a failure
+    marks the camera unknown, which nothing removes, so it outlasts the live view, and what marks a camera and what
+    does not (a reader's interrupt, a DCAM4 frame read reported failed) is listed once, beside the two sets; each set
+    is defined once, so evaluating the examples again keeps every mark and reservation; and a stop whose wait for the
+    reader is interrupted while the reader still runs leaves the reader and the camera alone, reserved. A throw from
+    a light's level setter, `light_on` or `light_off` does not mean the light is off.
+  - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to the
+    tag in the skills' `Installed from` line (for a `-DEV` install, the commit the instrument was tested with,
+    from its Manifest or its checkout). The example system moves a device whose `initialize` or `shutdown` threw to
+    a `stuck` list, retries it at the next shutdown, and refuses `initialize` until it has shut down, or while a
+    device claimed at construction has been closed; it acquires through `with_camera`, so a failed acquisition or a
+    camera not known stopped afterwards takes the camera out of service; its settings type is built by keyword.
+
+### Removed
+
+- `ImageView` is no longer a dependency. No source file loaded it, and its `__init__` needs a display, so a
+  downstream package's checks that load every dependency needed `xvfb` for it.
 
 ### Known issues
 

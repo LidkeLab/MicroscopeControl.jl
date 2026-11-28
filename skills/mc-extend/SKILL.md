@@ -1,6 +1,6 @@
 ---
 name: mc-extend
-description: Extending MicroscopeControl.jl or working around it, in order of increasing commitment -- diagnose a misbehaving driver (it is usually the rig), report upstream against the pinned tag and work around locally without type piracy, implement an existing interface (Camera, Stage, LightSource, DAQ, Attenuator) for a new device downstream or as an upstream contribution, and define a new device class with its interface, simulated implementation and hand-registration; activates for "driver bug", "not working on hardware", "report", "new driver", "implement Camera/Stage/LightSource", "support this device", "SDK wrapper", "new interface", "new device class", or "MC has no interface for".
+description: Extending MicroscopeControl.jl or working around it, in order of increasing commitment -- diagnose a misbehaving driver (it is usually the instrument), report upstream against the pinned tag and work around locally without type piracy, implement an existing interface (Camera, Stage, LightSource, DAQ, Attenuator) for a new device downstream or as an upstream contribution, and define a new device class with its interface, simulated implementation and hand-registration; activates for "driver bug", "not working on hardware", "report", "new driver", "implement Camera/Stage/LightSource", "support this device", "SDK wrapper", "new interface", "new device class", or "MC has no interface for".
 ---
 
 # mc-extend
@@ -8,35 +8,36 @@ description: Extending MicroscopeControl.jl or working around it, in order of in
 Decide first with the decision rule in `mc-system-design`: driver, interface, or
 system code. This skill covers the first two and what to do before either. It is
 ordered by increasing commitment; start at step 1 even if you think you need
-step 3. Labels as in `mc-system-design`: **[guarantee]** verified at MC v0.2.0,
-**[limitation]** current shortfall to work around, **[policy]** recommended.
-*Executed* means run under `xvfb-run -a` against v0.2.0; *traced* means read from
-the upstream driver source and not run.
+step 3. Labels as in `mc-system-design`: a guarantee names the version it was checked
+at, or the suite group that checks it; a limitation is a shortfall to work around as of
+the version it names; a policy is a recommendation. *Executed* means run under
+`xvfb-run -a`, by the package's suite (`test/skill_examples.jl`) where it says *suite*;
+*traced* means read from the upstream driver source and not run.
 
 ## The line that runs through this skill
 
-**[guarantee]** MC has no registration API. Every driver is a concrete subtype of
+**[guarantee, 0.2.7-DEV]** MC has no registration API. Every driver is a concrete subtype of
 an interface type plus methods added to MC's existing generic functions
 (`initialize`, `CameraInterface.capture`, ...) **for that subtype**. Adding
 methods for a type you own is the intended extension mechanism, whether the
-type lives in your rig repo or upstream, and it is not type piracy.
+type lives in your instrument repo or upstream, and it is not type piracy.
 
 Type piracy is defining a method on an MC generic for a type MC owns
 (`MicroscopeControl.servo(::PIStage, ...)` from your package). You own neither
 the function nor the type; the method installs when your package loads and
 every caller that goes through the generic (the shared GUI, other downstream
-code, the REPL) gets your behaviour, while callers that bypass it do not (PI's
+code, the REPL) gets your behavior, while callers that bypass it do not (PI's
 `initialize_original` calls PI's private `servo` directly, traced). The
 deviation is invisible in `Manifest.toml`, and when the pinned tag moves and
 upstream ships its own fix the two methods collide or diverge silently. So:
 your own type, extend freely (steps 3 and 4); an MC type, report and work
 around from outside (step 2).
 
-**[limitation]** The collision is worse than "diverge silently", and this has
-happened (historical: the case below is v0.2.1 to v0.2.3; at 0.2.5 the 1-arg
-method is upstream and the 2-arg form it replaced is a deprecated forwarder, so a rig still carrying
+**[limitation, historical: v0.2.1 to v0.2.3]** The collision is worse than "diverge silently", and this has
+happened (the case below is v0.2.1 to v0.2.3; at 0.2.5 the 1-arg
+method is upstream and the 2-arg form it replaced is a deprecated forwarder, so an instrument repo still carrying
 a shim or a 2-arg call from that period should delete it; the pattern, and the
-guard, apply to any future gap). A rig repo defined `export_state(::TCubeLaser)` itself, because
+guard, apply to any future gap). An instrument repo defined `export_state(::TCubeLaser)` itself, because
 v0.2.1 shipped only a 2-argument form and the 1-argument call fell through to
 the throwing stub. When v0.2.3 added that method upstream, Julia failed
 **precompilation** on the overwrite; in the environment that reported it the
@@ -55,7 +56,10 @@ do not make `hasmethod` an exact-signature test, so that guard suppresses the
 shim exactly when it is needed. Install only while `which` still resolves to
 the known abstract stub:
 
+<!-- mc-test: extend-shim -->
 ```julia
+using MicroscopeControl
+const MC = MicroscopeControl
 # Runs at load. Installs the shim only while dispatch still lands on the
 # abstract stub, so it stands aside once upstream defines the method.
 if which(MC.export_state, Tuple{MC.TCubeLaser}).sig.parameters[2] === MC.AbstractInstrument
@@ -70,7 +74,7 @@ abstract fallbacks in this package make the first one useless.
 
 ## 1. Diagnose first: it is usually not the driver
 
-Before reporting or writing anything, rule out the rig. The full symptom table
+Before reporting or writing anything, rule out the instrument. The full symptom table
 is in `references/rig-causes.md`; the short form:
 
 | Symptom | Usually | Check |
@@ -78,7 +82,7 @@ is in `references/rig-causes.md`; the short form:
 | `initialize(::PIStage)` logs `@error` and returns, `connectionstatus` stays `false` (it does not throw) | controller unpowered, USB, or **held by another process** (PIMikroMove, a second Julia) | close the others; re-run; if it connects it was contention |
 | `MLSLM` does nothing | board claimed elsewhere, or SDK found 0 boards (`n_boards_found` is a default of 0 and never updated) | read what `initializesdk()` prints or returns (`n_boards_found`, `constructed_ok`); close the vendor GUI; reboot if a dead process holds it |
 | serial timeouts / "port busy" (`Triggerscope4`, and `LCC1620` through it) | wrong COM number (Windows renumbers), or port open elsewhere; **two `Triggerscope4` objects on one port** | `LibSerialPort.list_ports()`; one scope object per port, shared (`mc-system-design`) |
-| DAQ voltage light warns at discovery or throws on a missing channel/write | **[limitation]** unnamed outputs still use enumeration; runtime missing or partial AO/DO discovery can leave channels absent. **[guarantee]** (0.2.7) commands throw on missing channels; a single-line off `setpower` records only. | **[policy]** inspect selected `channel` or `ao_channel`/`do_channel`; pass named outputs and `daq::DAQ`. |
+| DAQ voltage light warns at discovery or throws on a missing channel/write | **[limitation, 0.2.7-DEV]** unnamed outputs still use enumeration; runtime missing or partial AO/DO discovery can leave channels absent. **[guarantee, 0.2.7-DEV]** (since 0.2.7) commands throw on missing channels; a single-line off `setpower` records only. | **[policy]** inspect selected `channel` or `ao_channel`/`do_channel`; pass named outputs and `daq::DAQ`. |
 | a method throws `not implemented for <Type>` or does nothing | a contract stub, not a broken `ccall` (`mc-api-map`: resolving is not implementing) | `which(f, Tuple{typeof(dev)}).sig` names the interface or `AbstractInstrument` |
 
 A defect is what remains: a wrong argument type or size in a `ccall`, a wrong
@@ -86,17 +90,17 @@ constant, a value read from the wrong place, a released buffer, an off-by-one.
 v0.1.1's `PI_SVO` fix is the model case: flags packed as `UInt8` instead of
 32-bit `BOOL`, so axis 2's servo read garbage (traced from the changelog and
 `pi_stage/config_methods.jl`). The Sim devices cannot reproduce hardware
-defects; a report needs the rig, in a fresh session with nothing else attached.
+defects; a report needs the instrument, in a fresh session with nothing else attached.
 
 ## 2. Report against the pinned tag, and work around from outside
 
-The rig pins a tag (`Pkg.add(url=..., rev="v0.2.5")`) and the fix ships as a new
-tag, so the report must say which tag, from the environment:
-`pkgversion(MicroscopeControl)`, `VERSION`, `Sys.KERNEL`. Template:
+The instrument computer pins a tag or a `main` commit (`mc-system-design`, "Before anything") and the fix
+ships as a new tag, so the report must say which, from the environment: `pkgversion(MicroscopeControl)`, the
+`rev` in the instrument's `Manifest.toml`, `VERSION`, `Sys.KERNEL`. Template:
 
 ```markdown
 **Device**: <driver type> / <model and controller>
-**MicroscopeControl.jl tag**: v0.2.0   **Julia**: 1.13.0   **OS**: Windows 11   **SDK/DLL**: <name, version>
+**MicroscopeControl.jl tag or commit**: <vX.Y.Z or the 40-character commit>   **Julia**: <VERSION>   **OS**: <OS>   **SDK/DLL**: <name, version>
 **Call path**: `servo(stage, true, true)` -> `PI.servo` -> `PI_SVO`
 **ccall involved** (driver file and line, pasted): ...
 **Observed** (exact text; `stage.last_error`/`cam.last_error` if set) / **Expected** (SDK manual section)
@@ -106,7 +110,7 @@ tag, so the report must say which tag, from the environment:
 ```
 
 ```bash
-gh issue create --repo LidkeLab/MicroscopeControl.jl --title "PIStage: <symptom> (v0.2.0, Windows)" --body-file report.md
+gh issue create --repo LidkeLab/MicroscopeControl.jl --title "PIStage: <symptom> (<tag>, <OS>)" --body-file report.md
 ```
 
 Upstream tags releases, not every merge: between releases `main` carries a
@@ -123,8 +127,8 @@ tested and tagged. Offer a PR if you have the fix. Two honest workarounds while 
       @ccall PI.gcs2path.PI_SVO(stage.id::Cint, "1 2"::Ptr{UInt8}, Cint[x, y]::Ptr{Cint})::Cint
   ```
 
-  (the corrected binding as it stands in `pi_stage/config_methods.jl`; traced,
-  needs the PI DLL).
+  (the binding is `pi_stage/gcs2.jl`'s `PI_SVO`, and the corrected call, `Cint[xtoggle, ytoggle]`,
+  is `servo` in `pi_stage/config_methods.jl`; traced, needs the PI DLL).
 - **A fork pinned by `rev`**: `Pkg.add(url="https://github.com/<you>/MicroscopeControl.jl.git", rev="fix-pi-svo")`.
   The Manifest records the deviation; returning to upstream is one `Pkg.add`.
 
@@ -137,12 +141,12 @@ After moving the pin, delete the workaround and rerun `install_skills()`.
 
 ### Two arrangements, same code
 
-| | Downstream-owned type (prototype, or a device only your rig has) | Upstream contribution |
+| | Downstream-owned type (prototype, or a device only your instrument has) | Upstream contribution |
 |---|---|---|
 | Location | a module in your repo | `src/hardware_implementations/<device>/` with `<Device>.jl`, `types.jl`, `interface_methods.jl`, SDK helpers |
 | Imports | `using MicroscopeControl`; `import MicroscopeControl: initialize, shutdown, export_state, gui`; `import MicroscopeControl.LightSourceInterface` (or `CameraInterface`, `StageInterface`, ...) | `using ...MicroscopeControl.HardwareInterfaces.LightSourceInterface`; `import ...MicroscopeControl: export_state, initialize, shutdown` (three dots: two module levels below `MicroscopeControl`) |
 | Registration | none; `using .MyDrivers` in your system code | `include` + `@reexport` in `HardwareImplementations.jl` (section 5) |
-| Tests | your suite, with the checks in section 6 | `test/contract.jl` runs the specificity, identity and `gui`-dispatch checks (section 6, items 1 to 3) on every subtype automatically; unsupported-operation throws, behaviour and serialisation (items 4 to 6) are a testset you add |
+| Tests | your suite, with the checks in section 6 | `test/contract.jl` runs the specificity, identity and `gui`-dispatch checks (section 6, items 1 to 3) on every subtype automatically; unsupported-operation throws, behavior and serialization (items 4 to 6) are a testset you add |
 
 The complete scaffold, a serial LED as a `LightSource` over a fake transport,
 with its executed results and the 23-assertion contract testset, is in
@@ -151,33 +155,35 @@ closed link** (no silent no-op); a **pure constructor**; `initialize` that opens
 the link only if it is not already open; `shutdown` that closes it only if
 `owns_port`; interface operations that range-check and cache the *requested*
 value; a 1-arg `export_state` whose attribute names say which kind of state
-they hold (`power_requested`). **[guarantee]** the interface declares
+they hold (`power_requested`). **[guarantee, 0.2.7-DEV]** the interface declares
 `light_on(::LightSource)` only; implement that. (Up to v0.2.4 it declared a 2-arg
 `light_on(::LightSource, ipower::Float64)` that no driver implemented; 0.2.5
 removed it, so a 2-arg call is a `MethodError`.)
 
 ### Binding identity: import to extend, never rely on `using`
 
-**[guarantee]** `using MicroscopeControl` brings the *name* `gui` into scope.
+**[guarantee, 0.2.7-DEV]** `using MicroscopeControl` brings the *name* `gui` into scope.
 `function gui(::MyType)` after that creates a new `MyModule.gui`; nothing
 errors; `MC.gui(dev)` silently dispatches to the inherited panel or the throwing
 stub and your method is dead code. Two real instances existed in MC's own
 drivers before v0.2.0 (traced from the `test/contract.jl` comments), which is why
 upstream now asserts every generic a submodule defines `=== getfield(MicroscopeControl, g)`.
 
-Executed:
+**[guarantee, suite: extend-shadow]** The suite runs this and asserts each `# -> ` value, and the stub's message:
 
+<!-- mc-test: extend-shadow -->
 ```julia
+using MicroscopeControl
 module ShadowDriver
     using MicroscopeControl                 # NAME only
     struct ShadowLED <: LightSource end
     gui(::ShadowLED) = :my_custom_panel     # creates ShadowDriver.gui, a NEW function
     setpower(::ShadowLED, p::Float64) = :never_called
 end
-ShadowDriver.gui === MicroscopeControl.gui                              # false
-which(MicroscopeControl.gui, Tuple{ShadowDriver.ShadowLED}).sig.parameters[2]   # LightSource: the shared panel
-MicroscopeControl.setpower(ShadowDriver.ShadowLED(), 1.0)               # throws "setpower not implemented for ShadowLED"
-hasmethod(MicroscopeControl.setpower, Tuple{ShadowDriver.ShadowLED,Float64})   # true!  resolves to the throwing stub
+ShadowDriver.gui === MicroscopeControl.gui                                         # -> false
+which(MicroscopeControl.gui, Tuple{ShadowDriver.ShadowLED}).sig.parameters[2]      # -> LightSource   # the shared panel
+try MicroscopeControl.setpower(ShadowDriver.ShadowLED(), 1.0) catch e; sprint(showerror, e) end   # "setpower not implemented for ...ShadowLED"
+hasmethod(MicroscopeControl.setpower, Tuple{ShadowDriver.ShadowLED,Float64})      # -> true   # resolves to the throwing stub
 ```
 
 `hasmethod` cannot detect the bug; `which(f, Tuple{T,...}).sig.parameters[2] === T`
@@ -189,7 +195,7 @@ Two correct idioms; use one consistently:
 | import the generic, define unqualified | `import MicroscopeControl: initialize, shutdown, export_state, gui` then `function initialize(::T)` | the lifecycle generics |
 | qualify the definition | `function CameraInterface.capture(::T)`, `StageInterface.move(::T, x, y)` | the interface operations |
 
-**[limitation]**, traced: the PI stage driver names its private `ccall`
+**[limitation, 0.2.7-DEV]**, traced: the PI stage driver names its private `ccall`
 wrappers `move`, `getposition`, `getrange`, `stopmotion`, `servo` and its
 qualified `StageInterface.move(::PIStage, ...)` methods call them unqualified;
 importing those names would make each wrapper recurse forever, so upstream's
@@ -198,23 +204,25 @@ your private helpers differently (`sdk_move`, `port_write!`).
 
 ### The implicit structural contract: fields the shared GUIs read
 
-**[guarantee]** The interface `gui` methods are real shared panels that read
-fields by name; a device lacking one gets a `FieldError` when its panel opens
-even though every method dispatches. The full catalogue, per field and per
+**[guarantee, 0.2.7-DEV]** The interface `gui` methods are real shared panels that read
+fields by name; a device lacking one gets a missing-field error when its panel opens
+(a `FieldError` on Julia 1.12 and later, an `ErrorException` on 1.11) even though every
+method dispatches. The full catalog, per field and per
 device, is `mc-api-map`'s `references/gui-fields.md`. What a new driver must
 carry:
 
 - **Stage**: `dimensions` (1, 2 or 3; drives the dispatch), `connectionstatus`,
   `stagelabel` (window title, **unguarded**), `targ_*`/`real_*`/`range_*` for
   each axis it has; `servostatus`/`driftcorrectionstatus` optional (guarded by
-  `hasfield`). **[limitation]** the Sim stages carry `label`, so
-  `gui(SimStage3d())` throws (executed); `N472` lacks the position fields and
-  ships its own `gui(::N472)` override, which is the alternative route.
-- **Camera**: `unique_id`, `exposure_time::Float64`, `roi::CameraROI`,
+  `hasfield`). **[limitation, suite: testing]** the Sim stages carry `label`, so
+  `gui(SimStage3d())` throws; `N472` lacks the position fields and
+  ships its own `gui(::N472)` override, which is the alternative route (suite: testing).
+- **Camera**: `unique_id`, `exposure_time`, `roi::CameraROI`,
   `capture_mode` and `trigger_mode` as `Enum`s (the menus call `instances`),
   `sequence_length`, `is_running` (compared `== 1`). The panel uses the return
   value of `capture` as the frame. All four upstream cameras carry every field
-  (executed).
+  name (suite: testing), but not every type the panel needs: the types are in
+  `mc-api-map`'s `references/gui-fields.md`, section `gui(::Camera)`.
 - **LightSource / Attenuator**: `unique_id` and `properties`
   (`LightSourceProperties` / `AttenuatorProperties`). **Fixed in 0.2.1:** the
   light panel used to call `setpower(light, 0.5)` the moment it opened (the
@@ -222,11 +230,11 @@ carry:
   a driver whose `setpower` correctly throws on a closed link would throw
   from inside `gui` (executed against a fake-transport light before the fix).
   The slider and toggle are now wired with `on`, which fires only on a later
-  change, and initialised from the device's current `properties.power`/
+  change, and initialized from the device's current `properties.power`/
   `properties.is_on`.
 - **DiodeLaser** (0.2.5; a laser on a controller that regulates drive current or
   monitor photocurrent; a light that is only voltage-modulated stays a plain
-  `LightSource`): **[guarantee]** the shared `current_panel`/`power_panel` and
+  `LightSource`): **[guarantee, 0.2.7-DEV]** the shared `current_panel`/`power_panel` and
   `setlevel!` read `unique_id`, `properties` (`is_on`; `min_power`/`max_power` as
   the enforced mW bounds at the laser output in `ConstantPhotocurrent` mode),
   `min_current`, `max_current`, `threshold_current` (mA, `NaN` unknown),
@@ -241,7 +249,7 @@ carry:
   `DiodeLaser` method (a deprecated forwarder in open loop, a refusal in closed loop) must answer. `TCubeLaser` and `SimDiodeLaser` are the two
   templates.
 
-**[guarantee]** Mode-shared methods (`initialize`, `shutdown`, `export_state`,
+**[guarantee, 0.2.7-DEV]** Mode-shared methods (`initialize`, `shutdown`, `export_state`,
 `light_on`, `light_off`, `measured_current`, `measured_photocurrent`,
 `loop_status`) are written against the bare type (`TCubeLaser`); mode-specific
 ones against the instantiation (`setcurrent!(::TCubeLaser{ConstantCurrent},
@@ -257,10 +265,10 @@ what make the Sim-for-hardware swap in `mc-testing` work.
 
 ### A light that takes a modulator
 
-A light whose level can go out as a voltage on an analogue input (a TLD001's rear MOD IN, driven by a DAQ output; a
+A light whose level can go out as a voltage on an analog input (a TLD001's rear MOD IN, driven by a DAQ output; a
 Triggerscope DAC modulator follows in a later release) carries `modulator::Union{Nothing,AbstractModulationControl}`, keyword `modulator = nothing`.
-**[guarantee]** `TCubeLaser`, `SimDiodeLaser` and `SimLight` do; with `nothing` every method runs the code it always
-did. **[limitation]** `CrystaLaser`, `VortranLaser` and `DaqTrLight` take none: their native level path is already a DAQ
+**[guarantee, 0.2.7-DEV]** (since 0.2.7) `TCubeLaser`, `SimDiodeLaser` and `SimLight` do; with `nothing` every method runs the code it always
+did. **[limitation, 0.2.7-DEV]** `CrystaLaser`, `VortranLaser` and `DaqTrLight` take none: their native level path is already a DAQ
 voltage. The modulator holds the scale: `NIDAQModulator(; channel, v_range, per_volt, daq)` converts `setpower(modulator, p)`, with `p` in the light's own unit
 (`per_volt` is that unit per volt), to a voltage; `p = 0` is 0 V; an `ArgumentError` means out of reach and nothing was
 written. A modulator is not an `AbstractInstrument` (no panel). It defines `setpower(mc, ::Float64)`,
@@ -278,15 +286,19 @@ written. A modulator is not an `AbstractInstrument` (no panel). It defines `setp
    (`LightSourceInterface.propagate_interrupt` passes the interrupt on after the switch-off);
 4. a level setter validates as it did, then writes `setpower(modulator, p)` only while the light is on, so the output
    holds 0 V while off; an `ArgumentError` changes nothing, any other throw tries level 0, switches off and rethrows
-   (`LightSourceInterface.apply_level!` does that);
+   (`LightSourceInterface.apply_level!` does that). A switch-off that itself fails leaves the output unknown: say so,
+   and leave `properties.is_on` set;
 5. never use the native level path while there is a modulator;
-6. **[guarantee]** for `TCubeLaser`: a per-light lock serializes the writes and state changes, a short `usb_lock` only the
+6. **[guarantee, 0.2.7-DEV]** for `TCubeLaser`: a per-light lock serializes the writes and state changes, a short `usb_lock` only the
    Kinesis enable and disable calls; `light_on` arms under the first, sleeps and polls unlocked, and applies the current
    request under it, so a setter, `light_off`, `initialize`, `shutdown` or a second `light_on` landing anywhere in between
    ends consistent (a setter while arming only records). `light_off` and `shutdown` disable at once, never waiting for
-   a stalled modulator write. A new driver that sleeps inside `light_on` should follow the same split.
+   a stalled modulator write, and write level 0 after, so the TCube's order is the reverse of item 3's; the same
+   holds for its failed level write, which disables before it writes 0. A disable that fails throws, stays pending
+   (`disable_pending`, `properties.is_on` still `true`, the output possibly on) and is retried by `shutdown`
+   (traced from `tcube_laser/modulation.jl`). A new driver that sleeps inside `light_on` should follow the same split.
 
-**[guarantee]** `MicroscopeControl.modulation_violations(light; set!, expect)` checks 1 to 5 on an initialized light
+**[guarantee, 0.2.7-DEV]** (since 0.2.7) `MicroscopeControl.modulation_violations(light; set!, expect)` checks 1 to 5 on an initialized light
 whose `modulator` is a `MicroscopeControl.RecordingModulator` (it writes nothing, records everything, and can be made to
 fail or to refuse a level), and returns the list of violations. A downstream package, with its native side faked, adds
 
@@ -299,45 +311,31 @@ fail or to refuse a level), and returns the list of violations. A downstream pac
 convention (control source 3, the 1.3 s settle wait, the confirm at each `light_on`) is in its docstring and
 `CALIBRATION.md`.
 
-**[guarantee]** (0.2.7) The DAQ voltage lights take `setpower(light, ::Float64)`
-in volts, retain `level_requested`, and export that request in V. No command
-reads `properties.power`; accepted commands update it only when its unit is
-"V". Supplied properties objects are preserved at construction without warning.
-Crysta and DaqTrLight stage off requests and consume the stage only after a
-successful enable. With no stage they enable at 1.0 V clamped to the voltage
-range and record that default. Live level changes do not stage another enable;
-`light_off` keeps the saved level and staging flag; initialize and shutdown
-cancel the stage but retain the level. All three DAQ lights start with an
-unknown (`NaN`) requested level. Vortran writes AO regardless of DO state.
-**[guarantee]** Each light locks its write-and-record operations; a failed
-live level/enable write attempts to darken, with `is_on = true` if that fails
-too. Any failed off/initialize/shutdown throws and records `is_on = true`.
-Single-line level writes require `line_enabled`, set only by a successful
-enable and cleared by any off attempt, failed enable or failed live write.
-Otherwise `setpower` stages. Vortran shutdown attempts
-DO 0 and AO 0 independently and reports both failures.
-**[policy]** use `lights_off(lights)` for teardown; it continues after every
+**[guarantee, 0.2.7-DEV]** (since 0.2.7) The DAQ voltage lights take `setpower(light, ::Float64)`
+in volts, retain `level_requested`, export that request in V, and write before they record state; the full rules
+are in `mc-system-design`'s `references/driver-caveats.md`, "DAQ voltage-light state", and only there.
+**[policy]** use `lights_off(lights)` (since 0.2.7) for teardown; it continues after every
 exception and raises `MicroscopeControl.LightsOffError` with all name/error pairs.
 
-### Behavioural obligations beyond method names
+### Behavioral obligations beyond method names
 
 **[policy]** for a new driver; the third column names the upstream driver that
-shows the failure mode as a **[limitation]** (traced unless marked).
+shows the failure mode as a **[limitation, 0.2.7-DEV]** (traced unless marked).
 
 | Obligation | Do this | Because |
 |---|---|---|
-| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; **fixed in 0.2.1:** DCAM4 used to return an error code or `nothing` on failure, leaving the SDK initialized — it now throws on both failure paths, and each of those two checked paths *attempts* to uninitialize the SDK first (`dcamapi_uninit()` logs an `@error` if that fails, but the constructor ignores its return and throws anyway); **[existing guarantee, 0.2.7]** the API is reference-counted per process (initialized by the first camera, uninitialized by the last `shutdown`), a constructor that fails gives back only its own count, and an exception after a successful open closes the device and gives the count back before it propagates (tested against a fake SDK, not on a rig) |
-| Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | **[guarantee]** (0.2.7) DAQ lights accept `daq::DAQ` and named outputs; **[limitation]** omitted names retain discovery by enumeration |
+| Constructor side effects | construct pure; open in `initialize` | `DCAM4Camera()` and `ThorCamCSCCamera()` open hardware in the constructor; what DCAM4's constructor does on failure, and how its API is reference-counted across cameras (since 0.2.7), is in `mc-system-design`'s `references/driver-caveats.md`, the `DCAM4Camera` row |
+| Connection ownership | take shared dependencies as keyword arguments; record who closes (`owns_port`) | **[guarantee, 0.2.7-DEV]** (since 0.2.7) DAQ lights accept `daq::DAQ` and named outputs; **[limitation, 0.2.7-DEV]** omitted names retain discovery by enumeration |
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
-| Failure visibility | throw, or set `last_error` and return `nothing`, and document which | **[guarantee]** (0.2.7) DAQ voltage lights throw on missing outputs or failed commands, and record state only after a successful write and cleanup |
-| Buffer lifetime | copy out of SDK buffers before releasing them | `DCAM4Camera.getdata` releases its buffers; `getlastframe` afterwards reads released memory (`mc-acquire`) |
-| Acquisition completion | expose a completion signal (`is_running`, a `Task`, or a blocking call) | `sequence(::SimCamera)` spawns an `@async` task that flips `is_running`; DCAM4 blocks in `dcamwait_event` |
-| Units | a `units`/`power_unit` field and the docstring; convert at the SDK boundary | PI millimetres, MCL micrometres, Sims unitless 0..100 |
-| Calibration | table in the device (`AttenuatorProperties.cal_*`); values from the rig | `LCC1620.settransmission` `@error`s and returns when uncalibrated |
-| Cached versus measured | name it (`power_requested`); update `real_*` only from a readback | Sim stages copy `targ_*` into `real_*`; `getposition(::SimStage3d)` returns a scalar, not the documented tuple (executed) |
-| Image axis convention | `[y, x]`: `(H, W)` per frame, `(H, W, N)` per stack, `[1, 1]` top left (lab decision 0040, `docs/src/conventions.md`); at a row-major SDK boundary call `CameraInterface.rowmajor_to_yx(buf, W, H; stride)` once and permute nothing afterwards | DCAM4, DCx and CSC call it (executed through fakes); `SimCamera` returns `(roi.height, roi.width[, N])` (executed); `save_h5` stamps `dimension_order = "y,x[,frame]"` assuming it |
-| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `Triggerscope4` has none (`MethodError`). `TCubeLaser` had only a 2-arg method until **v0.2.3**, so the contract call threw; the 1-arg method was added there, the 2-arg one kept as a deprecated forwarder, and **0.2.5 removed the forwarder** (contract test asserts `!hasmethod(export_state, Tuple{TCubeLaser,Any})`) |
-| Unsupported operations | do not define the method; let the throwing stub answer | `stopmotion(::MCLStage)` is a concrete method whose body is `@error "STOP MOTION NOT IMPLEMENTED"` (executed), so `hasmethod` and the API map count it as implemented |
+| Failure visibility | throw, or set `last_error` and return `nothing`, and document which | **[guarantee, 0.2.7-DEV]** (since 0.2.7) DAQ voltage lights throw on missing outputs or failed commands, and record state only after a successful write and cleanup; `shutdown(::ThorCamCSCCamera)` instead returns its two SDK status codes, so a failed close does not throw |
+| Buffer lifetime | copy out of SDK buffers before releasing them | DCAM4's and DCx's `getdata` copy every frame out before they release the buffers; `getdata` after `capture` on a `DCAM4Camera` reads from a buffer `capture` already released (`mc-acquire`, capture contract) |
+| Acquisition completion | return the task `sequence` spawns, or make `getdata` block until the sequence ends, and document which; report a failed start or stop as a failure | no two drivers agree, and `is_running` is no completion signal: the per-driver table in `mc-acquire`, "Finite ordered sequence", is the one statement; add your driver's `read_sequence`, `stop_camera!`, `camera_ok` and `live_started` methods there, making its camera calls inside `with_camera` (in `stop_camera!`, `with_stop`, returning its value) |
+| Units | a `units`/`power_unit` field and the docstring; convert at the SDK boundary | PI millimeters, MCL micrometers, Sims unitless 0..100 |
+| Calibration | table in the device (`AttenuatorProperties.cal_*`); values measured on the instrument | `LCC1620.settransmission` `@error`s and returns when uncalibrated |
+| Cached versus measured | name it (`power_requested`); update `real_*` only from a readback | Sim stages copy `targ_*` into `real_*`; `getposition(::SimStage3d)` returns a scalar, not the documented tuple (suite: testing) |
+| Image axis convention | `[y, x]`: `(H, W)` per frame, `(H, W, N)` per stack, `[1, 1]` top left (lab decision 0040, `docs/src/conventions.md`); at a row-major SDK boundary call `CameraInterface.rowmajor_to_yx(buf, W, H; stride)` once and permute nothing afterwards | DCAM4, DCx and CSC call it (tested through fakes in `test/image_layout*.jl`); `SimCamera` returns `(roi.height, roi.width[, N])` (suite: testing); `save_h5` stamps `dimension_order = "y,x[,frame]"` assuming it |
+| `export_state` | 1-arg, `(Dict{String,Any}, data_or_nothing, Dict{String,Any})`; HDF5-safe values (`collect` tuples, `string` enums, `copy` vectors); children are named tuples | `Triggerscope4` has none (`MethodError`). `TCubeLaser` had only a 2-arg method until **v0.2.3**, so the contract call threw; the 1-arg method was added there, and the 2-arg one is kept as a deprecated forwarder to this day (`test/contract.jl` asserts `hasmethod(export_state, Tuple{TCubeLaser,Any})`; removal waits for the next breaking release) |
+| Unsupported operations | do not define the method; let the throwing stub answer | `stopmotion(::MCLStage)` is a concrete method whose body is `@error "STOP MOTION NOT IMPLEMENTED"` (suite: testing), so `hasmethod` and the API map count it as implemented |
 
 ## 4. Define a new interface (rare, consequential)
 
@@ -349,37 +347,37 @@ one real and the simulated one you ship with it; and someone will write system
 code against the *interface* (Sim swap, shared panel, interface-typed field).
 Otherwise write a driver and, if the fit is poor, a small adapter in your system.
 
-**[guarantee]** An interface is `abstract type X <: AbstractInstrument end`, an
+**[guarantee, 0.2.7-DEV]** An interface is `abstract type X <: AbstractInstrument end`, an
 optional property struct, one generic per operation whose only method is a
 stub that **throws** `error("<op> not implemented for $(typeof(x))")`, and an
 optional shared `gui(::X)`. That is true of the five `AbstractInstrument`
-interfaces; **[limitation]** `SLMInterface`'s `displayimage(::SLM)` has an empty
-body and returns `nothing`, the one interface stub that does not throw. The lifecycle generics come from
-`AbstractInstrument` and need no redeclaration. **[limitation]** `SLM` and `TRIG`
+interfaces; **[limitation, 0.2.7-DEV]** `SLMInterface`'s `displayimage(::SLM)` has an empty
+body and returns `nothing`, the one interface stub that does not throw (traced). The lifecycle generics come from
+`AbstractInstrument` and need no redeclaration. **[limitation, 0.2.7-DEV]** `SLM` and `TRIG`
 are **not** the template: they sit outside `AbstractInstrument`, so `MLSLM` has
 no `initialize`/`shutdown`/`gui` at all (`MethodError`, not the
-"not implemented" error). **[guarantee]** Its `export_state` returns cached configuration attributes only. **[limitation]** `Triggerscope4` has no `export_state`; neither can sit
+"not implemented" error). **[guarantee, 0.2.7-DEV]** Its `export_state` returns cached configuration attributes only. **[limitation, 0.2.7-DEV]** `Triggerscope4` has no `export_state`; neither can sit
 in an `AbstractInstrument`-typed field or rollback list, and Meadowlark never
 `include`s its `interface_functions.jl` so `displayimage(::MLSLM)` resolves to
-an empty-bodied `displayimage(::SLM)` (executed). Full table, the executed
+an empty-bodied `displayimage(::SLM)` (the generated API map files it under the interface fallback). Full table, the executed
 `Shutter` scaffold with its Sim implementation, and the rules for writing each
-stub's docstring (signature and units, return, state update, failure behaviour,
+stub's docstring (signature and units, return, state update, failure behavior,
 completion, required versus optional) are in `references/interface-scaffold.md`.
 
 **[policy]** the simulated implementation is mandatory and ships with the
 interface: the stubs all throw (write them so), so nothing exercises the contract without it;
 upstream's contract test iterates the interface's non-abstract leaves (from 0.2.5
 `device_types` walks through abstract intermediates such as `DiodeLaser`;
-**[limitation]** a plain `subtypes(iface)` is one level deep and misses them); downstream tests put it in the
+**[limitation, 0.2.7-DEV]** a plain `subtypes(iface)` is one level deep and misses them); downstream tests put it in the
 interface-typed field; a shared panel is developed against it. Make it honest
-about what it does not model. **[limitation]** upstream CLAUDE.md calls interface
+about what it does not model. **[limitation, 0.2.7-DEV]** upstream CLAUDE.md calls interface
 GUIs optional while `test/contract.jl` requires every non-exempt device to
 dispatch `gui` somewhere other than the `AbstractInstrument` stub; decide for
 your interface and write it down.
 
 ## 5. Registration and exports (upstream)
 
-**[guarantee]** Both container modules are flat include lists, and the root
+**[guarantee, 0.2.7-DEV]** Both container modules are flat include lists, and the root
 already `@reexport`s each, so a name your module exports is callable unqualified
 after `using MicroscopeControl` with no further edit:
 
@@ -404,11 +402,11 @@ exported names land in the same flat namespace: prefer `open_shutter!` to
 exactly this reason (traced).
 
 **A new interface must also be hand-registered in two literal tuples;
-neither file walks `subtypes(AbstractInstrument)` [guarantee]**, verified in
-both files at v0.2.0:
+neither file walks `subtypes(AbstractInstrument)` [guarantee, 0.2.7-DEV]**, checked in
+both files:
 
 ```julia
-# test/contract.jl, "Interface Contract" testset          # src/skills.jl, API-map generator (~line 251)
+# test/contract.jl, "Interface Contract" testset          # src/skills.jl, API-map generator (~line 272)
 interfaces = (MC.Stage, MC.Camera, MC.LightSource, MC.DAQ, MC.Attenuator, MC.SLM, MC.TRIG, MC.Shutter)
 ```
 
@@ -430,8 +428,8 @@ mode-specific setter on the instantiation and not the other one, `setlevel!` and
 `setpower` landing on the `DiodeLaser` method, and `measured_current`,
 `measured_photocurrent`, `loop_status` on its own type; any other light must have
 its own `setpower`. Item 4 is **not** run per subtype: the only stub-throws
-checks are three assertions on two test fixture types (`_ContractDummyStage`,
-`_ContractDummyInstrument`), so write your own
+checks are a handful of assertions on three test fixture types (`_ContractDummyStage`,
+`_ContractDummyInstrument`, `_ContractDummyModulator`), so write your own
 `@test_throws` for the operations you leave unimplemented. Items 5 and 6 are
 never automatic anywhere (full testset in `references/driver-scaffold.md`, 23
 assertions, executed):
@@ -442,13 +440,13 @@ assertions, executed):
    `=== getfield(MicroscopeControl, g)`;
 3. inherited `gui` lands on the interface panel, not the `AbstractInstrument` stub;
 4. unsupported operations fail loudly (`@test_throws ErrorException`);
-5. lifecycle and behaviour through a fake transport (pure constructor, opens on
+5. lifecycle and behavior through a fake transport (pure constructor, opens on
    `initialize`, closed link is an error, failed open leaves nothing to clean);
-6. `export_state` serialises: write it with `save_attributes_and_data` and read
+6. `export_state` serializes: write it with `save_attributes_and_data` and read
    the attributes back.
 
 A light with a `modulator` field also runs `modulation_violations` on its fake (see "A light that takes a modulator"
-above): **[guarantee]** it is the only check of the five-part modulator convention, and `test/contract.jl` checks the
+above): **[guarantee, 0.2.7-DEV]** it is the only check of the five-part modulator convention, and `test/contract.jl` checks the
 field (`Nothing` in its type, keyword default `nothing`) on `TCubeLaser`, `SimDiodeLaser` and `SimLight` only.
 
 | Simulation or fake transport establishes | Only hardware acceptance establishes |
@@ -456,11 +454,11 @@ field (`Nothing` in its type, keyword default `nothing`) on `TCubeLaser`, `SimDi
 | dispatch reaches your methods; no shadow bindings | the SDK does what the command says |
 | lifecycle ordering and cleanup logic | timing, settling, buffer sizes, timeouts |
 | range checks and error paths you coded | vendor error codes you have not seen |
-| the export tree serialises | units and sign conventions on the real axis |
+| the export tree serializes | units and sign conventions on the real axis |
 | GUI field compatibility (`hasfield`, or open the panel under `xvfb-run -a`) | that the panel's actions do the right physical thing |
 
-**[policy]** record hardware acceptance (device, firmware, pinned tag, what was
-checked) in the rig repo; upstream's CLAUDE.md says it is not tracked in MC.
+**[policy]** record hardware acceptance (device, firmware, pinned tag or commit, what was
+checked) in the instrument repo; upstream's CLAUDE.md says it is not tracked in MC.
 
 ## 7. Workflow
 
@@ -472,17 +470,18 @@ checked) in the rig repo; upstream's CLAUDE.md says it is not tracked in MC.
 3. **Contribute from a source checkout**, never by editing the depot copy:
    `Pkg.develop(url="https://github.com/LidkeLab/MicroscopeControl.jl.git")`
    (or `path=` on a clone), a branch, the three-dot imports, registration
-   (section 5, both tuples for an interface), a behavioural testset, full suite
+   (section 5, both tuples for an interface), a behavioral testset, full suite
    under `xvfb-run -a`.
 4. **Docs**: docstrings on the type and every method (the stubs' docstrings are
    the template), a CHANGELOG entry under `[Unreleased]`, and a hardware
    verification line.
-5. **Version** (traced from upstream CLAUDE.md): minor bump for an interface
-   change (signature, export or dispatch contract), patch for everything else;
-   releases are the tagged commits, and `main` carries `X.Y.Z-DEV` between
-   them. A new driver adds exports and a new
-   interface is an interface change, so expect a minor bump. Pin a tag, never
-   `main`.
+5. **Version** (traced from upstream CLAUDE.md and lab decision 0033): before 1.0, in `0.Y.Z` raising
+   `Z` is any non-breaking change, new features included, and raising `Y` is an interface break (a signature, an export
+   or what a call returns or throws changing for working code). `main` carries `X.Y.Z-DEV`; a pull request leaves it
+   alone unless it breaks an interface, and a release is a separate pull request that drops `-DEV`. A new driver or a new
+   interface adds names and is not a break by itself. Pin a tag, or the `main` commit the instrument
+   was tested against when the installed skills say `-DEV` (`mc-system-design`, "Before anything"); never the
+   branch itself.
 6. **Refresh the installed skills** after moving the pin: `install_skills()`
    again regenerates `mc-api-map`'s `references/api-map.md`, the only place your
    new type's method list appears automatically.

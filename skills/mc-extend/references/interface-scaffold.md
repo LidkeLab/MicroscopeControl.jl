@@ -1,21 +1,21 @@
 # Interface scaffold: `Shutter`
 
-Companion to `mc-extend` (MicroscopeControl.jl v0.2.0). Executed under `xvfb-run -a`. The bar for a new interface, the wiring and the hand-registration edits are in the skill body.
+Companion to `mc-extend` (MicroscopeControl.jl, checked at 0.2.7-DEV). The scaffold below is run under `xvfb-run -a` by the suite (suite: shutter). The bar for a new interface, the wiring and the hand-registration edits are in the skill body.
 
 ## `SLM` and `TRIG` are NOT the template
 
-**[limitation]**, executed: `abstract type SLM end` and `abstract type TRIG end`
+**[limitation, 0.2.7-DEV]**, executed: `abstract type SLM end` and `abstract type TRIG end`
 sit *outside* `AbstractInstrument`. What that costs them today:
 
 | Consequence | `MLSLM` (SLM) | `Triggerscope4` (TRIG) |
 |---|---|---|
 | `T <: AbstractInstrument` | `false` | `false` |
 | `initialize`/`shutdown` | **no methods**: `MethodError`, not the "not implemented" error | defined by the driver itself |
-| `export_state` | **[guarantee]** cached configuration attributes only, without SDK calls | `MethodError` (`hasmethod` is `false`); cannot appear in a saved record |
+| `export_state` | **[guarantee, 0.2.7-DEV]** cached configuration attributes only, without SDK calls | `MethodError` (`hasmethod` is `false`); cannot appear in a saved record |
 | `gui` | none | `gui(::TRIG)` exists because `TrigInterface` imports `gui` and defines it |
 | in a system field typed `AbstractInstrument`, or a `Vector{AbstractInstrument}` rollback list | cannot be stored | cannot be stored |
 | upstream contract test | listed in `no_core_methods` for lifecycle/GUI gaps; export is checked independently | exempt from `export_state` |
-| SLM interface operations | `displayimage(::MLSLM)` resolves to the interface's own `displayimage(::SLM)`, whose body is **empty** (returns `nothing`, silently): Meadowlark's `interface_functions.jl` is never `include`d by its module (executed / traced). A non-throwing default is exactly what this skill tells you never to ship. | n/a |
+| SLM interface operations | `displayimage(::MLSLM)` resolves to the interface's own `displayimage(::SLM)`, whose body is **empty** (returns `nothing`, silently): Meadowlark's `interface_functions.jl` is never `include`d by its module (the empty return: suite: statements; the missing include: traced). A non-throwing default is exactly what this skill tells you never to ship. | n/a |
 
 A system cannot treat these two like the other devices: no uniform lifecycle
 loop, only MLSLM exports state, and an error type (`MethodError`) that a
@@ -23,11 +23,12 @@ loop, only MLSLM exports state, and an error type (`MethodError`) that a
 `<: AbstractInstrument` is an upstream follow-up. Your new interface goes under
 `AbstractInstrument`, full stop.
 
-## The scaffold (executed)
+## The scaffold (suite: shutter)
 
 A mechanical shutter. Written as downstream modules here so it runs anywhere;
 the comments give the upstream file layout.
 
+<!-- mc-test: shutter -->
 ```julia
 # src/hardware_interfaces/shutter_interface/ShutterInterface.jl
 module ShutterInterface
@@ -106,7 +107,7 @@ module SimulatedShutter
 end
 ```
 
-What the run showed:
+**[guarantee, suite: shutter]** What the run showed:
 
 | Call | Result |
 |---|---|
@@ -121,15 +122,15 @@ What the run showed:
 
 **[policy]** Each stub's docstring is the contract. State, for every operation:
 
-- **signature and units** (`Float64` seconds, millimetres; be explicit, the
-  package has stages in millimetres and micrometres and a `light_on` stub whose
-  arity no driver implements);
+- **signature and units** (`Float64` seconds, millimeters; be explicit: the
+  package has stages in millimeters and micrometers, and up to v0.2.4 it had a
+  `light_on` stub whose arity no driver implemented);
 - **return value** (`nothing`, a `Bool`, an array shape): `getposition`'s
   docstring promises a tuple and the Sim returns a scalar, so this is where
   drift starts;
 - **state update** (which `properties` field changes, whether it is requested
   or measured);
-- **failure behaviour** (throw, or set a field and return `nothing`; pick one
+- **failure behavior** (throw, or set a field and return `nothing`; pick one
   for the whole interface);
 - **completion** (blocking, or a signal to poll), and
 - **required versus optional** operations. An optional operation still gets a
@@ -138,7 +139,7 @@ What the run showed:
 
 If you ship a `gui.jl`, list the fields it reads in the abstract type's
 docstring (as `Shutter` does above); those become part of the contract
-(`mc-extend`, "implicit structural contract", and `mc-api-map`'s `references/gui-fields.md`). **[limitation]** upstream
+(`mc-extend`, "implicit structural contract", and `mc-api-map`'s `references/gui-fields.md`). **[limitation, 0.2.7-DEV]** upstream
 CLAUDE.md calls interface GUIs optional while `test/contract.jl` requires
 every non-exempt device to dispatch `gui` to something other than the
 `AbstractInstrument` stub. Resolve it for your interface explicitly: either
