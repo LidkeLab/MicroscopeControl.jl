@@ -163,7 +163,7 @@ const SKILL_GROUP_USES = Dict("acquire-reader" => ["camera"], "bench" => ["camer
 # A group's fences: those of the groups it uses, then its own.
 skill_group_fences(groups, name) = vcat((groups[u] for u in get(SKILL_GROUP_USES, name, String[]))..., get(groups, name, []))
 
-SKILL_EXAMPLE_GROUPS["bench"] = (min_passes = 100, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["bench"] = (min_passes = 102, prelude = "", checks = raw"""
 mkcam() = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 message(e) = sprint(showerror, e)
 stuck_devices(sys) = first.(sys.stuck)
@@ -196,6 +196,14 @@ MC.CameraInterface.abort(c::RecordingCam) = (push!(c.calls, :abort); nothing)
 read_sequence(c::RecordingCam, n::Integer) = (push!(c.calls, :read); zeros(UInt16, 2, 3, n))
 stop_camera!(c::RecordingCam) = (push!(c.calls, :stop); nothing)
 camera_ok(c::RecordingCam) = (push!(c.calls, :camera_ok); true)
+struct NotOkBenchCam <: Camera                   # records calls; the fallback stop, and camera_ok says no
+    calls::Vector{Symbol}
+end
+MC.initialize(c::NotOkBenchCam) = nothing
+MC.shutdown(c::NotOkBenchCam) = nothing
+MC.CameraInterface.abort(c::NotOkBenchCam) = (push!(c.calls, :abort); nothing)
+read_sequence(c::NotOkBenchCam, n::Integer) = (push!(c.calls, :read); zeros(UInt16, 2, 3, n))
+camera_ok(c::NotOkBenchCam) = (push!(c.calls, :camera_ok); false)
 struct NoReaderCam <: Camera                     # records calls, and has no read_sequence method
     calls::Vector{Symbol}
 end
@@ -321,6 +329,13 @@ end
     e = try acquire!(marked, 1); nothing catch e e end
     @test startswith(message(e), "camera unavailable: it is marked unknown")
     @test isempty(rec.calls)
+    nok = NotOkBenchCam(Symbol[])
+    stopped = held(nok)
+    stop_camera!(nok)                                                           # a standalone stop: it returns, camera_ok says no
+    empty!(nok.calls)
+    e = try acquire!(stopped, 1); nothing catch e e end
+    @test startswith(message(e), "camera unavailable: it is marked unknown")
+    @test isempty(nok.calls)                                                    # no call reached the camera
     rec = RecordingCam()
     fine = held(rec); empty!(rec.calls)
     @test size(acquire!(fine, 2)) == (2, 3, 2) && rec.calls == [:read, :camera_ok]   # the recorder sees calls
@@ -332,10 +347,10 @@ end
     @test isempty(norec.calls) && !unknown(nocam) && !nocam.in_flight   # refused before anything touched it
 
     @test has_reader(ParamCam{Int}(), 1) && has_reader(IntegerCam(), 1)   # parametric and Integer readers both count
-    @test has_reader(IntegerCam(), Int32(1)) && !has_reader(ParamCam{Int}(), Int32(1))   # checked for the length's type
+    @test has_reader(IntegerCam(), Int16(1)) && !has_reader(ParamCam{Int}(), Int16(1))   # checked for the length's type
     @test !has_reader(NoReaderCam(), 1)
     param = held(ParamCam{Int}())
-    e = try acquire!(param, Int32(1)); nothing catch e e end
+    e = try acquire!(param, Int16(1)); nothing catch e e end
     @test startswith(message(e), "no sequence reader for ParamCam") && !unknown(param)
 
     cam = FailingCam()
@@ -634,7 +649,7 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 16, prelude = """
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 21, prelude = """
 using MicroscopeControl
 cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 latest = Ref{Any}(nothing)
@@ -658,6 +673,30 @@ failsstop = StopFailsCam()
 r = stop_reader!(failsstop, done_reader, Threads.Atomic{Bool}(false))
 @test r.reader_error === nothing && r.stop_error isa ErrorException && r.camera_ok == false
 @test failsstop in CAMERA_UNKNOWN                               # a stop that threw marks the camera
+
+# start_reader! refuses a camera marked unknown, here by a standalone stop that returned with camera_ok false.
+struct LiveRecCam <: Camera                                     # records every call made to it
+    calls::Vector{Symbol}
+end
+MC.CameraInterface.live(c::LiveRecCam) = (push!(c.calls, :live); nothing)
+MC.CameraInterface.getlastframe(c::LiveRecCam) = (push!(c.calls, :getlastframe); nothing)
+MC.CameraInterface.abort(c::LiveRecCam) = (push!(c.calls, :abort); nothing)
+camera_ok(c::LiveRecCam) = (push!(c.calls, :camera_ok); false)
+lrc = LiveRecCam(Symbol[])
+stop_camera!(lrc)
+@test lrc in CAMERA_UNKNOWN
+empty!(lrc.calls)
+e = try start_reader!(lrc, Ref{Any}(nothing), 100); nothing catch err err end
+@test e isa ErrorException && startswith(e.msg, "camera unavailable: it is marked unknown")
+@test isempty(lrc.calls)                                        # no call reached the camera
+
+# A reader that died of a Ctrl-C and a stop that fails: the interrupt is rethrown, and the failed stop logged first.
+dead = @async sleep(5)
+yield(); schedule(dead, InterruptException(); error = true)
+timedwait(() -> istaskdone(dead), 5.0)
+failsstop2 = StopFailsCam()
+e = @test_logs (:error, r"not known stopped") match_mode = :any (try stop_reader!(failsstop2, dead, Threads.Atomic{Bool}(false)); nothing catch err err end)
+@test e isa InterruptException && failsstop2 in CAMERA_UNKNOWN
 
 # A Ctrl-C lands in the reader, which wakes every frame: the body runs on, and the join rethrows it, plainly.
 cam4 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
@@ -704,7 +743,7 @@ SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (min_passes = 6, prelude = "using Mic
 @test fieldtype(DCAM4Camera, :exposure_time) == Float64 && fieldtype(ThorcamDCXCamera, :exposure_time) == Float64
 @test ThorcamDCXCamera().exposure_time == 0.01                                  # the constructor is pure
 """)
-SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 29, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 34, prelude = "", checks = raw"""
 cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 t = @elapsed stack = read_sequence(cam, 5)
 @test size(stack) == (32, 64, 5) && eltype(stack) == UInt16
@@ -733,6 +772,22 @@ marked = SimCamera()
 @test known_stopped(marked)
 mark_unknown!(marked)
 @test camera_ok(marked) && !known_stopped(marked)                               # the mark, not the driver, says no
+struct NotOkCam <: Camera                                                       # its stop returns; camera_ok says no
+    calls::Vector{Symbol}
+end
+MC.CameraInterface.abort(c::NotOkCam) = (push!(c.calls, :abort); nothing)
+camera_ok(c::NotOkCam) = (push!(c.calls, :camera_ok); false)
+nok = NotOkCam(Symbol[])
+stop_camera!(nok)                                                               # a standalone stop, the fallback's
+@test nok.calls == [:abort, :camera_ok] && nok in CAMERA_UNKNOWN                 # it returned, and marked the camera
+simmarked = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
+mark_unknown!(simmarked)
+@test_throws r"^camera unavailable: it is marked unknown" read_sequence(simmarked, 3)
+@test simmarked.capture_mode == MC.HardwareImplementations.SimulatedCamera.LIVE && !haskey(SIM_TIMER, simmarked)   # unstarted
+for T in (SimCamera, DCAM4Camera)                                               # each method guards before anything else
+    body = [s for s in only(code_lowered(read_sequence, (T, Int))).code if !(s isa Core.NewvarNode)]
+    @test occursin("refuse_unknown", string(first(body)))
+end
 endless = SimCamera(exposure_time = 0.01, sequence_length = 1)                  # a timer that never ends
 SIM_TIMER[endless] = @async sleep(30)
 took = @elapsed (e = try stop_camera!(endless); nothing catch err err end)
