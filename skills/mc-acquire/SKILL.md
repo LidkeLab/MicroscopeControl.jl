@@ -49,13 +49,14 @@ DCAM4 only, so the policy below stays the requirement for every driver.
    a plain `InterruptException`. Touch the camera only once `istaskdone(reader)`: a
    wait that ends with any exception while the reader still runs (perhaps inside an
    SDK call) must leave the camera alone and mark it unknown.
-3. Only then stop the camera, with `stop_camera!` (`abort`, prepared per driver),
-   and ask `known_stopped`; when the stop throws or the answer is no, mark the
-   camera unknown, which takes it out of service until it is rebuilt. All three
-   are in "Finite ordered sequence". Do 1 to 3 in a `finally`, so they run whatever
-   your program or the reader did; `stop_reader!` logs a failed stop itself. Rethrow
-   an `InterruptException`, never log it. Before starting the camera again, call
-   `refuse_unknown`, so a camera marked unknown is never restarted.
+3. Only then stop the camera, with `stop_camera!` (`abort`, prepared per driver,
+   through `with_camera`, which marks the camera unknown when the stop throws or
+   leaves it not known stopped; a marked camera is out of service until it is
+   rebuilt). Both are in "Finite ordered sequence". Do 1 to 3 in a `finally`, so
+   they run whatever your program or the reader did; `stop_reader!` logs a failed
+   stop itself. Rethrow an `InterruptException`, never log it. Start the camera
+   only through `with_camera`, as `start_reader!` does, so a camera marked unknown
+   is never restarted.
 4. Never let two tasks call into the same camera SDK concurrently. One task owns
    the camera; everything else asks it.
    **[limitation, 0.2.7-DEV]** the drivers spawn tasks of their own that the
@@ -65,11 +66,13 @@ DCAM4 only, so the policy below stays the requirement for every driver.
    property you can establish of the process; `mc-system-design`, Decision 3, gives
    the evidence, the resulting single-owner restriction, and the upstream fix.
 
-**[limitation, 0.2.7-DEV]** A Ctrl-C from the terminal lands in whichever task is running when it arrives, most
-often the reader, which wakes every frame, so the program body sees it only at the join, where `join_task` rethrows
-it; a body that must stop at once needs the reader to pass it on, for example through a flag the body checks. That
-holds for the tasks the example joins; a task nobody joins can swallow it (the DCAM4 sequence poller, in "Finite
-ordered sequence").
+**[limitation, 0.2.7-DEV]** A Ctrl-C from the terminal lands in whichever task is running when it arrives. In the
+caller's own task (the live-view body, or the task running `acquire!`) it unwinds that task directly. In the reader
+(the usual place, since it wakes every frame) or the Sim timer, it reaches the caller only at the join, where
+`join_task` rethrows it, so the body runs on until then; a body that must stop at once needs the reader to pass it
+on, for example through a flag the body checks. On DCAM4 it can be lost in two places, both in the driver: the
+sequence poller nobody joins, and the `catch` in the cleanup of `getdata` and `capture` (both in "Finite ordered
+sequence").
 
 <!-- mc-test: acquire-reader -->
 ```julia
@@ -77,16 +80,17 @@ ordered sequence").
     stop_reader!(cam, reader, stop) -> (; reader_error, stop_error, camera_ok)
 
 Set the reader's flag, join it, then stop the camera. It returns both outcomes: `reader_error` is the reader's own
-failure or `nothing`; `stop_error` is what `stop_camera!` threw, or `nothing`; `camera_ok` is `known_stopped(cam)`
-afterwards, false whenever `stop_error` is set, and the camera is marked unknown when it is false. A stop that threw,
-or left the camera not known stopped, is logged here, before anything is thrown. It throws in four cases:
+failure or `nothing`; `stop_error` is the ordinary error `stop_camera!` threw, or `nothing`; `camera_ok` is
+`known_stopped(cam)` afterwards, false whenever `stop_error` is set (`stop_camera!` has then marked the camera). A
+stop that threw an ordinary error, or left the camera not known stopped, is logged here, before anything is thrown.
+It throws in four cases:
 
 1. the wait ends with any exception while the reader still runs: the camera is left untouched and marked unknown,
    and that exception is rethrown;
 2. an interrupt, in the reader or in the wait, once the reader has ended: after the stop was attempted, whether or
    not it worked, as a plain `InterruptException`;
 3. any other exception in the wait, once the reader has ended: after the stop was attempted, that exception;
-4. an interrupt in the stop itself: the camera is marked unknown and the interrupt rethrown.
+4. an interrupt in the stop itself: the camera is marked unknown and the interrupt rethrown, not logged.
 """
 function stop_reader!(cam, reader, stop)
     stop[] = true                                # the reader's flag, not cam.is_running
@@ -107,8 +111,7 @@ function stop_reader!(cam, reader, stop)
     catch e
         stop_error = e
     end
-    ok = stop_error === nothing && known_stopped(cam)
-    ok || mark_unknown!(cam)                     # a stop that threw, or a camera not known stopped
+    ok = stop_error === nothing && known_stopped(cam)   # stop_camera!'s with_camera has marked the camera if not
     if stop_error isa InterruptException
         throw(stop_error)                        # case 4
     elseif !ok                                   # logged here, so no throw below can lose it
@@ -119,8 +122,11 @@ function stop_reader!(cam, reader, stop)
 end
 
 function start_reader!(cam, latest, fps)        # the live view and its reader; the ONLY task that touches cam
-    refuse_unknown(cam)                          # a camera marked unknown is never started again
-    live(cam)                                    # cam.is_running == 1 from here
+    with_camera(cam; ok = live_started) do       # refuses a marked camera; marks one whose live view did not start
+        reset_error!(cam)                        # live_started judges what live does from here
+        live(cam)                                # cam.is_running == 1 from here
+    end
+    refuse_unknown(cam)                          # the start failed: the camera is marked, and no reader is launched
     stop = Threads.Atomic{Bool}(false)           # the reader's own stop flag
     reader = @async while !stop[]
         frame = getlastframe(cam)
@@ -140,15 +146,16 @@ end
 outcome[].reader_error === nothing || throw(outcome[].reader_error)
 ```
 
-**[guarantee, suite: acquire-reader]** This runs clean against `SimCamera` (which cannot exhibit the hazard, since
-it does not call an SDK): the reader reads frames until its flag is set, the join returns, and the outcome is
-`camera_ok` with no error. `start_reader!` refuses a camera marked unknown before any call reaches it (a camera that
-records its calls). A reader that throws is still joined, the camera is still stopped, and the outcome carries the
-reader's error. A stop that throws an ordinary error gives an outcome with that error and `camera_ok == false`, is
-logged, and marks the camera; a stop that throws an interrupt is rethrown. An interrupt delivered into the reader
-itself, where a Ctrl-C usually lands, reaches the caller as a plain `InterruptException`, after the camera was
-stopped, and a stop that failed on that path is still logged. An interrupt, or any other exception, delivered to the
-task waiting on a reader that is still running leaves the camera running, marks it unknown, and reaches the caller.
+**[guarantee, suite: acquire-reader]** This runs clean against `SimCamera` (which cannot exhibit the hazard, since it
+does not call an SDK): the reader reads frames until its flag is set, the join returns, and the outcome is `camera_ok`
+with no error. `start_reader!` refuses a camera marked unknown before any call reaches it, and marks a camera whose
+live view did not start and launches no reader on it (cameras that record their calls). A reader that throws is still
+joined, the camera is still stopped, and the outcome carries the reader's error. A stop that throws an ordinary error
+gives an outcome with that error and `camera_ok == false`, is logged, and marks the camera; a stop that throws an
+interrupt marks the camera and is rethrown, with nothing logged. An interrupt delivered into the reader itself, where
+a Ctrl-C usually lands, reaches the caller as a plain `InterruptException`, after the camera was stopped, and a stop
+that failed on that path is still logged. An interrupt, or any other exception, delivered to the task waiting on a
+reader that is still running leaves the camera running, marks it unknown, and reaches the caller.
 
 **[guarantee, 0.2.7-DEV]** (since 0.2.7) The package GUI (`gui(cam)` / `start_live`) runs its
 blocking `getlastframe` reader as a `Threads.@spawn` task, which may run on another thread (no thread is reserved for
@@ -205,9 +212,24 @@ system rather than at every call site:
 
 <!-- mc-test: acquire-snap -->
 ```julia
-snap(cam::SimCamera) = (capture(cam); getdata(cam))     # executed
-snap(cam::Camera)    = capture(cam)                     # DCAM4, DCX, CSC: frame is the return value (traced)
+function snap(cam::SimCamera)                   # executed; the other skills use this one
+    with_camera(cam) do                          # with_camera: "Finite ordered sequence"; it refuses a marked camera
+        capture(cam)
+        getdata(cam)
+    end
+end
+function snap(cam::Camera)                      # DCAM4, DCX, CSC: frame is the return value
+    with_camera(cam) do                          # camera_ok afterwards: DCAM4's last_error still success; never on DCx,
+        reset_error!(cam)                        # CSC, so a snap there marks the camera (not covered)
+        capture(cam)
+    end
+end
 ```
+
+**[guarantee, suite: acquire-snap]** `snap` returns an `(H, W)` frame from `SimCamera`, and from `DCAM4Camera` run
+against the fake DCAM SDK (not a camera). On a camera marked unknown it is refused before any call reaches the
+camera: a camera that records its calls sees none, and on DCAM4 no capture starts. A DCAM4 snap that the driver
+reports as failed (a failed allocation: `capture` returns `nothing` with `last_error` set) marks the camera.
 
 Check the result before indexing, and check it **per driver**, because the failure
 value differs:
@@ -276,18 +298,24 @@ There is no portable way to read a finished sequence: the drivers disagree on wh
 skills; the other skills point here). Do not wait on `is_running`: the CSC camera never clears it, DCx's poller
 leaves it set until `getdata` aborts, and DCAM4's poller clears it at its deadline whether or not its stop worked.
 
-**[policy]** Read through one function per driver, chosen by dispatch as `snap` is: `read_sequence(cam, n)` returns
-the stack or throws; `stop_camera!(cam)` stops it after a failure or at the end of live view, and a throw from it
-means the camera is not known stopped; `camera_ok(cam)` answers whether, after the last acquisition or stop, the
-camera is known stopped with its buffers released, as far as its driver reports. A camera without a method gets the
-fallback, which refuses to read and never says the camera stopped. Around them, three shared pieces: `join_task`, the
-one way the example waits on a task; one unknown mark, set by `stop_camera!` when `camera_ok` is false after it and by
-the callers (`stop_reader!`, `acquire!`) on a stop that threw or a `camera_ok` that said no, and checked by
-`refuse_unknown` at every acquisition entry the skills teach (`start_reader!`, each `read_sequence` method, `Bench`'s
-`acquire!`) before it touches the camera; and `known_stopped`, which callers ask instead of `camera_ok`, so a driver's
-method cannot forget the mark. Covered here: `SimCamera` (run by the suite) and `DCAM4Camera` (traced). Not covered:
-`ThorcamDCXCamera` and `ThorCamCSCCamera` (below). `mc-system-design`'s `Bench` uses these functions; write the
-methods for a camera you add.
+**[policy]** Every function in these skills that calls a camera (`live`, `sequence`, `capture`, `getdata`,
+`getlastframe`, `abort`) makes those calls inside one wrapper, `with_camera(f, cam; ok)`, defined below. It refuses a
+camera marked unknown before `f` runs; it marks the camera unknown when `f` throws (any exception, an interrupt
+included) and rethrows; and after a normal return it marks the camera unknown when the postcondition `ok(cam)` is
+false, returning `f`'s value either way, so the caller still gets the stack and the mark stops the next use. A stop is
+the one call it lets through on a marked camera (`refuse = false`). The suite checks the rule on the code of every
+function in these skills' marked examples (suite: statements), with one exception named there: the reader task's own
+`getlastframe` loop, which `stop_reader!` joins before it stops the camera.
+
+Through it, one function per driver, chosen by dispatch as `snap` is: `read_sequence(cam, n)` returns the stack or
+throws; `stop_camera!(cam)` stops the camera after a failure or at the end of live view; and the postconditions,
+`camera_ok(cam)` (after an acquisition or stop, is the camera known stopped with its buffers released, as far as its
+driver reports?) and `live_started(cam)` (after `live`, is the live view known to be running?). A camera without a
+method gets the fallback, which refuses to read and never says the camera stopped or started. Two shared pieces go
+with them: `join_task`, the one way the examples wait on a task, and `known_stopped`, which callers ask instead of
+`camera_ok`. Covered here: `SimCamera` (run by the suite) and `DCAM4Camera` (run against the fake DCAM SDK in
+`test/`). Not covered: `ThorcamDCXCamera` and `ThorCamCSCCamera` (below). `mc-system-design`'s `Bench` uses these
+functions; write the methods for a camera you add.
 
 <!-- mc-test: camera -->
 ```julia
@@ -309,14 +337,53 @@ function join_task(t::Task)
     end
 end
 
-# The one out-of-service mark: a camera whose stop threw, that was not known stopped after a stop or an acquisition,
-# or whose reader was left running, is never used again. Rebuild it.
+# The one out-of-service mark: a camera that threw while in use, that failed its postcondition after a stop, a start or
+# an acquisition, or whose reader was left running, is never started or read again (a stop is still let through).
+# Rebuild it.
 const CAMERA_UNKNOWN = Base.IdSet{Camera}()
 mark_unknown!(cam::Camera) = (push!(CAMERA_UNKNOWN, cam); nothing)
 known_stopped(cam::Camera) = !(cam in CAMERA_UNKNOWN) && camera_ok(cam)   # what the callers ask
-refuse_unknown(cam::Camera) =                     # every acquisition entry calls this before it touches the camera
+refuse_unknown(cam::Camera) =
     cam in CAMERA_UNKNOWN ? error("camera unavailable: it is marked unknown (not known stopped after an " *
                                   "acquisition or a stop); shut down and reconstruct") : nothing
+
+"""
+    with_camera(f, cam; ok = camera_ok, refuse = true)
+
+The one way these examples touch a camera. Refuse a camera marked unknown (unless `refuse = false`, for a stop), run
+`f()`, mark the camera unknown when `f` throws, an interrupt included, and rethrow; after a normal return, mark it
+when `ok(cam)` is false. Returns `f()`'s value either way.
+"""
+function with_camera(f, cam::Camera; ok = camera_ok, refuse::Bool = true)
+    refuse && refuse_unknown(cam)
+    result = try
+        f()
+    catch
+        mark_unknown!(cam)
+        rethrow()
+    end
+    ok(cam) || mark_unknown!(cam)
+    return result
+end
+
+"""
+    camera_ok(cam) -> Bool
+
+After the last acquisition or stop: is the camera known stopped, with its buffers released, as far as its driver
+reports? `false` for a camera without a method.
+"""
+camera_ok(::Camera) = false
+
+"""
+    live_started(cam) -> Bool
+
+After `live`: is the live view known to be running, as far as the driver reports? `false` for a camera without a
+method, so `start_reader!` launches no reader on it.
+"""
+live_started(::Camera) = false
+
+# Before a call whose outcome the postcondition judges: clear what the driver reports into. Nothing for most drivers.
+reset_error!(::Camera) = nothing
 
 """
     read_sequence(cam, n) -> stack
@@ -328,83 +395,86 @@ read_sequence(cam::Camera, n::Integer) = error("no sequence reader for $(nameof(
 """
     stop_camera!(cam)
 
-Stop the camera after a failure, or at the end of live view, and mark it unknown when `camera_ok` is false after the
-stop, so the mark holds wherever the stop was called (every method does the same). A throw means the camera is not
-known stopped; the caller marks it.
+Stop the camera after a failure, or at the end of live view, through `with_camera`, which lets a stop through on a
+camera marked unknown: a throw, or `camera_ok` false afterwards, marks the camera unknown.
 """
-stop_camera!(cam::Camera) = (abort(cam); camera_ok(cam) || mark_unknown!(cam); nothing)   # always marks: never known
-
-"""
-    camera_ok(cam) -> Bool
-
-After the last acquisition or stop: is the camera known stopped, with its buffers released, as far as its driver
-reports? `false` for a camera without a method. Callers ask `known_stopped`, which adds the unknown mark.
-"""
-camera_ok(::Camera) = false
+stop_camera!(cam::Camera) = with_camera(cam; refuse = false) do   # the fallback: never camera_ok, so it always marks
+    abort(cam)
+end
 
 const SIM_TIMER = IdDict{SimCamera,Task}()       # each Sim camera's last sequence timer, kept through any teardown
 
 function read_sequence(cam::SimCamera, n::Integer)
-    refuse_unknown(cam)
-    cam.sequence_length = n
-    t = SIM_TIMER[cam] = sequence(cam)           # its timer Task: the sequence's own duration
-    try
-        join_task(t)                             # a Ctrl-C in the timer, or in this wait, comes out as a plain interrupt
-    finally
-        istaskdone(t) && delete!(SIM_TIMER, cam) # joined, or died: nothing left for stop_camera! to wait for
+    with_camera(cam) do
+        cam.sequence_length = n
+        t = SIM_TIMER[cam] = sequence(cam)       # its timer Task: the sequence's own duration
+        try
+            join_task(t)                         # a Ctrl-C in the timer, or in this wait, comes out as a plain interrupt
+        finally
+            istaskdone(t) && delete!(SIM_TIMER, cam)   # joined, or died: nothing left for stop_camera! to wait for
+        end
+        getdata(cam)                             # (H, W, n), fresh random frames; an ArgumentError for n < 0
     end
-    return getdata(cam)                          # (H, W, n), fresh random frames; an ArgumentError for n < 0
 end
 function stop_camera!(cam::SimCamera)
-    abort(cam)                                   # clears is_running; a timer still running keeps sleeping, and would
-    t = get(SIM_TIMER, cam, nothing)             # clear a later sequence's flag: wait for it, bounded
-    if t !== nothing
-        timedwait(() -> istaskdone(t), cam.sequence_length * cam.exposure_time + 1) === :ok ||
-            error("SimCamera: its sequence timer did not end")
-        join_task(t)                             # a Ctrl-C that landed in the timer meanwhile is passed on
-        delete!(SIM_TIMER, cam)
+    with_camera(cam; refuse = false) do
+        abort(cam)                               # clears is_running; a timer still running keeps sleeping, and would
+        t = get(SIM_TIMER, cam, nothing)         # clear a later sequence's flag: wait for it, bounded
+        if t !== nothing
+            timedwait(() -> istaskdone(t), cam.sequence_length * cam.exposure_time + 1) === :ok ||
+                error("SimCamera: its sequence timer did not end")
+            join_task(t)                         # a Ctrl-C that landed in the timer meanwhile is passed on
+            delete!(SIM_TIMER, cam)
+        end
     end
-    camera_ok(cam) || mark_unknown!(cam)
     return nothing
 end
 camera_ok(cam::SimCamera) = cam.is_running == false && !haskey(SIM_TIMER, cam)   # no timer left to join
+live_started(cam::SimCamera) = cam.is_running == true
 
-function read_sequence(cam::DCAM4Camera, n::Integer)   # traced: it needs the camera
-    refuse_unknown(cam)
-    cam.last_error = DCAM4.DCAMERR_SUCCESS        # camera_ok judges what happens from here
-    cam.sequence_length = n
-    sequence(cam)                                # returns nothing; its poller is discarded
-    cam.last_error == DCAM4.DCAMERR_SUCCESS || error("DCAM4Camera: sequence reported $(cam.last_error)")
-    stack = getdata(cam)                         # polls until the sequence ends, reads, then stops and releases
-    stack === nothing && error("DCAM4Camera: no stack (last_error = $(cam.last_error))")
-    return stack                                 # a release that failed after the read is still in last_error
+reset_error!(cam::DCAM4Camera) = (cam.last_error = DCAM4.DCAMERR_SUCCESS; nothing)
+function read_sequence(cam::DCAM4Camera, n::Integer)
+    with_camera(cam) do                          # camera_ok afterwards: a release that failed after the read marks
+        reset_error!(cam)                        # the camera, and the stack still comes back
+        cam.sequence_length = n
+        sequence(cam)                            # returns nothing; its poller is discarded
+        cam.last_error == DCAM4.DCAMERR_SUCCESS || error("DCAM4Camera: sequence reported $(cam.last_error)")
+        stack = getdata(cam)                     # polls until the sequence ends, reads, then stops and releases
+        stack === nothing && error("DCAM4Camera: no stack (last_error = $(cam.last_error))")
+        stack
+    end
 end
 function stop_camera!(cam::DCAM4Camera)
-    cam.last_error = DCAM4.DCAMERR_SUCCESS        # judge this abort alone
-    abort(cam)
-    camera_ok(cam) || mark_unknown!(cam)         # a failed stop or release, recorded in last_error
+    with_camera(cam; refuse = false) do
+        reset_error!(cam)                        # judge this abort alone
+        abort(cam)
+    end
     return nothing
 end
 camera_ok(cam::DCAM4Camera) = cam.last_error == DCAM4.DCAMERR_SUCCESS && !cam.is_running
+live_started(cam::DCAM4Camera) = cam.last_error == DCAM4.DCAMERR_SUCCESS && cam.is_running
 ```
 
-**[guarantee, suite: camera]** for `SimCamera`, the fallback, `join_task` and the unknown mark:
+**[guarantee, suite: camera]** for `SimCamera`, the fallback, `join_task`, `with_camera` and the unknown mark:
 `read_sequence(SimCamera(...), 5)` takes at least five exposures and returns `(32, 64, 5)` with `camera_ok` true; two
 reads of one finished sequence differ, and so do two sequences; while the timer still runs, `getdata` returns at once
 and two reads differ; `abort` clears `is_running` and leaves the timer running, and `camera_ok` is true only with
-`is_running` clear and no timer entry left, which `stop_camera!`'s wait (or the read's own join) removes; that wait is
-bounded (a timer that never ends makes `stop_camera!` throw within its bound); a negative length throws an
-`ArgumentError`; a camera type with no method is refused with the message above and is never `camera_ok`; `join_task`
-turns a task that died of an interrupt into a plain `InterruptException` and leaves any other failure a
-`TaskFailedException`; a camera marked unknown is never `known_stopped`; a stop that returns with `camera_ok` false
-marks the camera, and `read_sequence` then refuses it before any call reaches it (a camera that records its calls, and
-a `SimCamera`, which is left unstarted). **[guarantee, 0.2.7-DEV]** the `DCAM4Camera` methods are traced from the
-driver's source and not run here. Per driver:
+`is_running` clear and no timer entry left (a camera with `is_running` set and no timer entry is not `camera_ok`),
+which `stop_camera!`'s wait (or the read's own join) removes; that wait is bounded (a timer that never ends makes
+`stop_camera!` throw within its bound), and that throw marks the camera, so a `read_sequence` on the same camera is
+refused and leaves it unstarted; a read that throws (a negative length, an `ArgumentError`) marks the camera; a camera
+type with no method is refused with the message above and is never `camera_ok`; `join_task` turns a task that died of
+an interrupt into a plain `InterruptException` and leaves any other failure a `TaskFailedException`; a camera marked
+unknown is never `known_stopped`; and a standalone stop that returns with `camera_ok` false marks the camera. For
+`DCAM4Camera`, against the fake DCAM SDK (`test/dcam4_fake_sdk.jl`, not a camera): a clean read returns the stack and
+leaves the camera in service; a read whose buffer release fails after the frames were read returns the stack and marks
+the camera, and the next `read_sequence` on it is refused before the driver starts anything; a stop on the marked
+camera still runs. Per driver:
 
 | Driver | `sequence(cam)` returns | `getdata(cam)` in `SEQUENCE` mode | `abort(cam)` | The methods above | Source |
 |---|---|---|---|---|---|
-| `SimCamera` | its timer `Task`, which sleeps `sequence_length` exposures, reading `exposure_time` again for each (traced; one change while it runs, suite: bench), then clears `is_running` | fresh random frames at any time, the timer running or not; it keeps nothing, so joining the timer is what makes a read take the sequence's time | clears `is_running`; the timer keeps running | keep the timer and join it with `join_task`, then read; `stop_camera!` aborts and waits for the timer, bounded; `camera_ok`: `is_running` clear and no timer left to join | suite: camera |
-| `DCAM4Camera` | `nothing`, with `last_error` set when the allocation or start failed; its poller is discarded (and can swallow a Ctrl-C, below). The poller stops a capture still running at its deadline, ignoring that stop's result, and clears `is_running` while its sequence is current, whether or not the stop worked | polls the capture status until the sequence ends (below), reads the `N` frames, then stops and releases; `nothing` on a timeout, a failed frame-count query or lost frames. An exception thrown by that stop and release is logged and swallowed (below) | `stop_and_release!`: a stop or release that fails records `last_error` and leaves `is_running` as it was; on a stopped camera it does nothing and clears `is_running`; an exception inside it (an interrupt in its status read, say) propagates | clear `last_error` before the sequence and before a stop, and turn an error from `sequence` or a `nothing` from `getdata` into a throw; `camera_ok`: `last_error` still success, `is_running` clear (the callers mark the camera unknown when the stop throws) | traced; `getdata` and the stop tested against the fake SDK |
+| `SimCamera` | its timer `Task`, which sleeps `sequence_length` exposures, reading `exposure_time` again for each (traced; one change while it runs, suite: bench), then clears `is_running` | fresh random frames at any time, the timer running or not; it keeps nothing, so joining the timer is what makes a read take the sequence's time | clears `is_running`; the timer keeps running | through `with_camera`: keep the timer and join it with `join_task`, then read; `stop_camera!` aborts and waits for the timer, bounded; `camera_ok`: `is_running` clear and no timer left to join; `live_started`: `is_running` set | suite: camera |
+| `DCAM4Camera` | `nothing`, with `last_error` set when the allocation or start failed; its poller is discarded (and can swallow a Ctrl-C, below). The poller stops a capture still running at its deadline, ignoring that stop's result, and clears `is_running` while its sequence is current, whether or not the stop worked | polls the capture status until the sequence ends (below), reads the `N` frames, then stops and releases; `nothing` on a timeout, a failed frame-count query or lost frames. An exception thrown by that stop and release is logged and swallowed (below) | `stop_and_release!`: a stop or release that fails records `last_error` and leaves `is_running` as it was; on a stopped camera it does nothing and clears `is_running`; an exception inside it (an interrupt in its status read, say) propagates | through `with_camera`: clear `last_error` before the sequence, a stop or a `live`, and turn an error from `sequence` or a `nothing` from `getdata` into a throw; `camera_ok`: `last_error` still success, `is_running` clear; `live_started`: `last_error` still success, `is_running` set | the driver traced; the methods run against the fake DCAM SDK (suite: camera) |
 | `ThorcamDCXCamera` | its polling `Task` when the capture starts: it stops live video once `sequence_length` frames are counted, has no deadline (after a stop that came first, nothing ends it), and leaves `is_running` set; `nothing`, after an `@error`, when allocation or the start fails (a failed allocation returns without freeing the buffers it allocated) | copies the buffers at once, ignoring each copy's status, then calls `abort` | stops live video and frees each buffer in `pImage_Mem`, ignoring every status, and clears `is_running`; on a camera that never acquired it throws an `UndefRefError` (the list starts with an unset element) | none: the fallback (not covered, below) | traced |
 | `ThorCamCSCCamera` | `nothing`, and no task: it sets frames per trigger to 0 (unlimited), arms, triggers and sets `is_running`; nothing disarms it | reads `N` pending frames one at a time, each waiting up to the poll timeout, and throws on a missing one (since 0.2.7); the camera stays armed and streaming, and `is_running` stays set | is `shutdown`: closes the camera and the SDK and returns their two status codes, throwing on neither; `is_running` stays set | none: the fallback (not covered, below) | traced |
 
@@ -425,12 +495,13 @@ land: write its own reader, check what it can, and rebuild the camera (or restar
 acquisition, or accept reuse it cannot verify.
 
 **[limitation, 0.2.7-DEV]** `camera_ok(::DCAM4Camera)` reports what the driver reports, and one case goes unreported:
-`getdata` runs its stop and release in a `finally` that catches any exception from them (an interrupt included), logs
-it, and returns the stack (or `nothing`) as before. Such an exception records nothing in `last_error`. When
-`last_error` is still success (the read worked) and the sequence poller has cleared `is_running`, `camera_ok` is true
-while the buffer may still be attached; after a read whose failure set `last_error` (lost frames, say), it stays false
-(traced from `getdata` in `dcam4_camera/interface_methods.jl`). Watch the log for `cleanup after getdata failed`, and
-treat the camera as not stopped when it appears.
+`getdata` and `capture` run their stop and release in a `finally` that catches any exception from them (an interrupt
+included), log it, and return the stack, the frame or `nothing` as before. Such an exception records nothing in
+`last_error`, and `with_camera` never sees it. When `last_error` is still success (the read worked) and `is_running`
+is clear (the sequence poller cleared it, or it was never set for `capture`), `camera_ok` is true while the buffer may
+still be attached; after a read whose failure set `last_error` (lost frames, say), it stays false (traced from
+`getdata` and `capture` in `dcam4_camera/interface_methods.jl`). Watch the log for `cleanup after getdata failed` and
+`cleanup after capture failed`, and treat the camera as not stopped when either appears.
 
 **[limitation, 0.2.7-DEV]** On DCAM4 a Ctrl-C can be lost. `sequence` starts a poller that nothing joins and that has
 no `catch`, and it polls the capture status as often as `getdata` does, so a Ctrl-C can land in it rather than in the
@@ -466,8 +537,7 @@ CSC another pending frame (see the capture contract above).
 <!-- mc-test: acquire-zstack -->
 ```julia
 using MicroscopeControl
-snap(cam::SimCamera) = (capture(cam); getdata(cam))    # see "capture contract" for hardware
-snap(cam::Camera)    = capture(cam)                    # DCAM4, DCX, CSC: the frame is the return value
+# snap: the one definition, in "The capture contract differs per driver" above
 
 function zstack(cam, stage, zs)                         # one new frame per plane, each after its move
     stack = nothing

@@ -79,6 +79,50 @@ function stated_values(code::AbstractString)
     return out
 end
 
+# The camera calls the examples may make only inside `with_camera` (mc-acquire, "Finite ordered sequence"), and the
+# (function, call) pairs allowed outside it, each with the reason.
+const CAMERA_CALLS = (:live, :sequence, :capture, :getdata, :getlastframe, :abort)
+const CAMERA_CALLS_ALLOWED = Dict(
+    (:start_reader!, :getlastframe) =>
+        "the reader task's own loop: stop_reader! joins the reader before it stops the camera, through stop_camera!")
+
+last_name(f) = f isa Symbol ? f : f isa Expr && f.head === :. && f.args[end] isa QuoteNode ? f.args[end].value : nothing
+callee_name(ex) = ex isa Expr && ex.head === :call ? last_name(ex.args[1]) : nothing
+signature_name(sig) = sig isa Expr && sig.head in (:where, :(::)) ? signature_name(sig.args[1]) :
+                      sig isa Expr && sig.head === :call ? last_name(sig.args[1]) : nothing
+is_wrapped(ex) = ex isa Expr && ((ex.head === :do && callee_name(ex.args[1]) === :with_camera) ||
+                                 callee_name(ex) === :with_camera)
+
+# The camera calls in `ex` that sit outside every `with_camera` call and do-block.
+function unwrapped_camera_calls!(found, ex)
+    ex isa Expr || return found
+    is_wrapped(ex) && return found
+    callee_name(ex) in CAMERA_CALLS && push!(found, callee_name(ex))
+    foreach(a -> unwrapped_camera_calls!(found, a), ex.args)
+    return found
+end
+
+# Every function defined in `code` (long or short form, at any depth, documented or not) that makes a camera call
+# outside `with_camera`, as (function, call), less the allowed pairs. A method of a camera call itself is a driver,
+# not a caller, and is not checked.
+function camera_calls_outside_wrapper(code::AbstractString)
+    out = Tuple{Symbol,Symbol}[]
+    function visit(ex)
+        ex isa Expr || return
+        if ex.head in (:function, :(=)) && length(ex.args) == 2
+            name = signature_name(ex.args[1])
+            if name !== nothing && !(name in CAMERA_CALLS)
+                for c in unique(unwrapped_camera_calls!(Symbol[], ex.args[2]))
+                    haskey(CAMERA_CALLS_ALLOWED, (name, c)) || push!(out, (name, c))
+                end
+            end
+        end
+        foreach(visit, ex.args)
+    end
+    visit(Meta.parseall(code))
+    return out
+end
+
 # The Sim stages print a status line per call. Only those lines are dropped from a fence's output; everything else it
 # prints, a failing `@test` included, reaches the log.
 const SIM_STAGE_NOISE = r"^(Initializing|Shutting down|Moving|Getting|Stopping|Setting) stage\b.*\.\.\.$"
@@ -158,7 +202,8 @@ const SKILL_FENCELESS_GROUPS = ["statements"]
 
 # group => the groups whose fences run first, in its module: the per-driver camera functions in mc-acquire are used
 # by the reader there and by mc-system-design's Bench.
-const SKILL_GROUP_USES = Dict("acquire-reader" => ["camera"], "bench" => ["camera"])
+const SKILL_GROUP_USES = Dict("acquire-reader" => ["camera"], "bench" => ["camera"], "acquire-snap" => ["camera"],
+                              "acquire-zstack" => ["camera", "acquire-snap"], "testing" => ["camera", "acquire-snap"])
 
 # A group's fences: those of the groups it uses, then its own.
 skill_group_fences(groups, name) = vcat((groups[u] for u in get(SKILL_GROUP_USES, name, String[]))..., get(groups, name, []))
@@ -358,9 +403,9 @@ end
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed"
     @test cam.aborts == 1 && camera_ok(cam)
-    @test bad.in_flight == false && !unknown(bad)
+    @test bad.in_flight == false && unknown(bad)                 # the read threw: marked, though the stop worked
     e = try acquire!(bad, 3) catch e e end
-    @test message(e) == "SDK: read failed" && cam.aborts == 2    # still available: the next call reached the camera
+    @test startswith(message(e), "camera unavailable") && cam.aborts == 1   # refused: the camera saw no call
 
     bad = held(FailingCam(abort_mode = :throws))
     e = try acquire!(bad, 3) catch e e end
@@ -387,7 +432,7 @@ end
     bad = held(cam)
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed"
-    @test camera_ok(cam) && unknown(bad)                          # camera_ok would say yes; the throw decided
+    @test camera_ok(cam) && unknown(bad)                          # camera_ok would say yes; the throws decided
 
     cam = FailingCam(abort_mode = :interrupted)
     bad = held(cam)
@@ -409,7 +454,7 @@ end
         e = try join_task(running); nothing catch err err end
         @test e isa InterruptException                            # plain, wherever it landed
         @test istaskdone(timer) && slow.cam.is_running == false   # the camera was stopped
-        @test !unknown(slow) && !slow.in_flight                   # and not marked
+        @test unknown(slow) && !slow.in_flight                    # and marked: the read threw
     end
 end
 @testset "bench: export with a failed child, shutdown failure" begin
@@ -649,7 +694,7 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 21, prelude = """
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 26, prelude = """
 using MicroscopeControl
 cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 latest = Ref{Any}(nothing)
@@ -665,14 +710,22 @@ failing = @async error("reader: SDK read failed")               # a reader that 
 r = stop_reader!(cam2, failing, Threads.Atomic{Bool}(false))
 @test r.reader_error isa TaskFailedException && occursin("reader: SDK read failed", sprint(showerror, r.reader_error))
 @test r.stop_error === nothing && r.camera_ok && cam2.is_running == false   # the camera was still stopped
-struct StopFailsCam <: Camera end                               # its stop throws
-stop_camera!(::StopFailsCam) = error("SDK: stop failed")
+mutable struct StopFailsCam <: Camera                           # its stop throws; mutable, so each is its own camera
+    kind::Symbol                                                # :error or :interrupt
+end
+StopFailsCam() = StopFailsCam(:error)
+stop_camera!(c::StopFailsCam) = with_camera(c; refuse = false) do
+    c.kind === :interrupt ? throw(InterruptException()) : error("SDK: stop failed")
+end
 camera_ok(::StopFailsCam) = true                                # it would say yes; the throw decides
 done_reader = @async nothing
 failsstop = StopFailsCam()
-r = stop_reader!(failsstop, done_reader, Threads.Atomic{Bool}(false))
-@test r.reader_error === nothing && r.stop_error isa ErrorException && r.camera_ok == false
+r = @test_logs (:error, r"not known stopped") match_mode = :any stop_reader!(failsstop, done_reader, Threads.Atomic{Bool}(false))
+@test r.reader_error === nothing && r.stop_error isa ErrorException && r.camera_ok == false   # logged, and returned
 @test failsstop in CAMERA_UNKNOWN                               # a stop that threw marks the camera
+intstop = StopFailsCam(:interrupt)                              # a stop that throws an interrupt, on its own camera
+e = @test_logs min_level = Base.CoreLogging.Error (try stop_reader!(intstop, @async(nothing), Threads.Atomic{Bool}(false)); nothing catch err err end)
+@test e isa InterruptException && intstop in CAMERA_UNKNOWN     # rethrown, not logged, and the camera marked
 
 # start_reader! refuses a camera marked unknown, here by a standalone stop that returned with camera_ok false.
 struct LiveRecCam <: Camera                                     # records every call made to it
@@ -689,12 +742,17 @@ empty!(lrc.calls)
 e = try start_reader!(lrc, Ref{Any}(nothing), 100); nothing catch err err end
 @test e isa ErrorException && startswith(e.msg, "camera unavailable: it is marked unknown")
 @test isempty(lrc.calls)                                        # no call reached the camera
+notlive = LiveRecCam(Symbol[])                                  # live returns, and live_started says no
+e = try start_reader!(notlive, Ref{Any}(nothing), 100); nothing catch err err end
+sleep(0.05)
+@test e isa ErrorException && notlive.calls == [:live] && notlive in CAMERA_UNKNOWN   # marked, and no reader launched
 
 # A reader that died of a Ctrl-C and a stop that fails: the interrupt is rethrown, and the failed stop logged first.
 dead = @async sleep(5)
 yield(); schedule(dead, InterruptException(); error = true)
 timedwait(() -> istaskdone(dead), 5.0)
-failsstop2 = StopFailsCam()
+failsstop2 = StopFailsCam()                                     # its own camera: mutable, so not the one above
+@test !(failsstop2 in CAMERA_UNKNOWN)
 e = @test_logs (:error, r"not known stopped") match_mode = :any (try stop_reader!(failsstop2, dead, Threads.Atomic{Bool}(false)); nothing catch err err end)
 @test e isa InterruptException && failsstop2 in CAMERA_UNKNOWN
 
@@ -727,13 +785,37 @@ for thrown in (InterruptException(), ErrorException("the wait timed out"))
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-snap"] = (min_passes = 5, prelude = "using MicroscopeControl", checks = raw"""
+SKILL_EXAMPLE_GROUPS["acquire-snap"] = (min_passes = 12, prelude = "using MicroscopeControl", checks = raw"""
 sim = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 @test size(snap(sim)) == (32, 64)
 @test sim.capture_mode == MC.HardwareImplementations.SimulatedCamera.SINGLE_FRAME   # capture ran before the read
 @test snap(SimCamera(roi = CameraROI(1, 1, 64, 32))) isa Matrix{UInt16}
 @test which(snap, Tuple{SimCamera}).sig.parameters[2] === SimCamera
 @test which(snap, Tuple{DCAM4Camera}).sig.parameters[2] === Camera              # the hardware drivers take the generic method
+struct SnapRecCam <: Camera                                                     # records every call made to it
+    calls::Vector{Symbol}
+end
+MC.CameraInterface.capture(c::SnapRecCam) = (push!(c.calls, :capture); zeros(UInt16, 2, 3))
+camera_ok(c::SnapRecCam) = true
+rc = SnapRecCam(Symbol[])
+@test size(snap(rc)) == (2, 3) && rc.calls == [:capture]
+mark_unknown!(rc); empty!(rc.calls)
+@test_throws r"^camera unavailable: it is marked unknown" snap(rc)
+@test isempty(rc.calls)                                                         # refused: no call reached the camera
+FK = Main.FakeDCAM                                                              # test/dcam4_fake_sdk.jl, in the child
+fake_dcam(mode) = DCAM4.DCAM4Camera("fake", DCAM4.CameraFormat(1, 1, 1, 1, "SCMOS"), C_NULL, 0.01, 10.0,
+    DCAM4.CameraROI(0, 0, 1, 1), mode, DCAM4.DCAMPROP_TRIGGER_MODE__NORMAL, 2, DCAM4.DCAMERR_SUCCESS, false, 0,
+    zeros(UInt16, 1, 1), NaN, 0)
+FK.reset!()
+dc = fake_dcam(DCAM4.LIVE)
+@test size(snap(dc)) == (2, 2) && known_stopped(dc)                             # DCAM4 over the fake SDK
+mark_unknown!(dc); empty!(FK.start_modes)
+@test_throws r"^camera unavailable" snap(dc)
+@test isempty(FK.start_modes)                                                   # no capture started
+FK.reset!(); FK.codes["dcambuf_alloc"] = DCAM4.DCAMERR_NOMEMORY                 # the driver reports a failed allocation
+dc2 = fake_dcam(DCAM4.LIVE)
+@test snap(dc2) === nothing && dc2 in CAMERA_UNKNOWN                            # nothing, and the camera is marked
+FK.reset!()
 """)
 SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (min_passes = 6, prelude = "using MicroscopeControl; cam = SimCamera()", checks = raw"""
 @test cam.exposure_time == 0.02
@@ -743,7 +825,7 @@ SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (min_passes = 6, prelude = "using Mic
 @test fieldtype(DCAM4Camera, :exposure_time) == Float64 && fieldtype(ThorcamDCXCamera, :exposure_time) == Float64
 @test ThorcamDCXCamera().exposure_time == 0.01                                  # the constructor is pure
 """)
-SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 34, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 47, prelude = "", checks = raw"""
 cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 t = @elapsed stack = read_sequence(cam, 5)
 @test size(stack) == (32, 64, 5) && eltype(stack) == UInt16
@@ -751,8 +833,12 @@ t = @elapsed stack = read_sequence(cam, 5)
 @test camera_ok(cam) && cam.is_running == false
 @test getdata(cam) != stack                                                     # the same finished sequence, read again
 @test read_sequence(cam, 5) != stack                                            # a second sequence: new frames
-e = try read_sequence(cam, -1); nothing catch err err end
-@test e isa ArgumentError
+neg = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
+e = try read_sequence(neg, -1); nothing catch err err end
+@test e isa ArgumentError && neg in CAMERA_UNKNOWN                              # a read that throws marks the camera
+running = SimCamera()
+running.is_running = true
+@test !haskey(SIM_TIMER, running) && camera_ok(running) == false                # set flag, no timer: not stopped
 slow = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.02)
 reading = @async read_sequence(slow, 20)                                        # about 0.4 s of timer
 sleep(0.1)
@@ -784,14 +870,47 @@ simmarked = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 mark_unknown!(simmarked)
 @test_throws r"^camera unavailable: it is marked unknown" read_sequence(simmarked, 3)
 @test simmarked.capture_mode == MC.HardwareImplementations.SimulatedCamera.LIVE && !haskey(SIM_TIMER, simmarked)   # unstarted
-for T in (SimCamera, DCAM4Camera)                                               # each method guards before anything else
-    body = [s for s in only(code_lowered(read_sequence, (T, Int))).code if !(s isa Core.NewvarNode)]
-    @test occursin("refuse_unknown", string(first(body)))
+@test with_camera(() -> 7, SimCamera()) == 7                                     # with_camera returns f's value
+okcam = SimCamera()
+@test with_camera(() -> 8, okcam; ok = _ -> false) == 8 && okcam in CAMERA_UNKNOWN   # and marks on a false postcondition
+ic = SimCamera()
+@test_throws InterruptException with_camera(() -> throw(InterruptException()), ic)
+@test ic in CAMERA_UNKNOWN                                                      # an interrupt marks too, and is rethrown
+mc_ = SimCamera(); mark_unknown!(mc_)
+@test with_camera(() -> :stopped, mc_; refuse = false) === :stopped              # a stop is let through on a marked camera
+FK = Main.FakeDCAM                                                              # test/dcam4_fake_sdk.jl, in the child
+fake_dcam(mode) = DCAM4.DCAM4Camera("fake", DCAM4.CameraFormat(1, 1, 1, 1, "SCMOS"), C_NULL, 0.01, 10.0,
+    DCAM4.CameraROI(0, 0, 1, 1), mode, DCAM4.DCAMPROP_TRIGGER_MODE__NORMAL, 2, DCAM4.DCAMERR_SUCCESS, false, 0,
+    zeros(UInt16, 1, 1), NaN, 0)
+function fake_sequence!(; release_fails = false)          # a two-frame sequence, BUSY for 50 ms after its start
+    FK.reset!(); FK.frames_transferred[] = 2
+    t0 = Ref(0.0)
+    FK.on_start[] = mode -> (t0[] = time(); release_fails && (FK.codes["dcambuf_release"] = DCAM4.DCAMERR_NOTREADY))
+    FK.on_status[] = () -> (FK.status[] = time() - t0[] < 0.05 ? DCAM4.DCAMCAP_STATUS_BUSY : DCAM4.DCAMCAP_STATUS_READY)
+    FK.status[] = DCAM4.DCAMCAP_STATUS_STABLE
 end
+fake_sequence!()
+clean = fake_dcam(DCAM4.SEQUENCE)
+@test size(read_sequence(clean, 2)) == (2, 2, 2) && known_stopped(clean)        # DCAM4, a clean read
+fake_sequence!(release_fails = true)
+leaky = fake_dcam(DCAM4.SEQUENCE)
+@test size(read_sequence(leaky, 2)) == (2, 2, 2)                                # the release fails: the stack comes back
+@test leaky.last_error == DCAM4.DCAMERR_NOTREADY && leaky in CAMERA_UNKNOWN      # and the camera is marked
+timedwait(() -> !leaky.is_running, 5.0)
+delete!(FK.codes, "dcambuf_release"); empty!(FK.start_modes)
+@test_throws r"^camera unavailable" read_sequence(leaky, 2)
+@test isempty(FK.start_modes)                                                   # refused before the driver started anything
+ncalls = length(FK.calls)
+stop_camera!(leaky)
+@test length(FK.calls) > ncalls                                                 # a stop on the marked camera still runs
+FK.reset!()
 endless = SimCamera(exposure_time = 0.01, sequence_length = 1)                  # a timer that never ends
 SIM_TIMER[endless] = @async sleep(30)
 took = @elapsed (e = try stop_camera!(endless); nothing catch err err end)
 @test e isa ErrorException && occursin("timer did not end", e.msg) && took < 5  # the wait is bounded (1.01 s here)
+@test endless in CAMERA_UNKNOWN                                                 # the stop threw: marked
+@test_throws r"^camera unavailable" read_sequence(endless, 3)                   # so a read on the same camera is refused
+@test endless.capture_mode == MC.HardwareImplementations.SimulatedCamera.LIVE   # and the camera was not started
 interrupted = @async sleep(30)
 yield(); schedule(interrupted, InterruptException(); error = true)
 @test_throws InterruptException join_task(interrupted)                          # plain, not a TaskFailedException
@@ -831,6 +950,7 @@ mutable struct ZCam <: Camera                       # notes the stage's z inside
     taken_at::Vector{Float64}
 end
 MC.CameraInterface.capture(c::ZCam) = (push!(c.taken_at, c.stage.real_z); fill(UInt16(length(c.taken_at)), 2, 3))
+camera_ok(::ZCam) = true                            # known stopped after each capture, so snap keeps it in service
 zc = ZCam(SimStage3d(), Float64[])
 s = zstack(zc, zc.stage, zs)
 @test zc.taken_at == collect(zs)                                                # one capture per plane, after its move
@@ -911,7 +1031,42 @@ using InteractiveUtils
 """)
 
 # Statements about the generated API map, the SLM stubs, the exports and `save_h5` that no example block runs.
-SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 70, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 79, prelude = "", checks = raw"""
+@testset "statements: every function in the examples calls a camera only inside with_camera" begin
+    fenced = Main.skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))
+    offenders = [(basename(dirname(b.file)), b.line, f, c) for blocks in values(fenced) for b in blocks
+                 for (f, c) in Main.camera_calls_outside_wrapper(b.code)]
+    isempty(offenders) || @error "camera calls outside with_camera, as (skill, fence line, function, call)" offenders
+    @test isempty(offenders)
+    # what the rule sees
+    @test Main.camera_calls_outside_wrapper("f(cam) = capture(cam)") == [(:f, :capture)]
+    @test Main.camera_calls_outside_wrapper("function g(c)\n    @async getlastframe(c)\nend") == [(:g, :getlastframe)]
+    @test Main.camera_calls_outside_wrapper("h(c::C{T}, n) where {T} = (x = 1; MC.CameraInterface.abort(c))") == [(:h, :abort)]
+    @test isempty(Main.camera_calls_outside_wrapper("f(cam) = with_camera(cam) do\n    capture(cam)\nend"))
+    @test isempty(Main.camera_calls_outside_wrapper("f(cam) = with_camera(() -> capture(cam), cam)"))
+    @test isempty(Main.camera_calls_outside_wrapper("MC.CameraInterface.abort(c::X) = live(c)"))   # a driver method
+    @test isempty(Main.camera_calls_outside_wrapper("cam.exposure_time = 0.02; stop[] = true"))     # not definitions
+    # and the functions it found calling a camera inside the wrapper: every entry the skills teach
+    wrapped = Set{Symbol}()
+    for blocks in values(fenced), b in blocks
+        function visit(ex)
+            ex isa Expr || return
+            if ex.head in (:function, :(=)) && length(ex.args) == 2
+                name = Main.signature_name(ex.args[1])
+                if name !== nothing && !(name in Main.CAMERA_CALLS)
+                    inside = Symbol[]
+                    walk(e) = e isa Expr && (Main.callee_name(e) in Main.CAMERA_CALLS && push!(inside, Main.callee_name(e)); foreach(walk, e.args))
+                    walk(ex.args[2])
+                    isempty(inside) || push!(wrapped, name)
+                end
+            end
+            foreach(visit, ex.args)
+        end
+        visit(Meta.parseall(b.code))
+    end
+    @test wrapped == Set([:snap, :read_sequence, :stop_camera!, :start_reader!])
+end
+
 @testset "statements: the generated map" begin
     mktempdir() do tmp
         MicroscopeControl.install_skills(tmp; quiet=true)
@@ -998,13 +1153,15 @@ end
 
 # Run as a script (by test/skills.jl, in its own process): every group, in name order, writing each group's counts to
 # the file named by the first argument. The fakes runtests.jl installs for the TCube, N-472 and PI stage wrappers come
-# first, so an example that reaches one of those wrappers reaches the recorder; the other drivers' wrappers (DCAM4,
-# DCx, CSC and the rest) are not replaced, and no example calls them. Each include is its own top-level statement,
+# first, so an example that reaches one of those wrappers reaches the recorder, and so do the DCAM4 wrappers
+# (`dcam4_fake_sdk.jl`), which the `camera` and `acquire-snap` checks drive on purpose; the other drivers' wrappers
+# (DCx, CSC and the rest) are not replaced, and no example calls them. Each include is its own top-level statement,
 # before anything runs, as those files require.
 const RUN_AS_SCRIPT = abspath(PROGRAM_FILE) == abspath(@__FILE__)
 RUN_AS_SCRIPT && include(joinpath(@__DIR__, "tcube_fake_sdk.jl"))
 RUN_AS_SCRIPT && include(joinpath(@__DIR__, "pi_n472_fake_sdk.jl"))
 RUN_AS_SCRIPT && include(joinpath(@__DIR__, "pi_stage_fake_sdk.jl"))
+RUN_AS_SCRIPT && include(joinpath(@__DIR__, "dcam4_fake_sdk.jl"))   # the DCAM4 methods of mc-acquire run against it
 if RUN_AS_SCRIPT
     import GLMakie
     counts_file = get(ARGS, 1, "")

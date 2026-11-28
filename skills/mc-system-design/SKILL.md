@@ -338,13 +338,12 @@ needs instead, are in `references/driver-caveats.md`, the `DCAM4Camera` row, and
 
 **[guarantee, suite: bench]** The suite runs the example below, and the fixtures after it, under `xvfb-run -a`, and
 asserts the table that follows. The example reads the camera through `read_sequence`, stops it with `stop_camera!` and
-judges it with `known_stopped` (the driver's `camera_ok` and the unknown mark), the per-driver functions and shared
-pieces in `mc-acquire`, "Finite ordered sequence", which the suite runs first in the same group. `BrokenLight` stands
-in for a device whose lifecycle or export throws; `ClaimedAtConstruction` for `DCAM4Camera`; `FlakyLight` for a device
-whose `shutdown` fails once; `FailingCam` for a camera whose read or cleanup fails, reporting the way `DCAM4Camera`
-does (`last_error` and `is_running`). The laser in the requested-versus-measured and failed-initialize rows is the
-real `CrystaLaser` driver over `LineDAQ`, a `DAQ` that records each write instead of driving a line and can be told to
-fail some.
+judges it with `camera_ok`, all through `with_camera`: the per-driver functions and shared pieces in `mc-acquire`,
+"Finite ordered sequence", which the suite runs first in the same group. `BrokenLight` stands in for a device whose
+lifecycle or export throws; `ClaimedAtConstruction` for `DCAM4Camera`; `FlakyLight` for a device whose `shutdown`
+fails once; `FailingCam` for a camera whose read or cleanup fails, reporting the way `DCAM4Camera` does (`last_error`
+and `is_running`). The laser in the requested-versus-measured and failed-initialize rows is the real `CrystaLaser`
+driver over `LineDAQ`, a `DAQ` that records each write instead of driving a line and can be told to fail some.
 
 **[limitation, 0.2.7-DEV]** The camera drivers spawn background tasks that the caller never receives, or
 receives only by accident, and those tasks read mutable device fields as they run. What each driver's `sequence`
@@ -360,41 +359,45 @@ the camera as **single-owner and single-acquisition**. One blocking acquisition 
 **no cancellation**; no configuration change while an acquisition is in flight; and after every acquisition,
 successful or not, ask the driver's `camera_ok` whether the camera is known to be stopped with its buffers released,
 as far as the driver reports. When it is not, or when the stop after a failure threw, mark the camera unknown
-(`mc-acquire`'s one mark, which every acquisition entry the skills teach checks first, with `refuse_unknown`) and
-**restart the process** (or reconstruct the camera and the system) rather than attempt in-place recovery, since no
-lifecycle call can verify that the driver's task is gone or that `initialize` did more than return. A camera with no
-`read_sequence` method is refused before anything touches it; `ThorcamDCXCamera` and `ThorCamCSCCamera` have none, for
-the reasons `mc-acquire` gives. An `InterruptException` that reaches a task the example joins is always rethrown,
-never logged and dropped; `release!` first finishes shutting down the other devices. One that lands in a task nobody
-joins can be lost: on DCAM4, the driver's sequence poller (`mc-acquire`'s limitation).
+(`mc-acquire`'s one mark: every function in these skills that calls a camera does so through `with_camera`, which
+refuses a marked camera first, and the suite checks that rule on the code) and **restart the process** (or reconstruct
+the camera and the system) rather than attempt in-place recovery, since no lifecycle call can verify that the driver's
+task is gone or that `initialize` did more than return. A camera with no `read_sequence` method is refused before
+anything touches it; `ThorcamDCXCamera` and `ThorCamCSCCamera` have none, for the reasons `mc-acquire` gives. An
+`InterruptException` is never logged and dropped by the example: one that lands in the caller's own task unwinds it,
+one that lands in a task the example joins is rethrown at the join, and `release!` first finishes shutting down the
+other devices. The driver can lose one in two places on DCAM4: the sequence poller nobody joins, and the `catch` in
+the cleanup of `getdata` and `capture` (`mc-acquire`'s limitations).
 
 **[policy]** The upstream fix is concrete: the camera interface should require `sequence` (and `live`) to **return
 the task it spawns**, or expose a join, and report a failed stop or release as a failure, so a system can establish
 quiescence instead of guessing at it.
 
 The example is therefore modest on purpose: `acquire!` runs start to finish on the calling task, reads through
-`read_sequence`, and asks `known_stopped` afterwards, with no loop on `is_running`; an `in_flight` flag guards
-`set_state`, `acquire!` and `shutdown` against misuse from another task; `acquire!` refuses a camera marked unknown, a
-camera the system does not hold, or any camera while a device is stuck; a failed acquisition stops the camera before
-returning it. Three lists track the devices: `claimed` holds those passed as `claimed_at_construction`; `owned` holds
-the devices known to hold hardware; `stuck` holds each device whose `initialize` or `shutdown` threw, with its error,
-because its state is unknown. Every `release!` retries the stuck devices, newest first, and `initialize` refuses while
-any device is stuck, or while a claimed device is no longer owned: that one was closed and must be reconstructed.
-`BenchState` is an **immutable** struct: a requested configuration is a value, `get_state` hands back the retained
-record, and only another `set_state` can change it.
+`read_sequence`, and asks `camera_ok` afterwards, through `with_camera`, with no loop on `is_running`; an `in_flight`
+flag guards `set_state`, `acquire!` and `shutdown` against misuse from another task; `acquire!` refuses a camera the
+system does not hold, or any camera while a device is stuck, and runs through `with_camera`, which refuses a camera
+marked unknown and marks the camera after any throw or when it is not known stopped; a failed acquisition stops the
+camera before returning it, and leaves it marked. Three lists track the devices: `claimed` holds those passed as
+`claimed_at_construction`; `owned` holds the devices known to hold hardware; `stuck` holds each device whose
+`initialize` or `shutdown` threw, with its error, because its state is unknown. Every `release!` retries the stuck
+devices, newest first, and `initialize` refuses while any device is stuck, or while a claimed device is no longer
+owned: that one was closed and must be reconstructed. `BenchState` is an **immutable** struct: a requested
+configuration is a value, `get_state` hands back the retained record, and only another `set_state` can change it.
 
-**[limitation, 0.2.7-DEV]** What the example covers. Cameras: `SimCamera` (run) and `DCAM4Camera` (its methods,
-traced); any other camera, `ThorcamDCXCamera` and `ThorCamCSCCamera` included, is refused by `acquire!`, and for DCAM4
-`camera_ok` reports only what the driver reports (`mc-acquire`'s limitation on `getdata`'s cleanup), and a Ctrl-C
-reaches the caller only through the tasks the example joins (`mc-acquire`'s limitation on the sequence poller). Lights
-and stages: those whose `initialize` and `shutdown` throw when they fail. The shutdown rule is a floor, not knowledge
-of the drivers: `release!` treats a `shutdown` that returns as a close that worked, and some drivers report a failed
-close through a return value instead (`shutdown(::ThorCamCSCCamera)` returns the two SDK status codes;
-`shutdown(::DCAM4Camera)` returns the `dcamapi_uninit` code, and closes the device whether or not its stop worked,
-recording that in `last_error`), which `release!` discards. A driver's `shutdown` can also close its handle even when
-it throws (`TCubeLaser` without a modulator: a failed disable throws after the connection is closed, and the driver's
-docstring has the caller reconnect with `initialize` to retry the disable, which this example refuses while the laser
-is stuck, so rebuild instead) (traced). Check the drivers you hold, and record what their `shutdown` reports.
+**[limitation, 0.2.7-DEV]** What the example covers. Cameras: `SimCamera` (run) and `DCAM4Camera` (its methods run
+against the fake DCAM SDK); any other camera, `ThorcamDCXCamera` and `ThorCamCSCCamera` included, is refused by
+`acquire!`, and for DCAM4 `camera_ok` reports only what the driver reports (`mc-acquire`'s limitation on `getdata`'s
+cleanup), and a Ctrl-C reaches the caller directly in its own task or through a join, and can be lost in the driver's
+two places (`mc-acquire`'s limitations on the sequence poller and on the cleanup). Lights and stages: those whose
+`initialize` and `shutdown` throw when they fail. The shutdown rule is a floor, not knowledge of the drivers:
+`release!` treats a `shutdown` that returns as a close that worked, and some drivers report a failed close through a
+return value instead (`shutdown(::ThorCamCSCCamera)` returns the two SDK status codes; `shutdown(::DCAM4Camera)`
+returns the `dcamapi_uninit` code, and closes the device whether or not its stop worked, recording that in
+`last_error`), which `release!` discards. A driver's `shutdown` can also close its handle even when it throws
+(`TCubeLaser` without a modulator: a failed disable throws after the connection is closed, and the driver's docstring
+has the caller reconnect with `initialize` to retry the disable, which this example refuses while the laser is stuck,
+so rebuild instead) (traced). Check the drivers you hold, and record what their `shutdown` reports.
 
 <!-- mc-test: bench -->
 ```julia
@@ -556,25 +559,26 @@ has_reader(cam::Camera, n::Integer) =           # the call acquire! makes, with 
 
 function acquire!(sys::Bench, n::Integer)
     sys.in_flight && error("acquisition already in flight")
-    refuse_unknown(sys.cam)                       # mc-acquire's one guard, shared with every acquisition entry
     isempty(sys.stuck) || error("devices in an unknown state ($(stuck_report(sys))); " *
                                 "call shutdown(sys) until it succeeds, or rebuild the system")
     holds(sys.owned, sys.cam) || error("the camera is not held: initialize(sys) first")
     has_reader(sys.cam, n) || error("no sequence reader for $(nameof(typeof(sys.cam))); write one (see mc-acquire)")
     sys.in_flight = true
     try
-        return read_sequence(sys.cam, n)          # the (H, W, N) stack, or a throw
-    catch
-        try
-            stop_camera!(sys.cam)                 # failure: stop the camera BEFORE giving it back
-        catch stop_error
-            mark_unknown!(sys.cam)                # a stop that threw: not known stopped, whatever camera_ok says
-            stop_error isa InterruptException && rethrow()   # a Ctrl-C stays one, never logged and dropped
-            @error "the stop after a failed acquisition threw; the camera is marked unknown" exception=stop_error
+        return with_camera(sys.cam) do            # mc-acquire's wrapper: it refuses a camera marked unknown, and marks
+            try                                   # the camera on any throw or when it is not known stopped afterwards
+                read_sequence(sys.cam, n)         # the (H, W, N) stack, or a throw
+            catch
+                try
+                    stop_camera!(sys.cam)         # failure: stop the camera BEFORE giving it back
+                catch stop_error
+                    stop_error isa InterruptException && rethrow()   # a Ctrl-C stays one, never logged and dropped
+                    @error "the stop after a failed acquisition threw; the camera is marked unknown" exception=stop_error
+                end
+                rethrow()                         # the read's error (a Ctrl-C in the read, too)
+            end
         end
-        rethrow()                                 # the read's error (a Ctrl-C in the read, too)
     finally
-        known_stopped(sys.cam) || mark_unknown!(sys.cam)   # after every acquisition, failed or not
         sys.in_flight = false
     end
 end
@@ -650,12 +654,12 @@ change to the package that makes a row false fails the package's suite. The two 
 | **A camera the system does not hold, or marked unknown** (a camera that records every call made to it: `acquire!` before `initialize(sys)`, after `shutdown(sys)`, while a device is stuck, once the camera is marked unknown, and after a standalone `stop_camera!` that returned with `camera_ok` false) | each refused with no call reaching the camera: `the camera is not held: initialize(sys) first` for the first two, `devices in an unknown state ...` for the third, `camera unavailable: it is marked unknown ...` for the last two. |
 | **A camera with no reader** (a recording camera with no `read_sequence` method, held from construction) | `acquire!` refused (`no sequence reader for NoReaderCam; write one (see mc-acquire)`) with no call reaching the camera, and the camera not marked. |
 | **Readers `has_reader` sees** (`read_sequence(cam::ParamCam{T}, n::Int) where {T}`, and a method taking `n::Integer`) | both count for an `Int` length; for an `Int16` length the `ParamCam` method does not apply, so `acquire!` refuses it before touching the camera, as it would reach the fallback. |
-| **Failing acquisition** (`FailingCam()`: the read fails, `abort` works) | rethrew `SDK: read failed`; `abort` had run once, `camera_ok` said yes, `in_flight == false`, the camera not marked: the next `acquire!` reached the camera again. |
+| **Failing acquisition** (`FailingCam()`: the read fails, `abort` works) | rethrew `SDK: read failed`; `abort` had run once and `camera_ok` said yes, but the read threw, so the camera was marked unknown, with `in_flight == false`: the next `acquire!` refused it without reaching the camera. |
 | **Failing acquisition whose `abort` throws** (`FailingCam(abort_mode = :throws)`) | rethrew `SDK: read failed`; the next `acquire!` refused `camera unavailable ...`; after `shutdown(sys)`, `initialize(sys)` succeeded and the `acquire!` after it still refused `camera unavailable ...`; **reconstruction** (new `Bench`, new camera, stage and laser reused) acquired `(32, 64, 3)`. |
-| **A stop that throws after clearing the flag** (`:clears_then_throws`: `camera_ok` itself would say yes) | rethrew `SDK: read failed`; the camera was marked unknown, because the stop threw. |
+| **A stop that throws after clearing the flag** (`:clears_then_throws`: `camera_ok` itself would say yes) | rethrew `SDK: read failed`, after logging the stop's error; the camera was marked unknown. |
 | **An interrupt in the stop** (`:interrupted`) | `acquire!` threw the `InterruptException`, not the read's error, and the camera was marked unknown. |
-| **A Ctrl-C in the Sim's timer** (`acquire!(sys, 20)` with 0.02 s exposures on its own task; after about 0.1 s the interrupt is scheduled into the timer task, where a Ctrl-C usually lands) | `join_task` on the acquisition threw a plain `InterruptException`; the camera was stopped and not marked, with `in_flight == false`. |
-| **A Ctrl-C in the waiting task** (the same, with the interrupt scheduled into the task running `acquire!`) | a plain `InterruptException` again; the stop waited for the Sim's timer, so the camera was stopped and not marked. |
+| **A Ctrl-C in the Sim's timer** (`acquire!(sys, 20)` with 0.02 s exposures on its own task; after about 0.1 s the interrupt is scheduled into the timer task, where a Ctrl-C usually lands) | `join_task` on the acquisition threw a plain `InterruptException`; the camera was stopped and, the read having thrown, marked unknown, with `in_flight == false`. |
+| **A Ctrl-C in the waiting task** (the same, with the interrupt scheduled into the task running `acquire!`) | a plain `InterruptException` again; the stop waited for the Sim's timer, so the camera was stopped, and it was marked unknown. |
 | **`abort` returns with the capture running** (`:keeps_running`), or **returns with `is_running` cleared and an error recorded** (`:clears_flag`) | rethrew `SDK: read failed`; in both cases `camera_ok` said no and the camera was marked unknown, the second although `is_running` was clear. |
 | **A read that works with a cleanup that fails** (`FailingCam(read_fails = false, cleanup_fails = true)`) | returned the stack, and the camera was marked unknown. |
 | **Export with a failed child** | `complete == false`, `missing_children == "laser"`; through `save_h5` and back: groups `camera, laser, stage` (the Bench's `data` is `nothing`, so there is no `data` dataset), attr `missing_children == "laser"`. |

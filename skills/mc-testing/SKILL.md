@@ -171,9 +171,8 @@ function Rig(; simulate::Bool = get(ENV, "RIG_SIMULATE", "false") == "true")
     end
 end
 
-# The adapter: one place that knows capture's return value differs per driver.
-snap(cam::SimCamera) = (capture(cam); getlastframe(cam))   # executed: (32, 64)
-snap(cam::Camera)    = capture(cam)                        # DCAM4, DCX, CSC return the frame (traced)
+# The adapter, one place that knows capture's return value differs per driver: `mc-acquire`'s `snap` (the capture
+# contract), defined once there and used as is, so it refuses a camera marked unknown here too.
 ```
 
 The hardware branch is not side-effect free the way the Sim branch is:
@@ -243,9 +242,7 @@ Behavioral tests on top, executed:
 @testset "acquisition through the adapter" begin
     rig = Rig(simulate=true); initialize(rig)
     @test size(snap(rig.cam)) == (32, 64)                 # (H, W): roi height 32, width 64
-    rig.cam.sequence_length = 5
-    wait(sequence(rig.cam))                                # the Sim's timer Task; other drivers differ (mc-acquire's table)
-    @test size(getdata(rig.cam)) == (32, 64, 5)
+    @test size(read_sequence(rig.cam, 5)) == (32, 64, 5)   # mc-acquire's per-driver reader, through with_camera
     shutdown(rig)                                          # MC.shutdown(::Rig), defined above
 end
 
