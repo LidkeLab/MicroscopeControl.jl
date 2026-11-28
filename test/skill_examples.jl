@@ -148,8 +148,10 @@ function run_skill_example(name, fences; prelude = "", checks = "")
     return m
 end
 
-# group name => (prelude, checks). The prelude runs before the fences, the checks after; both in the fences' module.
-const SKILL_EXAMPLE_GROUPS = Dict{String,NamedTuple{(:prelude, :checks),Tuple{String,String}}}()
+# group name => (min_passes, prelude, checks). The prelude runs before the fences, the checks after; both in the fences'
+# module. `min_passes` is the floor `test/skills.jl` holds the group's passing checks to: a group whose checks were
+# emptied or cut short fails the suite. Raise it when a group gains checks.
+const SKILL_EXAMPLE_GROUPS = Dict{String,NamedTuple{(:min_passes, :prelude, :checks),Tuple{Int,String,String}}}()
 
 # Groups that have checks and no fence: statements the skills make about the package that no example runs.
 const SKILL_FENCELESS_GROUPS = ["statements"]
@@ -161,7 +163,7 @@ const SKILL_GROUP_USES = Dict("acquire-reader" => ["camera"], "bench" => ["camer
 # A group's fences: those of the groups it uses, then its own.
 skill_group_fences(groups, name) = vcat((groups[u] for u in get(SKILL_GROUP_USES, name, String[]))..., get(groups, name, []))
 
-SKILL_EXAMPLE_GROUPS["bench"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["bench"] = (min_passes = 89, prelude = "", checks = raw"""
 mkcam() = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 message(e) = sprint(showerror, e)
 stuck_devices(sys) = first.(sys.stuck)
@@ -178,6 +180,10 @@ end
 MC.shutdown(l::FailOnceLight) = (push!(l.log, l.name); l.left > 0 && (l.left -= 1; error("$(l.name) failed")); nothing)
 struct IntLight <: LightSource end               # its shutdown is interrupted
 MC.shutdown(::IntLight) = throw(InterruptException())
+struct ParamCam{T} <: Camera end                 # readers with a parametric type, and with an Integer length
+read_sequence(::ParamCam{T}, n::Int) where {T} = zeros(UInt16, 2, 3, n)
+struct IntegerCam <: Camera end
+read_sequence(::IntegerCam, n::Integer) = zeros(UInt16, 2, 3, n)
 @testset "bench: rollback" begin
     cam = ClaimedAtConstruction()
     sys = Bench(cam, SimStage3d(), BrokenLight(); claimed_at_construction = (cam,))
@@ -272,14 +278,29 @@ end
     end
     sys.in_flight = false
 
+    held(cam) = (b = Bench(cam, SimStage3d(), SimLight()); MC.initialize(b); b)   # a system holding the camera
+    notyet = Bench(mkcam(), SimStage3d(), SimLight())
+    e = try acquire!(notyet, 1); nothing catch e e end
+    @test message(e) == "the camera is not held: initialize(sys) first"         # before initialize
+    MC.initialize(notyet); MC.shutdown(notyet)
+    e = try acquire!(notyet, 1); nothing catch e e end
+    @test message(e) == "the camera is not held: initialize(sys) first"         # after shutdown
+    withstuck = held(mkcam())
+    push!(withstuck.stuck, BrokenLight() => ErrorException("x"))
+    e = try acquire!(withstuck, 1); nothing catch e e end
+    @test startswith(message(e), "devices in an unknown state")              # while a device is stuck
+
     claimed = ClaimedAtConstruction()
-    nocam = Bench(claimed, SimStage3d(), SimLight())
+    nocam = Bench(claimed, SimStage3d(), SimLight(); claimed_at_construction = (claimed,))
     e = try acquire!(nocam, 1); nothing catch e e end
     @test message(e) == "no sequence reader for ClaimedAtConstruction; write one (see mc-acquire)"
     @test claimed.open && !nocam.cam_unavailable && !nocam.in_flight   # refused before anything touched it
 
+    @test has_reader(ParamCam{Int}()) && has_reader(IntegerCam())     # parametric and Integer readers both count
+    @test !has_reader(ClaimedAtConstruction())
+
     cam = FailingCam()
-    bad = Bench(cam, SimStage3d(), SimLight())
+    bad = held(cam)
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed"
     @test cam.aborts == 1 && camera_ok(cam)
@@ -287,30 +308,52 @@ end
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed" && cam.aborts == 2    # still available: the next call reached the camera
 
-    bad = Bench(FailingCam(abort_mode = :throws), SimStage3d(), SimLight())
+    bad = held(FailingCam(abort_mode = :throws))
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed"
     @test bad.cam_unavailable
     e = try acquire!(bad, 3) catch e e end
     @test startswith(message(e), "camera unavailable")
     MC.shutdown(bad)
-    e = try (MC.initialize(bad); acquire!(bad, 3)) catch e e end
-    @test startswith(message(e), "camera unavailable")
+    @test MC.initialize(bad) === bad                             # initialize succeeds ...
+    e = try acquire!(bad, 3) catch e e end
+    @test startswith(message(e), "camera unavailable")           # ... and acquire! still refuses
     rebuilt = Bench(mkcam(), bad.stage, bad.laser); MC.initialize(rebuilt)
     @test size(acquire!(rebuilt, 3)) == (32, 64, 3)
 
     for (mode, running) in ((:keeps_running, true), (:clears_flag, false))
         cam = FailingCam(abort_mode = mode)
-        bad = Bench(cam, SimStage3d(), SimLight())
+        bad = held(cam)
         e = try acquire!(bad, 3) catch e e end
         @test message(e) == "SDK: read failed"
         @test cam.aborts == 1 && cam.is_running == running && bad.cam_unavailable
     end
 
+    cam = FailingCam(abort_mode = :clears_then_throws)
+    bad = held(cam)
+    e = try acquire!(bad, 3) catch e e end
+    @test message(e) == "SDK: read failed"
+    @test camera_ok(cam) && bad.cam_unavailable                   # camera_ok would say yes; the throw decided
+
+    cam = FailingCam(abort_mode = :interrupted)
+    bad = held(cam)
+    e = try acquire!(bad, 3) catch e e end
+    @test e isa InterruptException && bad.cam_unavailable        # the Ctrl-C reached the caller
+
     cam = FailingCam(read_fails = false, cleanup_fails = true)
-    bad = Bench(cam, SimStage3d(), SimLight())
+    bad = held(cam)
     @test size(acquire!(bad, 4)) == (2, 3, 4)                    # the stack comes back
     @test bad.cam_unavailable && cam.aborts == 0                 # and the camera is out of service
+
+    slow = Bench(SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.02), SimStage3d(), SimLight())
+    MC.initialize(slow)
+    running = @async acquire!(slow, 20)                           # about 0.4 s of exposures
+    sleep(0.1)
+    schedule(running, InterruptException(); error = true)        # Ctrl-C during the acquisition
+    e = try wait(running); nothing catch err err end
+    @test e isa TaskFailedException && e.task.exception isa InterruptException
+    @test istaskdone(SIM_TIMER[slow.cam]) && camera_ok(slow.cam) # the stop waited for the Sim's timer
+    @test !slow.cam_unavailable && !slow.in_flight
 end
 @testset "bench: export with a failed child, shutdown failure" begin
     sys = Bench(mkcam(), SimStage3d(), BrokenLight())
@@ -384,7 +427,7 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["testing"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["testing"] = (min_passes = 164, prelude = "", checks = raw"""
 @testset "testing: the blocks' own testsets" begin
     sets = [v for v in block_values if v isa Test.DefaultTestSet]
     @test length(sets) == 4                      # the dispatch check and the three behavioral testsets
@@ -432,22 +475,18 @@ end
         @test missing_field(err, T, :stagelabel)                                       # the unguarded stagelabel read
         GLMakie.closeall()
     end
-    stage = SimStage3d()
-    redirect_stdout(devnull) do
-        move(stage, 1.0, 2.0, 3.0)
-        @test getposition(stage) == 3.0                                                # a scalar, the last assignment
-        @test (stage.real_x, stage.real_y, stage.real_z) == (1.0, 2.0, 3.0)
-        move(stage, 1e6, 0.0, 0.0)                                                     # no range enforcement
-        @test stage.targ_x == 1e6
-        home(stage)
-        @test stage.real_x == 0.0 && stage.targ_x == 1e6                               # home zeroes real_*, not targ_*
-        @test_throws MethodError move(stage, 1, 2, 3)
-        @test getrange(stage) == ((0.0, 100.0), (0.0, 100.0), (0.0, 100.0))
-    end
+    stage = SimStage3d()                         # the checks run with only the Sim stages' status lines dropped
+    move(stage, 1.0, 2.0, 3.0)
+    @test getposition(stage) == 3.0                                                    # a scalar, the last assignment
+    @test (stage.real_x, stage.real_y, stage.real_z) == (1.0, 2.0, 3.0)
+    move(stage, 1e6, 0.0, 0.0)                                                         # no range enforcement
+    @test stage.targ_x == 1e6
+    home(stage)
+    @test stage.real_x == 0.0 && stage.targ_x == 1e6                                   # home zeroes real_*, not targ_*
+    @test_throws MethodError move(stage, 1, 2, 3)
+    @test getrange(stage) == ((0.0, 100.0), (0.0, 100.0), (0.0, 100.0))
     two = SimStage2d()
-    err = redirect_stdout(devnull) do
-        try move(two, 1.0, 2.0, 3.0); nothing catch e e end
-    end
+    err = try move(two, 1.0, 2.0, 3.0); nothing catch e e end
     @test err isa ErrorException && err.msg == "move not implemented for SimStage2d"   # the interface fallback, not a MethodError
 end
 @testset "testing: SimLight" begin
@@ -513,10 +552,12 @@ end
     kw = (mode = ConstantPhotocurrent(), wa_calibration = wa, tec_stabilised = missing, max_current = 120.0,
           properties = LightSourceProperties("mW", 0.0, false, 0.0, 33.0))
     @test SimDiodeLaser(; kw..., tia_range = 2e-3) isa SimDiodeLaser                     # not a TLD001 range
-    @test_throws r"is not a TLD001 photodiode range" TCubeLaser("00000000"; kw..., tia_range = 2e-3)
+    e = try TCubeLaser("00000000"; kw..., tia_range = 2e-3); nothing catch err err end
+    @test e isa ArgumentError && occursin("is not a TLD001 photodiode range", e.msg)
     ref = (tia_range = tia, ref_current_mA = 71.0, ref_photocurrent_A = 0.85e-3)         # indicates 85 mW, above 33
     @test SimDiodeLaser(; kw..., ref...) isa SimDiodeLaser
-    @test_throws r"above properties.max_power" TCubeLaser("00000000"; kw..., ref...)
+    e = try TCubeLaser("00000000"; kw..., ref...); nothing catch err err end
+    @test e isa ArgumentError && occursin("above properties.max_power", e.msg)
 end
 @testset "testing: Camera is the only name MicroscopeControl and GLMakie both export" begin
     @test intersect(Set(names(MC)), Set(names(GLMakie))) == Set([:Camera])
@@ -551,7 +592,7 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-reader"] = (prelude = """
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 10, prelude = """
 using MicroscopeControl
 cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 latest = Ref{Any}(nothing)
@@ -559,15 +600,34 @@ fps = 100
 """, checks = raw"""
 @test latest[] !== nothing && size(latest[]) == (32, 64)       # the reader read frames until stopped
 @test istaskdone(reader) && !istaskfailed(reader)               # joined, and it ended on its own flag
-@test cam.is_running == false && camera_ok(cam)                 # stopped after the join
+@test outcome[] == (reader_error = nothing, stop_error = nothing, camera_ok = true)
+@test cam.is_running == false
 cam2 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 live(cam2)
 failing = @async error("reader: SDK read failed")               # a reader that throws
-thrown = try stop_reader!(cam2, failing, Threads.Atomic{Bool}(false)); nothing catch err err end
-@test thrown isa TaskFailedException && occursin("reader: SDK read failed", sprint(showerror, thrown))   # its error, kept
-@test cam2.is_running == false                                  # and the camera was still stopped
+r = stop_reader!(cam2, failing, Threads.Atomic{Bool}(false))
+@test r.reader_error isa TaskFailedException && occursin("reader: SDK read failed", sprint(showerror, r.reader_error))
+@test r.stop_error === nothing && r.camera_ok && cam2.is_running == false   # the camera was still stopped
+struct StopFailsCam <: Camera end                               # its stop throws
+stop_camera!(::StopFailsCam) = error("SDK: stop failed")
+camera_ok(::StopFailsCam) = true                                # it would say yes; the throw decides
+done_reader = @async nothing
+r = stop_reader!(StopFailsCam(), done_reader, Threads.Atomic{Bool}(false))
+@test r.reader_error === nothing && r.stop_error isa ErrorException && r.camera_ok == false
+cam3 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
+live(cam3)
+stuck_reader = @async sleep(3)                                  # a reader inside a long SDK call: it ignores its flag
+stopping = @async stop_reader!(cam3, stuck_reader, Threads.Atomic{Bool}(false))
+sleep(0.1)
+schedule(stopping, InterruptException(); error = true)          # Ctrl-C while the caller waits for the reader
+e = try wait(stopping); nothing catch err err end
+@test e isa TaskFailedException && e.task.exception isa InterruptException   # it reached the caller
+@test !istaskdone(stuck_reader) && cam3.is_running == true      # the camera was left alone
+abort(cam3)
+@test camera_ok(cam3) == false                                  # stopped now, but marked unknown: it stays so
 """)
-SKILL_EXAMPLE_GROUPS["acquire-snap"] = (prelude = "using MicroscopeControl", checks = raw"""
+
+SKILL_EXAMPLE_GROUPS["acquire-snap"] = (min_passes = 5, prelude = "using MicroscopeControl", checks = raw"""
 sim = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 @test size(snap(sim)) == (32, 64)
 @test sim.capture_mode == MC.HardwareImplementations.SimulatedCamera.SINGLE_FRAME   # capture ran before the read
@@ -575,7 +635,7 @@ sim = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 @test which(snap, Tuple{SimCamera}).sig.parameters[2] === SimCamera
 @test which(snap, Tuple{DCAM4Camera}).sig.parameters[2] === Camera              # the hardware drivers take the generic method
 """)
-SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (prelude = "using MicroscopeControl; cam = SimCamera()", checks = raw"""
+SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (min_passes = 6, prelude = "using MicroscopeControl; cam = SimCamera()", checks = raw"""
 @test cam.exposure_time == 0.02
 @test (cam.roi.x_start, cam.roi.y_start, cam.roi.width, cam.roi.height) == (1, 1, 512, 256)
 @test fieldtype(ThorCamCSCCamera, :exposure_time) == Clonglong                  # an integer field (microseconds)
@@ -583,48 +643,71 @@ SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (prelude = "using MicroscopeControl; 
 @test fieldtype(DCAM4Camera, :exposure_time) == Float64 && fieldtype(ThorcamDCXCamera, :exposure_time) == Float64
 @test ThorcamDCXCamera().exposure_time == 0.01                                  # the constructor is pure
 """)
-SKILL_EXAMPLE_GROUPS["camera"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 23, prelude = "", checks = raw"""
 cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 t = @elapsed stack = read_sequence(cam, 5)
 @test size(stack) == (32, 64, 5) && eltype(stack) == UInt16
 @test t >= 5 * 0.01                                                             # the timer was joined
 @test camera_ok(cam) && cam.is_running == false
-@test read_sequence(cam, 5) != stack                                            # a second read: new frames
-@test_throws ArgumentError read_sequence(cam, -1)
+@test getdata(cam) != stack                                                     # the same finished sequence, read again
+@test read_sequence(cam, 5) != stack                                            # a second sequence: new frames
+e = try read_sequence(cam, -1); nothing catch err err end
+@test e isa ArgumentError
+slow = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.02)
+reading = @async read_sequence(slow, 20)                                        # about 0.4 s of timer
+sleep(0.1)
+timer = SIM_TIMER[slow]
+@test !istaskdone(timer) && size(getdata(slow)) == (32, 64, 20)                 # getdata returns at once, mid-sequence
+abort(slow)
+@test slow.is_running == false && !istaskdone(timer)                           # abort leaves the timer running
+@test camera_ok(slow) == false                                                  # so the camera is not yet known stopped
+stop_camera!(slow)
+@test istaskdone(timer) && camera_ok(slow)                                      # stop_camera! waited for it
+@test size(fetch(reading)) == (32, 64, 20)
 struct UnknownCam <: Camera end
 @test_throws r"^no sequence reader for UnknownCam; write one \(see mc-acquire\)$" read_sequence(UnknownCam(), 1)
 @test camera_ok(UnknownCam()) == false
-for T in (SimCamera, DCAM4Camera, ThorcamDCXCamera)
+marked = SimCamera()
+mark_unknown!(marked)
+@test camera_ok(marked) == false                                                # a camera marked unknown stays so
+for T in (SimCamera, DCAM4Camera)
     @test which(read_sequence, Tuple{T,Int}).sig.parameters[2] === T && which(camera_ok, Tuple{T}).sig.parameters[2] === T
+    @test which(stop_camera!, Tuple{T}).sig.parameters[2] === T
 end
-@test which(stop_camera!, Tuple{DCAM4Camera}).sig.parameters[2] === DCAM4Camera
-@test which(stop_camera!, Tuple{ThorcamDCXCamera}).sig.parameters[2] === ThorcamDCXCamera
-dcx = ThorcamDCXCamera()                                                         # builds without the SDK
-@test !isassigned(dcx.pImage_Mem, 1) && dcx.is_running == false                 # so its abort would throw
-@test stop_camera!(dcx) === nothing && camera_ok(dcx)                            # and stop_camera! does not call it
-poller = @async sleep(0.3)                                                       # a poller still running
-DCX_POLLER[dcx] = poller
-@test camera_ok(dcx) == false
-wait(poller)
-@test camera_ok(dcx)
-@test which(read_sequence, Tuple{ThorCamCSCCamera,Int}).sig.parameters[2] === Camera     # no CSC method: the fallback
-@test which(camera_ok, Tuple{ThorCamCSCCamera}).sig.parameters[2] === Camera
+for T in (ThorcamDCXCamera, ThorCamCSCCamera)                                   # not covered: the fallback
+    @test which(read_sequence, Tuple{T,Int}).sig.parameters[2] === Camera && which(camera_ok, Tuple{T}).sig.parameters[2] === Camera
+end
+@test !isassigned(ThorcamDCXCamera().pImage_Mem, 1)                             # the table's unset first element
 @test DCAM4.DCAMERR_SUCCESS isa DCAM4.DCAMERR && fieldtype(DCAM4Camera, :last_error) === DCAM4.DCAMERR
-@test fieldtype(DCAM4Camera, :is_running) === Bool && fieldtype(ThorcamDCXCamera, :is_running) === Bool
+@test fieldtype(DCAM4Camera, :is_running) === Bool
 """)
-SKILL_EXAMPLE_GROUPS["acquire-zstack"] = (prelude = "", checks = raw"""
+
+SKILL_EXAMPLE_GROUPS["acquire-zstack"] = (min_passes = 6, prelude = "", checks = raw"""
 @test allunique(eachslice(stack; dims = 3))                                     # a new frame per plane, not one reused
+const SimMode = MC.HardwareImplementations.SimulatedCamera
+mutable struct ModeResetStage <: Stage              # every move puts the Sim camera back in SEQUENCE mode, where its
+    cam::SimCamera                                  # getdata returns a stack: a plane is a frame only when snap's
+    targ_x::Float64                                 # capture ran after that move
+    targ_y::Float64
+    targ_z::Float64
+    real_z::Float64
+end
+MC.move(s::ModeResetStage, x::Float64, y::Float64, z::Float64) = (s.targ_z = z; s.cam.capture_mode = SimMode.SEQUENCE; nothing)
+MC.getposition(s::ModeResetStage) = (s.real_z = s.targ_z)
+sim = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01, sequence_length = 2)
+@test size(zstack(sim, ModeResetStage(sim, 0.0, 0.0, 0.0, 0.0), zs)) == (32, 64, 5)   # capture after every move
 mutable struct ZCam <: Camera                       # notes the stage's z inside capture, when the frame is taken
     stage::Stage
     taken_at::Vector{Float64}
 end
 MC.CameraInterface.capture(c::ZCam) = (push!(c.taken_at, c.stage.real_z); fill(UInt16(length(c.taken_at)), 2, 3))
 zc = ZCam(SimStage3d(), Float64[])
-s = redirect_stdout(() -> zstack(zc, zc.stage, zs), devnull)
+s = zstack(zc, zc.stage, zs)
 @test zc.taken_at == collect(zs)                                                # one capture per plane, after its move
 @test [s[1, 1, i] for i in axes(s, 3)] == 1:length(zs)                          # each plane is that capture's frame
 """)
-SKILL_EXAMPLE_GROUPS["acquire-units"] = (prelude = "using MicroscopeControl; stage = PIStage()", checks = raw"""
+
+SKILL_EXAMPLE_GROUPS["acquire-units"] = (min_passes = 6, prelude = "using MicroscopeControl; stage = PIStage()", checks = raw"""
 @test PIStage().units == "Milimeters" && MCLStage().units == "Microns" && N472().units == "mm"
 @test !hasfield(MCS2Stage, :units) && !hasfield(SimStage3d, :units)
 for T in (MCS2Stage, SimStage3d)
@@ -634,22 +717,22 @@ end
 @test_throws MethodError move(SimStage3d(), 1, 2, 3)
 @test stage isa PIStage && hasfield(typeof(stage), :units)                      # the fence's guarded branch ran
 """)
-SKILL_EXAMPLE_GROUPS["apimap"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["apimap"] = (min_passes = 18, prelude = "", checks = raw"""
 @test which(setcurrent!, Tuple{TCubeLaser{ConstantPhotocurrent},Float64}).sig.parameters[2] === DiodeLaser     # the stub, not a driver method
 @test which(export_state, Tuple{TCubeLaser}).sig == Tuple{typeof(export_state), TCubeLaser}
 @test hasmethod(export_state, Tuple{TCubeLaser,Any})                           # the deprecated forwarder is still there
 @test !has_specific(setcurrent!, TCubeLaser, Float64)
 """)
-SKILL_EXAMPLE_GROUPS["extend-shim"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["extend-shim"] = (min_passes = 2, prelude = "", checks = raw"""
 # the guard did not install the shim: dispatch lands on the driver's own method, not the abstract stub
 @test which(MC.export_state, Tuple{MC.TCubeLaser}).sig.parameters[2] === MC.TCubeLaser
 @test which(MC.export_state, Tuple{MC.TCubeLaser}).module !== @__MODULE__        # the driver's method, not a shim from here
 """)
-SKILL_EXAMPLE_GROUPS["extend-shadow"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["extend-shadow"] = (min_passes = 5, prelude = "", checks = raw"""
 @test_throws r"^setpower not implemented for .*ShadowLED$" MicroscopeControl.setpower(ShadowDriver.ShadowLED(), 1.0)
 @test ShadowDriver.setpower !== MicroscopeControl.setpower
 """)
-SKILL_EXAMPLE_GROUPS["scaffold"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["scaffold"] = (min_passes = 35, prelude = "", checks = raw"""
 sets = [v for v in block_values if v isa Test.DefaultTestSet]
 @test length(sets) == 1 && sets[1].description == "SerialLED contract"
 counts = Test.get_test_counts(sets[1])
@@ -677,7 +760,7 @@ MC.HDF5.h5open(file, "r") do h
     @test MC.HDF5.attrs(h["Main"])["power_requested"] == 12.5
 end
 """)
-SKILL_EXAMPLE_GROUPS["shutter"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["shutter"] = (min_passes = 14, prelude = "", checks = raw"""
 using .ShutterInterface, .SimulatedShutter
 struct NoMethodsShutter <: Shutter end
 has_specific(f, T, args...) = hasmethod(f, Tuple{T,args...}) && which(f, Tuple{T,args...}).sig.parameters[2] === T
@@ -698,7 +781,7 @@ using InteractiveUtils
 """)
 
 # Statements about the generated API map, the SLM stubs, the exports and `save_h5` that no example block runs.
-SKILL_EXAMPLE_GROUPS["statements"] = (prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 70, prelude = "", checks = raw"""
 @testset "statements: the generated map" begin
     mktempdir() do tmp
         MicroscopeControl.install_skills(tmp; quiet=true)
@@ -775,22 +858,36 @@ end
 end
 """)
 
-# Run as a script (by test/skills.jl, in its own process): every group, in name order. The fakes runtests.jl installs
-# for the TCube, N-472 and PI stage wrappers come first, so no example can reach a vendor library even by mistake;
-# each include is its own top-level statement, before anything runs, as those files require.
+# One line per group, `skill-group NAME pass=P fail=F error=E broken=B`, from the group's own testset: what
+# `test/skills.jl` reads back (Julia's printed summary drops a column whose count is zero, so it is not parsed).
+function skill_group_line(name, ts)
+    c = Test.get_test_counts(ts)
+    return "skill-group $(name) pass=$(c.passes + c.cumulative_passes) fail=$(c.fails + c.cumulative_fails) " *
+           "error=$(c.errors + c.cumulative_errors) broken=$(c.broken + c.cumulative_broken)"
+end
+
+# Run as a script (by test/skills.jl, in its own process): every group, in name order, writing each group's counts to
+# the file named by the first argument. The fakes runtests.jl installs for the TCube, N-472 and PI stage wrappers come
+# first, so an example that reaches one of those wrappers reaches the recorder; the other drivers' wrappers (DCAM4,
+# DCx, CSC and the rest) are not replaced, and no example calls them. Each include is its own top-level statement,
+# before anything runs, as those files require.
 const RUN_AS_SCRIPT = abspath(PROGRAM_FILE) == abspath(@__FILE__)
 RUN_AS_SCRIPT && include(joinpath(@__DIR__, "tcube_fake_sdk.jl"))
 RUN_AS_SCRIPT && include(joinpath(@__DIR__, "pi_n472_fake_sdk.jl"))
 RUN_AS_SCRIPT && include(joinpath(@__DIR__, "pi_stage_fake_sdk.jl"))
 if RUN_AS_SCRIPT
     import GLMakie
+    counts_file = get(ARGS, 1, "")
     @testset "Skill examples" begin
         groups = skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))
+        lines = String[]
         for name in sort(collect(keys(SKILL_EXAMPLE_GROUPS)))
             spec = SKILL_EXAMPLE_GROUPS[name]
-            @testset "$name" begin
+            ts = @testset "$name" begin
                 run_skill_example(name, skill_group_fences(groups, name); prelude = spec.prelude, checks = spec.checks)
             end
+            push!(lines, skill_group_line(name, ts))
         end
+        isempty(counts_file) || write(counts_file, join(lines, "\n") * "\n")
     end
 end

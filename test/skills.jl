@@ -437,7 +437,7 @@ function skill_label_problems(text::AbstractString; groups, version::VersionNumb
                 push!(problems, "$(m.match): a suite label is exactly [guarantee|limitation, suite: GROUP], GROUP a harness group")
             continue
         end
-        tokens = [(t.captures[1], rstrip(t.captures[2], ['.', '-', '+'])) for t in eachmatch(token, body)]
+        tokens = [(t.captures[1], rstrip(t.captures[2], '.')) for t in eachmatch(token, body)]   # `-` and `+` stay: VersionNumber reads them
         isempty(tokens) && push!(problems, "$(m.match): names no version")
         for (prefix, s) in tokens             # the whole token, prerelease and all, parsed by VersionNumber
             v = tryparse(VersionNumber, s)
@@ -492,6 +492,7 @@ end
         @test bad("[guarantee, 0.2.7]")                              # later than 0.2.7-DEV
         @test bad("[guarantee, 0.2.7-rc1]")                          # the prerelease is read: rc1 sorts after DEV
         @test bad("[guarantee, 0.2.7-DEV-next]")                     # read whole, not cut at the first identifier
+        @test bad("[guarantee, 0.2.7-DEV-]")                         # `DEV-` is an identifier, sorting after `DEV`
         @test bad("[guarantee, 0.2.7-DEV.1]")
         @test !bad("[guarantee, 0.2.7-BETA]")                        # sorts before DEV: a parser that drops it would refuse
         @test !bad("[guarantee, 0.2.5.]") && !bad("[limitation, checked at 0.2.6, traced]")   # end punctuation is not read
@@ -504,10 +505,11 @@ end
     end
 end
 
-# The child must finish in bounded time and must have run the examples: a zero exit alone is not enough, since a
-# broken script guard or an empty loop also exits 0. The floor is below the current count (about 430) by a margin.
+# The child must finish in bounded time and must have run every group: a zero exit alone is not enough, since a broken
+# script guard, an empty loop or a group whose checks were emptied also exits 0. The child writes one line per group
+# (`skill_group_line` in skill_examples.jl); every group of the harness must be there, with no failure or error and at
+# least its declared `min_passes`.
 const SKILL_EXAMPLES_DEADLINE_S = 900.0
-const SKILL_EXAMPLES_MIN_PASSES = 350
 
 # Ends a child in bounded time: SIGTERM, a grace period, then SIGKILL (as test/gui.jl's `terminate_process!`).
 function stop_child!(proc; grace = 5.0, final = 10.0)
@@ -517,15 +519,35 @@ function stop_child!(proc; grace = 5.0, final = 10.0)
     return timedwait(() -> !process_running(proc), final; pollint = 0.05) === :ok
 end
 
-# The pass count on the child's "Skill examples | ..." summary line, or `nothing` when there is none.
-function skill_examples_passes(out::AbstractString)
-    m = match(r"^Skill examples\s*\|\s*(\d+)"m, out)
-    return m === nothing ? nothing : parse(Int, m.captures[1])
+# group => (pass, fail, error, broken), from the child's count lines.
+function skill_group_counts(text::AbstractString)
+    counts = Dict{String,NTuple{4,Int}}()
+    for m in eachmatch(r"^skill-group (\S+) pass=(\d+) fail=(\d+) error=(\d+) broken=(\d+)$"m, text)
+        counts[m.captures[1]] = Tuple(parse.(Int, m.captures[2:5]))
+    end
+    return counts
+end
+
+# What is wrong with the child's counts against the harness's groups and floors; empty when nothing is.
+function skill_group_problems(counts, groups)
+    problems = String[]
+    for (name, spec) in sort(collect(groups); by = first)
+        c = get(counts, name, nothing)
+        if c === nothing
+            push!(problems, "$name: no count line (the group did not run)")
+            continue
+        end
+        pass, fail, err, _ = c
+        (fail == 0 && err == 0) || push!(problems, "$name: $fail failed, $err errored")
+        pass >= spec.min_passes || push!(problems, "$name: $pass passed, below its floor of $(spec.min_passes)")
+    end
+    return problems
 end
 
 @testset "Skill examples, in their own process" begin
     runner = joinpath(@__DIR__, "skill_examples.jl")
-    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(runner)`
+    counts_file = tempname()
+    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(runner) $(counts_file)`
     log = tempname()
     io = open(log, "w")                       # one handle for both streams, so neither overwrites the other
     proc = run(pipeline(ignorestatus(cmd); stdout = io, stderr = io); wait = false)
@@ -534,17 +556,24 @@ end
     close(io)
     out = read(log, String)
     rm(log; force = true)
-    passes = skill_examples_passes(out)
-    ok = in_time && success(proc) && passes !== nothing && passes >= SKILL_EXAMPLES_MIN_PASSES
+    counts = isfile(counts_file) ? skill_group_counts(read(counts_file, String)) : Dict{String,NTuple{4,Int}}()
+    rm(counts_file; force = true)
+    problems = skill_group_problems(counts, SKILL_EXAMPLE_GROUPS)
+    ok = in_time && success(proc) && isempty(problems)
     ok || println(out)
+    isempty(problems) || println("Skill example groups:\n  ", join(problems, "\n  "))
     i = findlast("Test Summary:", out)
     ok && i !== nothing && println(out[first(i):end])
     @test in_time
-    @test passes !== nothing && passes >= SKILL_EXAMPLES_MIN_PASSES
+    @test isempty(problems)
     @test ok
-    @testset "the pass count is read from the summary line only" begin
-        @test skill_examples_passes("Test Summary:  | Pass  Total\nSkill examples |  373    373  40.9s\n") == 373
-        @test skill_examples_passes("Test Summary: | Pass  Fail  Total\nSkill examples |  370     3    373\n") == 370
-        @test skill_examples_passes("functions defined, nothing run\n") === nothing
+    @testset "the counts are read per group, and every group is held to its floor" begin
+        text = "skill-group a pass=3 fail=0 error=0 broken=0\nskill-group b pass=0 fail=0 error=0 broken=5\nnoise\n"
+        @test skill_group_counts(text) == Dict("a" => (3, 0, 0, 0), "b" => (0, 0, 0, 5))
+        spec(n) = (min_passes = n, prelude = "", checks = "")
+        @test isempty(skill_group_problems(skill_group_counts(text), Dict("a" => spec(3))))
+        @test skill_group_problems(skill_group_counts(text), Dict("b" => spec(1))) == ["b: 0 passed, below its floor of 1"]
+        @test skill_group_problems(Dict("a" => (3, 1, 0, 0)), Dict("a" => spec(1))) == ["a: 1 failed, 0 errored"]
+        @test skill_group_problems(Dict{String,NTuple{4,Int}}(), Dict("c" => spec(1))) == ["c: no count line (the group did not run)"]
     end
 end

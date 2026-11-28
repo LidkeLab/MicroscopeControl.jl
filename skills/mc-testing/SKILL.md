@@ -23,7 +23,7 @@ the `testing` group.
 |---|---|---|
 | every device the system holds has its **own** `initialize`/`shutdown`/`export_state` method, so no lifecycle call lands on the throwing `AbstractInstrument` stub | the dispatch check below, on the *hardware* types too (it needs no hardware) | that the method works: dispatch establishes method selection only. A concrete method can throw on the hardware path (`initialize(::Triggerscope4)` opens the serial port with `LibSerialPort.open`, which throws on a missing port; traced), log and return (`initialize(::PIStage)` `@error`s and leaves `connectionstatus == false`), or do nothing useful (`stopmotion(::MCLStage)` logs `STOP MOTION NOT IMPLEMENTED` and returns `nothing`; executed). The check does catch the fourth case, a missing method: `ThorCamCSCCamera` has no `initialize`, so dispatch reaches the throwing stub |
 | `initialize` rolls back what it opened when a later device fails, including devices claimed at construction | Sim devices plus a bare `struct Broken <: LightSource end` whose stubs throw, and a fake that is "open" from its constructor (`mc-system-design`, worked example) | that a real SDK's failure surfaces as an exception rather than an `@error` and a normal return, which most drivers do (`mc-extend`, section 1) |
-| the camera is used single-owner and single-acquisition: one blocking acquisition at a time, `set_state` refused in flight, and a camera whose `camera_ok` does not say it stopped is unavailable until rebuilt | `SimCamera`, and a fake camera whose read or cleanup fails and whose `abort` works, throws, returns with the capture still running, or returns with an error recorded (`mc-system-design`'s `FailingCam`) | frame timing, trigger behavior, buffer lifetime; the `DCAM4Camera` and `ThorcamDCXCamera` methods of `read_sequence` and `camera_ok`, which are traced, not run (`mc-acquire`, "Finite ordered sequence"); and nothing about stopping early, because the drivers' own tasks are not all returned (`mc-system-design`, Decision 3) |
+| the camera is used single-owner and single-acquisition: one blocking acquisition at a time, `set_state` refused in flight, and a camera whose `camera_ok` does not say it stopped, or whose stop threw, is unavailable until rebuilt | `SimCamera`, and a fake camera whose read or cleanup fails and whose `abort` works, throws, returns with the capture still running, returns with an error recorded, or throws after clearing its flag (`mc-system-design`'s `FailingCam`) | frame timing, trigger behavior, buffer lifetime; the `DCAM4Camera` methods of `read_sequence`, `stop_camera!` and `camera_ok`, which are traced, not run, and the cameras not covered at all (DCx, CSC) (`mc-acquire`, "Finite ordered sequence"); and nothing about stopping early, because the drivers' own tasks are not all returned (`mc-system-design`, Decision 3) |
 | the saved record names what is missing | a child whose `export_state` throws, through `save_h5`, read back | that hardware attributes are readbacks rather than cached requests |
 | array shapes and the `(H, W, N)` convention survive to the file | `SimCamera` with a non-square `roi` (`CameraROI(1, 1, 64, 32)` gives `(32, 64)`) | that the vendor buffer was converted correctly: test `CameraInterface.rowmajor_to_yx` on a non-square array whose values encode row and column, with and without a stride wider than the width (`mc-acquire`); `SimCamera` returns random pixels, so its shape is all it can show |
 | ordering and units of a z-stack | `SimStage3d` (`move` writes `targ_*`, `getposition` copies to `real_*`) | motion time, settling, range limits, direction sign |
@@ -68,10 +68,9 @@ Honestly, per device (executed):
 - **SimCamera.** Every frame is `rand(UInt16, roi.height, roi.width)`: no image
   content, no exposure scaling, no trigger behavior, no `camera_format`
   coupling (the ROI may exceed the sensor). `getlastframe` sleeps
-  `exposure_time`; `getdata` has no `sleep` in its body. `sequence` sets
-  `is_running` and returns an `@async` task that clears it after
-  `sequence_length` exposures, reading `exposure_time` for each; `getdata`
-  returns `(H, W, N)` immediately regardless. **`capture` returns the enum it
+  `exposure_time`; `getdata` has no `sleep` in its body. What `sequence`,
+  `getdata` and `abort` do in a sequence is in `mc-acquire`'s per-driver
+  table ("Finite ordered sequence"). **`capture` returns the enum it
   set (`SINGLE_FRAME`), not a frame.** `setexposuretime!`/`setroi!`/
   `settriggermode!` throw. The live-view buffer race in `mc-acquire` cannot
   happen here.
@@ -89,8 +88,9 @@ Honestly, per device (executed):
 - **SimDiodeLaser** (since 0.2.5). The simulator for any `DiodeLaser` system: the
   same abstract type as `TCubeLaser`, so a field typed `::DiodeLaser` takes either.
   **[guarantee, 0.2.7-DEV]** (checked once against the fake Kinesis SDK) it is not a
-  drop-in twin. It shares `TCubeLaser`'s mode, loop and closed-loop keywords and
-  their validation, and `loop_status`'s field names, but `below_threshold` is
+  drop-in twin. It shares `TCubeLaser`'s mode, loop and closed-loop keywords, the
+  validation the two share (`check_diode_config`; the TCube's own checks are below),
+  and `loop_status`'s field names, but `below_threshold` is
   `missing` while `threshold_current` is `NaN` (`TCubeLaser`'s default) and a `Bool`
   once it is set (the Sim's default is a number). It takes none of the hardware
   keywords (`daq`, `daq_device`, `ao_channel`, `laser_color`,
@@ -282,8 +282,8 @@ if it bothers CI; it is not an error.
 
 **[limitation, suite: testing]**: `gui(SimStage1d())`, `gui(SimStage2d())` and
 `gui(SimStage3d())` all throw on the missing field `stagelabel`: a `FieldError` on
-Julia 1.12 and later, an `ErrorException` on 1.11 (the suite checks the type and
-the field, not the message text). The shared stage panel
+Julia 1.12 and later, an `ErrorException` on 1.11 (the suite checks the error's
+type and field on 1.12 and later, and its exact message on 1.11). The shared stage panel
 reads `stage.stagelabel` unguarded for its window title and the Sim stages carry
 `label`. So an "every panel opens" smoke test cannot be written against the
 simulated stages; `gui(SimCamera())` and `gui(SimLight())` open a window (each
@@ -332,8 +332,9 @@ Upstream's `.github/workflows/CI.yml` (Ubuntu):
 Both halves matter: the background `Xvfb :99` plus `DISPLAY` covers
 precompilation in `julia-buildpkg`, the `xvfb-run -a` prefix covers the test
 process. Add `RIG_SIMULATE: "true"` to the job `env`. Pin MicroscopeControl.jl
-as `mc-system-design`'s "Before anything" says (the tag, or the tested `main`
-commit, from the `Installed from` line) and rerun `install_skills()` after moving
+as `mc-system-design`'s "Before anything" says (a release's tag, named by the
+`Installed from` line; for a `-DEV` install, the commit the instrument was tested
+with, from its Manifest or its checkout) and rerun `install_skills()` after moving
 the pin, so the API map matches what CI tests against.
 
 ## What hardware acceptance must still establish
