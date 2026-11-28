@@ -163,7 +163,7 @@ const SKILL_GROUP_USES = Dict("acquire-reader" => ["camera"], "bench" => ["camer
 # A group's fences: those of the groups it uses, then its own.
 skill_group_fences(groups, name) = vcat((groups[u] for u in get(SKILL_GROUP_USES, name, String[]))..., get(groups, name, []))
 
-SKILL_EXAMPLE_GROUPS["bench"] = (min_passes = 89, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["bench"] = (min_passes = 100, prelude = "", checks = raw"""
 mkcam() = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 message(e) = sprint(showerror, e)
 stuck_devices(sys) = first.(sys.stuck)
@@ -182,8 +182,28 @@ struct IntLight <: LightSource end               # its shutdown is interrupted
 MC.shutdown(::IntLight) = throw(InterruptException())
 struct ParamCam{T} <: Camera end                 # readers with a parametric type, and with an Integer length
 read_sequence(::ParamCam{T}, n::Int) where {T} = zeros(UInt16, 2, 3, n)
+MC.initialize(::ParamCam) = nothing
+MC.shutdown(::ParamCam) = nothing
 struct IntegerCam <: Camera end
 read_sequence(::IntegerCam, n::Integer) = zeros(UInt16, 2, 3, n)
+struct RecordingCam <: Camera                    # records every call the example makes to it
+    calls::Vector{Symbol}
+end
+RecordingCam() = RecordingCam(Symbol[])
+MC.initialize(c::RecordingCam) = (push!(c.calls, :initialize); nothing)
+MC.shutdown(c::RecordingCam) = (push!(c.calls, :shutdown); nothing)
+MC.CameraInterface.abort(c::RecordingCam) = (push!(c.calls, :abort); nothing)
+read_sequence(c::RecordingCam, n::Integer) = (push!(c.calls, :read); zeros(UInt16, 2, 3, n))
+stop_camera!(c::RecordingCam) = (push!(c.calls, :stop); nothing)
+camera_ok(c::RecordingCam) = (push!(c.calls, :camera_ok); true)
+struct NoReaderCam <: Camera                     # records calls, and has no read_sequence method
+    calls::Vector{Symbol}
+end
+NoReaderCam() = NoReaderCam(Symbol[])
+MC.initialize(c::NoReaderCam) = (push!(c.calls, :initialize); nothing)
+MC.shutdown(c::NoReaderCam) = (push!(c.calls, :shutdown); nothing)
+MC.CameraInterface.abort(c::NoReaderCam) = (push!(c.calls, :abort); nothing)
+camera_ok(c::NoReaderCam) = (push!(c.calls, :camera_ok); true)
 @testset "bench: rollback" begin
     cam = ClaimedAtConstruction()
     sys = Bench(cam, SimStage3d(), BrokenLight(); claimed_at_construction = (cam,))
@@ -267,7 +287,7 @@ end
     t = @elapsed first_stack = acquire!(sys, 5)
     @test size(first_stack) == (32, 64, 5)
     @test t >= 5 * 0.02                                          # five of the exposures set_state asked for
-    @test sys.in_flight == false && sys.cam_unavailable == false
+    @test sys.in_flight == false && !(sys.cam in CAMERA_UNKNOWN)
     @test size(acquire!(sys, 3)) == (32, 64, 3)
 
     sys.in_flight = true
@@ -279,39 +299,58 @@ end
     sys.in_flight = false
 
     held(cam) = (b = Bench(cam, SimStage3d(), SimLight()); MC.initialize(b); b)   # a system holding the camera
-    notyet = Bench(mkcam(), SimStage3d(), SimLight())
+    unknown(sys) = sys.cam in CAMERA_UNKNOWN
+    rec = RecordingCam()
+    notyet = Bench(rec, SimStage3d(), SimLight())
     e = try acquire!(notyet, 1); nothing catch e e end
     @test message(e) == "the camera is not held: initialize(sys) first"         # before initialize
-    MC.initialize(notyet); MC.shutdown(notyet)
+    @test isempty(rec.calls)                                                    # and no call reached the camera
+    MC.initialize(notyet); MC.shutdown(notyet); empty!(rec.calls)
     e = try acquire!(notyet, 1); nothing catch e e end
     @test message(e) == "the camera is not held: initialize(sys) first"         # after shutdown
-    withstuck = held(mkcam())
+    @test isempty(rec.calls)
+    rec = RecordingCam()
+    withstuck = held(rec); empty!(rec.calls)
     push!(withstuck.stuck, BrokenLight() => ErrorException("x"))
     e = try acquire!(withstuck, 1); nothing catch e e end
     @test startswith(message(e), "devices in an unknown state")              # while a device is stuck
+    @test isempty(rec.calls)
+    rec = RecordingCam()
+    marked = held(rec); empty!(rec.calls)
+    mark_unknown!(rec)                                                          # as stop_reader! marks a camera
+    e = try acquire!(marked, 1); nothing catch e e end
+    @test startswith(message(e), "camera unavailable: it is marked unknown")
+    @test isempty(rec.calls)
+    rec = RecordingCam()
+    fine = held(rec); empty!(rec.calls)
+    @test size(acquire!(fine, 2)) == (2, 3, 2) && rec.calls == [:read, :camera_ok]   # the recorder sees calls
 
-    claimed = ClaimedAtConstruction()
-    nocam = Bench(claimed, SimStage3d(), SimLight(); claimed_at_construction = (claimed,))
+    norec = NoReaderCam()
+    nocam = Bench(norec, SimStage3d(), SimLight(); claimed_at_construction = (norec,))
     e = try acquire!(nocam, 1); nothing catch e e end
-    @test message(e) == "no sequence reader for ClaimedAtConstruction; write one (see mc-acquire)"
-    @test claimed.open && !nocam.cam_unavailable && !nocam.in_flight   # refused before anything touched it
+    @test message(e) == "no sequence reader for NoReaderCam; write one (see mc-acquire)"
+    @test isempty(norec.calls) && !unknown(nocam) && !nocam.in_flight   # refused before anything touched it
 
-    @test has_reader(ParamCam{Int}()) && has_reader(IntegerCam())     # parametric and Integer readers both count
-    @test !has_reader(ClaimedAtConstruction())
+    @test has_reader(ParamCam{Int}(), 1) && has_reader(IntegerCam(), 1)   # parametric and Integer readers both count
+    @test has_reader(IntegerCam(), Int32(1)) && !has_reader(ParamCam{Int}(), Int32(1))   # checked for the length's type
+    @test !has_reader(NoReaderCam(), 1)
+    param = held(ParamCam{Int}())
+    e = try acquire!(param, Int32(1)); nothing catch e e end
+    @test startswith(message(e), "no sequence reader for ParamCam") && !unknown(param)
 
     cam = FailingCam()
     bad = held(cam)
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed"
     @test cam.aborts == 1 && camera_ok(cam)
-    @test bad.in_flight == false && bad.cam_unavailable == false
+    @test bad.in_flight == false && !unknown(bad)
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed" && cam.aborts == 2    # still available: the next call reached the camera
 
     bad = held(FailingCam(abort_mode = :throws))
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed"
-    @test bad.cam_unavailable
+    @test unknown(bad)
     e = try acquire!(bad, 3) catch e e end
     @test startswith(message(e), "camera unavailable")
     MC.shutdown(bad)
@@ -326,34 +365,37 @@ end
         bad = held(cam)
         e = try acquire!(bad, 3) catch e e end
         @test message(e) == "SDK: read failed"
-        @test cam.aborts == 1 && cam.is_running == running && bad.cam_unavailable
+        @test cam.aborts == 1 && cam.is_running == running && unknown(bad)
     end
 
     cam = FailingCam(abort_mode = :clears_then_throws)
     bad = held(cam)
     e = try acquire!(bad, 3) catch e e end
     @test message(e) == "SDK: read failed"
-    @test camera_ok(cam) && bad.cam_unavailable                   # camera_ok would say yes; the throw decided
+    @test camera_ok(cam) && unknown(bad)                          # camera_ok would say yes; the throw decided
 
     cam = FailingCam(abort_mode = :interrupted)
     bad = held(cam)
     e = try acquire!(bad, 3) catch e e end
-    @test e isa InterruptException && bad.cam_unavailable        # the Ctrl-C reached the caller
+    @test e isa InterruptException && unknown(bad)               # the Ctrl-C reached the caller
 
     cam = FailingCam(read_fails = false, cleanup_fails = true)
     bad = held(cam)
     @test size(acquire!(bad, 4)) == (2, 3, 4)                    # the stack comes back
-    @test bad.cam_unavailable && cam.aborts == 0                 # and the camera is out of service
+    @test unknown(bad) && cam.aborts == 0                        # and the camera is out of service
 
-    slow = Bench(SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.02), SimStage3d(), SimLight())
-    MC.initialize(slow)
-    running = @async acquire!(slow, 20)                           # about 0.4 s of exposures
-    sleep(0.1)
-    schedule(running, InterruptException(); error = true)        # Ctrl-C during the acquisition
-    e = try wait(running); nothing catch err err end
-    @test e isa TaskFailedException && e.task.exception isa InterruptException
-    @test istaskdone(SIM_TIMER[slow.cam]) && camera_ok(slow.cam) # the stop waited for the Sim's timer
-    @test !slow.cam_unavailable && !slow.in_flight
+    for into in (:timer, :waiter)                                # where the Ctrl-C lands
+        slow = Bench(SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.02), SimStage3d(), SimLight())
+        MC.initialize(slow)
+        running = @async acquire!(slow, 20)                       # about 0.4 s of exposures
+        sleep(0.1)
+        timer = SIM_TIMER[slow.cam]
+        schedule(into === :timer ? timer : running, InterruptException(); error = true)
+        e = try join_task(running); nothing catch err err end
+        @test e isa InterruptException                            # plain, wherever it landed
+        @test istaskdone(timer) && slow.cam.is_running == false   # the camera was stopped
+        @test !unknown(slow) && !slow.in_flight                   # and not marked
+    end
 end
 @testset "bench: export with a failed child, shutdown failure" begin
     sys = Bench(mkcam(), SimStage3d(), BrokenLight())
@@ -592,7 +634,7 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 10, prelude = """
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 16, prelude = """
 using MicroscopeControl
 cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 latest = Ref{Any}(nothing)
@@ -600,7 +642,7 @@ fps = 100
 """, checks = raw"""
 @test latest[] !== nothing && size(latest[]) == (32, 64)       # the reader read frames until stopped
 @test istaskdone(reader) && !istaskfailed(reader)               # joined, and it ended on its own flag
-@test outcome[] == (reader_error = nothing, stop_error = nothing, camera_ok = true)
+@test outcome[] == (reader_error = nothing, stop_error = nothing, camera_ok = true) && !(cam in CAMERA_UNKNOWN)
 @test cam.is_running == false
 cam2 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 live(cam2)
@@ -612,19 +654,38 @@ struct StopFailsCam <: Camera end                               # its stop throw
 stop_camera!(::StopFailsCam) = error("SDK: stop failed")
 camera_ok(::StopFailsCam) = true                                # it would say yes; the throw decides
 done_reader = @async nothing
-r = stop_reader!(StopFailsCam(), done_reader, Threads.Atomic{Bool}(false))
+failsstop = StopFailsCam()
+r = stop_reader!(failsstop, done_reader, Threads.Atomic{Bool}(false))
 @test r.reader_error === nothing && r.stop_error isa ErrorException && r.camera_ok == false
-cam3 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
-live(cam3)
-stuck_reader = @async sleep(3)                                  # a reader inside a long SDK call: it ignores its flag
-stopping = @async stop_reader!(cam3, stuck_reader, Threads.Atomic{Bool}(false))
-sleep(0.1)
-schedule(stopping, InterruptException(); error = true)          # Ctrl-C while the caller waits for the reader
-e = try wait(stopping); nothing catch err err end
-@test e isa TaskFailedException && e.task.exception isa InterruptException   # it reached the caller
-@test !istaskdone(stuck_reader) && cam3.is_running == true      # the camera was left alone
-abort(cam3)
-@test camera_ok(cam3) == false                                  # stopped now, but marked unknown: it stays so
+@test failsstop in CAMERA_UNKNOWN                               # a stop that threw marks the camera
+
+# A Ctrl-C lands in the reader, which wakes every frame: the body runs on, and the join rethrows it, plainly.
+cam4 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
+live(cam4)
+stop4 = Threads.Atomic{Bool}(false)
+reader4 = @async while !stop4[]
+    getlastframe(cam4)
+    sleep(0.01)
+end
+sleep(0.05)
+schedule(reader4, InterruptException(); error = true)
+e = try stop_reader!(cam4, reader4, stop4); nothing catch err err end
+@test e isa InterruptException                                  # plain, not a TaskFailedException
+@test cam4.is_running == false && !(cam4 in CAMERA_UNKNOWN)     # the reader had ended, so the camera was stopped
+
+# The wait itself ends with an exception while the reader still runs (a Ctrl-C, or anything else).
+for thrown in (InterruptException(), ErrorException("the wait timed out"))
+    cam3 = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
+    live(cam3)
+    stuck_reader = @async sleep(3)                              # a reader inside a long SDK call: it ignores its flag
+    stopping = @async stop_reader!(cam3, stuck_reader, Threads.Atomic{Bool}(false))
+    sleep(0.1)
+    schedule(stopping, thrown; error = true)                    # delivered to the task waiting for the reader
+    local e = try join_task(stopping); nothing catch err err end
+    @test thrown isa InterruptException ? e isa InterruptException : (e isa TaskFailedException && e.task.exception === thrown)
+    @test !istaskdone(stuck_reader) && cam3.is_running == true  # the camera was left alone
+    @test cam3 in CAMERA_UNKNOWN                                # and marked unknown
+end
 """)
 
 SKILL_EXAMPLE_GROUPS["acquire-snap"] = (min_passes = 5, prelude = "using MicroscopeControl", checks = raw"""
@@ -643,7 +704,7 @@ SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (min_passes = 6, prelude = "using Mic
 @test fieldtype(DCAM4Camera, :exposure_time) == Float64 && fieldtype(ThorcamDCXCamera, :exposure_time) == Float64
 @test ThorcamDCXCamera().exposure_time == 0.01                                  # the constructor is pure
 """)
-SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 23, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 29, prelude = "", checks = raw"""
 cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 t = @elapsed stack = read_sequence(cam, 5)
 @test size(stack) == (32, 64, 5) && eltype(stack) == UInt16
@@ -658,6 +719,7 @@ reading = @async read_sequence(slow, 20)                                        
 sleep(0.1)
 timer = SIM_TIMER[slow]
 @test !istaskdone(timer) && size(getdata(slow)) == (32, 64, 20)                 # getdata returns at once, mid-sequence
+@test getdata(slow) != getdata(slow)                                            # and nothing mid-sequence is cached
 abort(slow)
 @test slow.is_running == false && !istaskdone(timer)                           # abort leaves the timer running
 @test camera_ok(slow) == false                                                  # so the camera is not yet known stopped
@@ -668,8 +730,21 @@ struct UnknownCam <: Camera end
 @test_throws r"^no sequence reader for UnknownCam; write one \(see mc-acquire\)$" read_sequence(UnknownCam(), 1)
 @test camera_ok(UnknownCam()) == false
 marked = SimCamera()
+@test known_stopped(marked)
 mark_unknown!(marked)
-@test camera_ok(marked) == false                                                # a camera marked unknown stays so
+@test camera_ok(marked) && !known_stopped(marked)                               # the mark, not the driver, says no
+endless = SimCamera(exposure_time = 0.01, sequence_length = 1)                  # a timer that never ends
+SIM_TIMER[endless] = @async sleep(30)
+took = @elapsed (e = try stop_camera!(endless); nothing catch err err end)
+@test e isa ErrorException && occursin("timer did not end", e.msg) && took < 5  # the wait is bounded (1.01 s here)
+interrupted = @async sleep(30)
+yield(); schedule(interrupted, InterruptException(); error = true)
+@test_throws InterruptException join_task(interrupted)                          # plain, not a TaskFailedException
+failed = @async error("not an interrupt")
+@test_throws TaskFailedException join_task(failed)                              # any other failure stays wrapped
+normal = @async 42
+join_task(normal)                                                               # a task that ends normally: no throw
+@test istaskdone(normal) && fetch(normal) == 42
 for T in (SimCamera, DCAM4Camera)
     @test which(read_sequence, Tuple{T,Int}).sig.parameters[2] === T && which(camera_ok, Tuple{T}).sig.parameters[2] === T
     @test which(stop_camera!, Tuple{T}).sig.parameters[2] === T
