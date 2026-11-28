@@ -48,24 +48,16 @@ DCAM4 only, so the policy below stays the requirement for every driver.
    ("Finite ordered sequence"), which turns a reader that died of a Ctrl-C back into
    a plain `InterruptException`. Touch the camera only once `istaskdone(reader)`: a
    wait that ends with any exception while the reader still runs (perhaps inside an
-   SDK call) must leave the camera alone, marked unknown.
+   SDK call) must leave the camera alone and out of service.
 3. Only then stop the camera, with `stop_camera!` (`abort`, prepared per driver,
    through `with_stop`, which marks the camera unknown when the stop throws or
-   leaves it not known stopped; a marked camera is out of service until it is
-   rebuilt, except the mark a live view sets for its own run). Both are in "Finite
-   ordered sequence". Do 1 to 3 in a `finally` around the start, so they run
+   leaves it not known stopped; a camera marked unknown is out of service until
+   it is rebuilt). Both are in "Finite ordered sequence". Do 1 to 3 in a `finally` around the start, so they run
    whatever your program, the start or the reader did: `live_view!` below.
    `stop_reader!` logs a stop the driver does not confirm. Rethrow an
    `InterruptException`, never log it. Start the camera only through
    `with_camera`, as `start_reader!` does, so a camera marked unknown is never
    restarted.
-
-A live view marks its camera for its whole run: **from `start_reader!` until a confirmed stop, the camera is
-marked.** `start_reader!` refuses a marked camera, marks it, and only then calls `live`; `stop_reader!` removes the
-mark only when its own stop is confirmed, after a start that `live_started` confirmed. So a Ctrl-C at any instant
-leaves the camera unstarted (before the mark), marked (after it), or stopped and confirmed: never running and
-unmarked. A guarded acquisition on the camera during its live view is refused, as it should be, since the camera is
-busy. No other code in these skills removes a mark (suite: statements).
 4. Never let two tasks call into the same camera SDK concurrently. One task owns
    the camera; everything else asks it.
    **[limitation, 0.2.7-DEV]** the drivers spawn tasks of their own that the
@@ -75,16 +67,30 @@ busy. No other code in these skills removes a mark (suite: statements).
    property you can establish of the process; `mc-system-design`, Decision 3, gives
    the evidence, the resulting single-owner restriction, and the upstream fix.
 
+A live view reserves its camera for its whole run, in a set of its own, `CAMERA_LIVE`, kept apart from the failure
+mark `CAMERA_UNKNOWN` ("Finite ordered sequence"): **from `start_reader!` until its start and its stop were both
+confirmed, the camera is reserved.** `start_reader!` refuses a camera that is marked or reserved, reserves it, and
+only then calls `live`; `stop_reader!` removes the reservation only when this live view's start was confirmed by
+`live_started` and its own stop by `camera_ok`, and a start that was not confirmed marks the camera unknown. So a
+Ctrl-C at any instant leaves the camera unstarted (before the reservation), reserved (after it), or confirmed
+stopped: never running and available. A guarded acquisition on the camera during its live view is refused, as it
+should be, since the camera is busy. A failure during the live view marks the camera unknown, and nothing removes
+that mark, so it outlasts the live view's own confirmed stop. In the examples only the functions that own the two
+sets refer to them (suite: statements).
+
 **[limitation, 0.2.7-DEV]** A Ctrl-C from the terminal lands in whichever task is running when it arrives. In the
-caller's own task (the live-view body, or the task running `acquire!`) it unwinds that task directly. In the reader
-(the usual place, since it wakes every frame) or the Sim timer, it reaches the caller only at the join, where
-`join_task` rethrows it, so the body runs on until then; a body that must stop at once needs the reader to pass it on,
-for example through a flag the body checks. On DCAM4 it can be lost in the driver: in the sequence poller nobody
-joins, in the `catch` in the cleanup of `getdata` and `capture`, and, with the driver's SDK tracing enabled, in
-`trace_line`, which turns anything thrown while it builds a trace record, an interrupt included, into a note (all
-three in "Finite ordered sequence"). A Ctrl-C can also end the Julia process: when it arrives as a task is
-finishing, Julia has no handler there and exits (`fatal: error thrown and no exception handler available`; seen with
-real signals in a test process, not traced to a fix).
+caller's own task (the live-view body, or the task running `acquire!`) it unwinds that task directly. In the reader (the
+usual place, since it wakes every frame) or the Sim timer, it reaches the caller only at the join, where `join_task`
+rethrows it, so the body runs on until then; a body that must stop at once needs the reader to pass it on, for example
+through a flag the body checks. On DCAM4 it can be lost in the driver: in the sequence poller nobody joins, in the
+`catch` in the cleanup of `getdata` and `capture`, and, with the driver's SDK tracing enabled, in `trace_line`, which
+turns anything thrown while it builds a trace record, an interrupt included, into a note (all three in "Finite ordered
+sequence"). A Ctrl-C can also end the Julia process: when it arrives as a task is finishing, Julia has no handler there
+and exits (`fatal: error thrown and no exception handler available`; seen with real signals in a test process, not
+traced to a fix). And Julia's logging catches any exception thrown while a log record is formatted or written, an
+interrupt included, and reports it as a logging error instead (`handle_message_nothrow` in Julia's `logging.jl`): a
+Ctrl-C that lands while `attempt_stop!` logs a failed stop is lost, and the camera stays marked unknown (suite: camera,
+with a logger that throws an interrupt once).
 
 <!-- mc-test: acquire-reader -->
 ```julia
@@ -95,12 +101,14 @@ One live view and its reader: the camera, the reader task (`nothing` until one i
 flag, and the live view's `state`:
 
 - `:new`: not started; `stop_reader!` has nothing to stop;
-- `:starting`: `start_reader!` has marked the camera and is calling `live`; the start is not yet confirmed;
+- `:starting`: `start_reader!` is reserving the camera and calling `live`; the start is not yet confirmed;
 - `:live`: `live_started` confirmed the start;
-- `:stopping`: `stop_reader!` is attempting the stop;
-- `:done`: the stop was attempted, whether or not it worked; the camera is marked unless it was confirmed.
+- `:done`: `stop_reader!` has run. If the start began, a stop was attempted, whether or not it worked; the
+  reservation is removed only when both the start and the stop were confirmed, and a start that was not confirmed
+  marks the camera unknown.
 
-A handle runs one live view: `start_reader!` refuses one that is not `:new`.
+A handle runs one live view: `start_reader!` refuses one that is not `:new`, and a second `stop_reader!` does
+nothing.
 """
 mutable struct ReaderHandle
     const cam::Camera
@@ -113,27 +121,29 @@ ReaderHandle(cam::Camera) = ReaderHandle(cam, nothing, Threads.Atomic{Bool}(fals
 """
     stop_reader!(h) -> (; reader_error, stop_error, camera_ok)
 
-Set the reader's flag, join the reader if one was launched, then, if `start_reader!` marked the camera, attempt the
-stop, once. The mark is removed only when the stop is confirmed and the start had been confirmed; otherwise the
-camera stays marked. `reader_error` is the reader's own failure or `nothing`; `stop_error` is the ordinary error the
-stop threw, or `nothing`; `camera_ok` is whether the camera is not marked afterwards. A stop the driver does not
-confirm is logged (`attempt_stop!`) before anything is thrown. It throws in four cases:
+Set the reader's flag, join the reader if one was launched, then, if the start began, attempt the stop, once; the
+handle ends `:done`, and a call on a `:done` handle does nothing. The reservation is removed only when both the start
+and the stop were confirmed; a start that was not confirmed marks the camera unknown. `reader_error` is the reader's
+own failure or `nothing`; `stop_error` is the ordinary error the stop threw, or `nothing`; `camera_ok` is whether the
+camera is in service afterwards (`in_service`). A stop the driver does not confirm is logged (`attempt_stop!`) before
+anything is thrown. It throws in four cases:
 
-1. the wait ends with any exception while the reader still runs: the camera is left untouched, and marked, and that
-   exception is rethrown;
+1. the wait ends with any exception while the reader still runs: the camera is left untouched, reserved, the handle
+   keeps its state, and that exception is rethrown;
 2. an interrupt, in the reader or in the wait, once the reader has ended: after the stop was attempted, whether or
    not it worked, as a plain `InterruptException`;
 3. any other exception in the wait, once the reader has ended: after the stop was attempted, that exception;
-4. an interrupt in the stop itself: rethrown, not logged, with the camera marked.
+4. an interrupt in the stop itself: rethrown, not logged, with the camera marked unknown.
 """
 function stop_reader!(h::ReaderHandle)
+    h.state === :done && return (; reader_error = nothing, stop_error = nothing, camera_ok = in_service(h.cam))
     h.stop[] = true
     reader_error, pending = nothing, nothing
     if h.reader !== nothing
         try
             join_task(h.reader)                  # a reader that died of a Ctrl-C comes out as a plain interrupt
         catch e
-            istaskdone(h.reader) || rethrow()    # case 1: it still runs: leave the camera alone, marked
+            istaskdone(h.reader) || rethrow()    # case 1: it still runs: leave the camera alone, reserved
             if e isa TaskFailedException && e.task === h.reader
                 reader_error = e                 # the reader's own failure
             else
@@ -142,18 +152,15 @@ function stop_reader!(h::ReaderHandle)
         end
     end
     stop_error = nothing
-    if h.state in (:starting, :live)             # this handle marked the camera: stop it, once
-        confirmed_start = h.state === :live
-        h.state = :stopping
-        try
-            (; stop_error, stopped) = attempt_stop!(h.cam, "the live-view stop")   # case 4: rethrown, marked
-            stopped && confirmed_start && delete!(CAMERA_UNKNOWN, h.cam)   # the one place a mark is removed
-        finally
-            h.state = :done
-        end
+    began = h.state                              # :new, :starting or :live
+    h.state = :done                              # a handle stops once
+    if began !== :new
+        began === :live || mark_unknown!(h.cam)  # a start that was not confirmed is a failure
+        (; stop_error, stopped) = attempt_stop!(h.cam, "the live-view stop")   # case 4: rethrown, marked unknown
+        stopped && began === :live && delete!(CAMERA_LIVE, h.cam)   # the reservation ends: start and stop confirmed
     end
     pending === nothing || throw(pending)
-    return (; reader_error, stop_error, camera_ok = !(h.cam in CAMERA_UNKNOWN))
+    return (; reader_error, stop_error, camera_ok = in_service(h.cam))
 end
 
 # The reader loop, and the one getlastframe outside a wrapper: only start_reader! launches it, after its guard.
@@ -168,23 +175,24 @@ end
 """
     start_reader!(h, latest, fps) -> h
 
-Start the live view of `h.cam` and launch its reader into `h`. Refuse a handle that is not `:new` and a camera marked
-unknown, before any call reaches it; then mark the camera, set `:starting`, and only then call `live`. A start that
-throws, or that `live_started` does not confirm, launches no reader and leaves the camera marked; `stop_reader!(h)`
-stops it. Call it as `live_view!` does, inside a `try` whose `finally` calls `stop_reader!(h)`.
+Start the live view of `h.cam` and launch its reader into `h`. Refuse a handle that is not `:new`, and a camera that
+is marked unknown or reserved, before any call reaches it; then set `:starting`, reserve the camera, and only then
+call `live`. A start that throws, or that `live_started` does not confirm, launches no reader and leaves the camera
+reserved; the cleanup `stop_reader!(h)` attempts the stop and marks the camera unknown. Only `live_view!` calls it,
+inside the `try` whose `finally` calls `stop_reader!(h)`.
 """
 function start_reader!(h::ReaderHandle, latest, fps)   # the reader is then the ONLY task that touches the camera
     h.state === :new || error("start_reader!: this handle has run a live view; make a new ReaderHandle")
-    started = with_camera(h.cam; ok = Returns(true)) do   # refuses a marked camera; the mark set here judges the start
-        mark_unknown!(h.cam)                 # from here until a confirmed stop, the camera is marked
-        h.state = :starting                  # this handle set the mark: from here stop_reader!(h) stops the camera
+    started = with_camera(h.cam; ok = Returns(true)) do   # refuses a marked or reserved camera
+        h.state = :starting                  # from here stop_reader!(h) attempts the stop
+        push!(CAMERA_LIVE, h.cam)            # reserved from before live until its start and stop are confirmed
         reset_error!(h.cam)                  # live_started judges what live does from here
         live(h.cam)                          # cam.is_running == 1 from here
         live_started(h.cam)
     end
-    started || error("$(nameof(typeof(h.cam))): the live view did not start; the camera stays marked unknown, no " *
-                     "reader was launched, and stop_reader!(h) stops it")
-    h.state = :live                          # confirmed: a confirmed stop now removes the mark
+    started || error("$(nameof(typeof(h.cam))): the live view did not start; no reader was launched, the camera " *
+                     "stays reserved, and the cleanup stop_reader!(h) attempts the stop and marks it unknown")
+    h.state = :live                          # confirmed: a confirmed stop now ends the reservation
     h.reader = @async read_frames!(h, latest, fps)
     return h
 end
@@ -193,7 +201,8 @@ end
     live_view!(body, h, latest, fps) -> (; reader_error, stop_error, camera_ok)
 
 The live view as one call, and the recipe: start it inside a `try`, run `body(h)`, and stop it in the `finally`,
-whatever happened. Returns the stop's outcome, or rethrows what was thrown.
+whatever happened. Returns the stop's outcome, or rethrows what was thrown. The only caller of `start_reader!` and
+`stop_reader!` (suite: statements).
 """
 function live_view!(body, h::ReaderHandle, latest, fps)
     local outcome
@@ -214,28 +223,33 @@ outcome.reader_error === nothing || throw(outcome.reader_error)
 ```
 
 **[guarantee, suite: acquire-reader]** The checks call `live_view!` itself, so a change to the recipe is a change to
-what they run. This runs clean against `SimCamera` (which cannot exhibit the hazard, since it does not call an SDK): the
-reader reads frames until its flag is set, the join returns, the outcome is `camera_ok` with no error, and the handle
-ends `:done`. During the live view the camera is marked, and a `read_sequence` on it is refused; after the confirmed
-stop it is in service. On a camera that records its calls: `live` is called on a camera already marked; a second
-`start_reader!` on a handle that has run is refused before any call reaches the camera; a camera marked unknown is
-refused before any call reaches it, and the stop then calls nothing either; an interrupt before the mark (in the
-refusal) leaves the camera unstarted and unmarked. A live start that throws (an ordinary error, or an interrupt inside
-`live`), that `live_started` does not confirm, or whose `live_started` throws an interrupt launches no reader, has its
-stop attempted, and leaves the camera marked, a confirmed stop included; the caller gets the start's own exception, or
-the message that the start was not confirmed. Without the `finally`, such a start leaves the camera marked and
-unstopped. A stop on that path that the driver does not confirm is logged, and an interrupt thrown by it reaches the
-caller. A handle left `:live` with no reader, as an interrupt after the confirmation and before the launch leaves it, is
-stopped and the mark removed. On `DCAM4Camera` over the fake DCAM SDK the same holds when `live` reports a failed
-allocation, and when it reports an error while the capture went ahead: the stop then leaves the camera stopped, and when
-that stop fails too, `is_running` stays set and the stop is logged. A reader that throws is still joined, the camera is
-still stopped, and the outcome carries the reader's error. A stop that throws an ordinary error gives an outcome with
-that error and `camera_ok == false`, is logged, and leaves the camera marked; a stop that throws an interrupt, there or
-before `with_stop` is reached, leaves the camera marked and is rethrown, with nothing logged at warning level or above,
-and a guarded read on the camera is refused after it. An interrupt delivered into the reader itself, where a Ctrl-C
-usually lands, reaches the caller as a plain `InterruptException`, after the camera was stopped, and a stop that failed
-on that path is still logged. An interrupt, or any other exception, delivered to the task waiting on a reader that is
-still running leaves the camera running and marked, and reaches the caller.
+what they run. This runs clean against `SimCamera` (which cannot exhibit the hazard, since it does not call an SDK):
+the reader reads frames until its flag is set, the join returns, the outcome is `camera_ok` with no error, and the
+handle ends `:done`. During the live view the camera is reserved, and a `read_sequence` on it is refused; after the
+confirmed start and stop it is in service. On a camera that records its calls: `live` is called on a camera already
+reserved; a second `live_view!` on a handle that has run is refused with "make a new ReaderHandle" before any call
+reaches the camera, also when its reader had died of an interrupt; a camera marked unknown is refused before any call
+reaches it, the stop then calls nothing either, and the handle ends `:done`; an interrupt before the reservation (in
+the refusal) leaves the camera unstarted and in service. A live start that throws (an ordinary error, or an interrupt
+inside `live`), that `live_started` does not confirm, or whose `live_started` throws an interrupt launches no reader,
+has its stop attempted, and ends with the camera marked unknown, a confirmed stop included; the caller gets the
+start's own exception, or the message that the start was not confirmed. Without the `finally`, such a start leaves
+the camera reserved and unstopped. A stop on that path that the driver does not confirm is logged, and an interrupt
+thrown by it reaches the caller. A handle that is `:live` with no reader, as an interrupt just after `h.state = :live`
+leaves it, is stopped and its reservation ended; an interrupt between the confirmation and that line leaves it
+`:starting`, so the camera ends marked unknown. After a confirmed start, a stop the driver does not confirm leaves the
+camera marked unknown, and a guarded read on it is refused. On `DCAM4Camera` over the fake DCAM SDK the same holds
+when `live` reports a failed allocation, and when it reports an error while the capture went ahead: the stop then
+leaves the camera stopped, and when that stop fails too, `is_running` stays set and the stop is logged. And on DCAM4,
+when the owner ends the reader and calls `stop_camera!` itself and the driver reports a failed release, the camera
+stays refused after the recipe's later stop succeeds. A reader that throws is still joined, the camera is still
+stopped, and the outcome carries the reader's error. A stop that throws an ordinary error gives an outcome with that
+error and `camera_ok == false`, is logged, and marks the camera unknown; a stop that throws an interrupt, there or
+before `with_stop` is reached, marks the camera unknown and is rethrown, with nothing logged at warning level or
+above, and a guarded read on the camera is refused after it. An interrupt delivered into the reader itself, where a
+Ctrl-C usually lands, reaches the caller as a plain `InterruptException`, after the camera was stopped, and a stop
+that failed on that path is still logged. An interrupt, or any other exception, delivered to the task waiting on a
+reader that is still running leaves the camera running and reserved, and reaches the caller.
 
 **[guarantee, 0.2.7-DEV]** (since 0.2.7) The package GUI (`gui(cam)` / `start_live`) runs its
 blocking `getlastframe` reader as a `Threads.@spawn` task, which may run on another thread (no thread is reserved for
@@ -381,7 +395,8 @@ leaves it set until `getdata` aborts, and DCAM4's poller clears it at its deadli
 
 **[policy]** Every function in these skills that calls a camera (`live`, `sequence`, `capture`, `getdata`,
 `getlastframe`, `abort`) makes those calls inside one of two wrappers, defined below. `with_camera(f, cam; ok)` starts,
-reads or snaps: it refuses a camera marked unknown before `f` runs, and nothing turns that refusal off.
+reads or snaps: it refuses a camera marked unknown, or reserved by a live view, before `f` runs, and nothing turns that
+refusal off.
 `with_stop(f, cam; ok)` is the same without the refusal, for a stop, which must reach a camera that may still be
 running. Both mark the camera unknown when `f` throws (any exception, an interrupt included) and rethrow, and after a
 normal return mark it when the postcondition `ok(cam)` is false, running the postcondition inside the region that
@@ -390,10 +405,15 @@ the next use; `with_stop` returns `ok(cam)`. The suite checks the rule on the co
 marked examples, including default arguments and the eagerly evaluated arguments of the wrappers (suite: statements),
 and confines its two exceptions by name: `with_stop` is accepted only inside a `stop_camera!` method, and any other
 reference to it, called, passed or bound to a name, fails; and a `getlastframe` outside a wrapper is accepted only
-inside `read_frames!`, the reader loop, which starts no task of its own and which only `start_reader!` may launch, as
-a task, after a `with_camera` that every path to the launch runs (a top-level statement of `start_reader!`, not
-inside an `if`, a loop or a `try`). That `start_reader!` launches it only after `live_started` confirmed the start,
-and that `stop_reader!` joins it before it stops the camera, are checked by running them (suite: acquire-reader).
+inside `read_frames!`, the reader loop, which starts no task of its own (no `@async`, `@spawn` or `@threads`, bare or
+qualified, and no `Task`, `schedule` or `Timer`) and which only `start_reader!` may launch, as a task, after a
+`with_camera` that every path to the launch runs (one executed as a top-level statement of `start_reader!`, not inside
+an `if`, a loop, a `try` or a local function). One reference rule covers the rest: `with_stop` is named only in
+`stop_camera!` methods, `CAMERA_UNKNOWN` only in `mark_unknown!`, `refuse_unknown` and `in_service`, `CAMERA_LIVE`
+only there and in `start_reader!` and `stop_reader!`, and `start_reader!` and `stop_reader!` only in `live_view!`;
+anywhere else, the top level of a fence included, any reference fails, called, passed, qualified or bound to a name.
+That `start_reader!` launches the reader only after `live_started` confirmed the start, and that `stop_reader!` joins
+it before it stops the camera, are checked by running them (suite: acquire-reader).
 
 Through them, one function per driver, chosen by dispatch as `snap` is: `read_sequence(cam, n)` returns the stack or
 throws; `stop_camera!(cam)` stops the camera after a failure or at the end of live view, and returns whether the driver
@@ -402,10 +422,11 @@ with its buffers released, as far as its driver reports?) and `live_started(cam)
 to be running?). A camera without a method gets the fallback, which refuses to read and never says the camera stopped or
 started. Two shared pieces go with them: `join_task`, the one way the examples wait on a task, and `attempt_stop!`, the
 one way they stop a camera after a failure or at the end of live view, which logs a stop the driver does not confirm and
-passes an interrupt on. A camera is in service exactly while it is not marked: every read, snap, start and stop marks it
-when its postcondition fails, and a live view marks it for its whole run (above). Covered here: `SimCamera` (run by the
-suite) and `DCAM4Camera` (run against the fake DCAM SDK in `test/`). Not covered: `ThorcamDCXCamera` and
-`ThorCamCSCCamera` (below). `mc-system-design`'s `Bench` uses these functions; write the methods for a camera you add.
+passes an interrupt on. A camera is in service exactly while it is in neither set (`in_service`): every read, snap,
+start and stop marks it unknown when its postcondition fails, and a live view reserves it for its whole run (above).
+Covered here: `SimCamera` (run by the suite) and `DCAM4Camera` (run against the fake DCAM SDK in `test/`). Not covered:
+`ThorcamDCXCamera` and `ThorCamCSCCamera` (below). `mc-system-design`'s `Bench` uses these functions; write the methods
+for a camera you add.
 
 <!-- mc-test: camera -->
 ```julia
@@ -427,15 +448,21 @@ function join_task(t::Task)
     end
 end
 
-# The one out-of-service mark: a camera that threw while in use, that failed its postcondition after a stop, a start or
-# an acquisition, or whose reader was left running, is never started or read again (a stop is still let through).
-# Rebuild it. The one exception is a live view's own mark, set for its run: its confirmed stop removes it.
+# Two sets, kept apart. CAMERA_UNKNOWN is the out-of-service mark: a camera that threw while in use, that failed its
+# postcondition after a stop, a start or an acquisition, or whose live start was not confirmed, is never started or
+# read again (a stop is still let through), and nothing removes it from the set: rebuild the camera. CAMERA_LIVE holds
+# a camera reserved by a live view, from before `live` until that live view's start and its stop were both
+# confirmed. Only the functions below and `start_reader!` and `stop_reader!` refer to either set (suite: statements).
 const CAMERA_UNKNOWN = Base.IdSet{Camera}()
+const CAMERA_LIVE = Base.IdSet{Camera}()
 mark_unknown!(cam::Camera) = (push!(CAMERA_UNKNOWN, cam); nothing)
-refuse_unknown(cam::Camera) =
-    cam in CAMERA_UNKNOWN ? error("camera unavailable: it is marked unknown (in a live view, or not known stopped " *
-                                  "after an acquisition or a stop); stop the live view, or shut down and " *
-                                  "reconstruct") : nothing
+function refuse_unknown(cam::Camera)             # refuse a camera marked unknown, or one a live view holds
+    cam in CAMERA_UNKNOWN && error("camera unavailable: it is marked unknown (not known stopped after an " *
+                                   "acquisition or a stop); shut down and reconstruct")
+    cam in CAMERA_LIVE && error("camera unavailable: a live view holds it; stop that live view first")
+    return nothing
+end
+in_service(cam::Camera) = !(cam in CAMERA_UNKNOWN) && !(cam in CAMERA_LIVE)
 
 """
     with_camera(f, cam; ok = camera_ok)
@@ -601,7 +628,9 @@ suite: acquire-reader; `acquire!`, suite: bench); `with_camera` has no keyword t
 is a `MethodError`, and `f` does not run); `with_stop` runs `f` on a marked camera, which stays marked; a standalone stop
 that returns with `camera_ok` false marks the camera and returns false; `attempt_stop!` logs a stop that returned
 unconfirmed or threw an ordinary error, returns that error and whether the stop was confirmed, and rethrows an
-interrupt with the camera marked, one thrown before `with_stop` is reached included; a postcondition that throws
+interrupt with the camera marked, one thrown before `with_stop` is reached included, while under a logger that throws
+an interrupt once as it writes the failed stop's record, the interrupt is lost and the camera stays marked (the
+Ctrl-C limitation above); a camera a live view holds is refused with its own message; a postcondition that throws
 marks the camera too, so a read on it is refused; and `live_started` holds after `live` on a Sim camera, not before.
 For `DCAM4Camera`, against the fake DCAM SDK (`test/dcam4_fake_sdk.jl`, not a camera): a clean read returns the stack
 and leaves the camera in service; a read whose buffer release fails after the frames were read returns the stack and

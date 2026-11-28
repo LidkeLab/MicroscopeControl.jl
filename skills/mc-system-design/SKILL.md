@@ -357,21 +357,20 @@ when the acquisition started depends on state the driver's task may read again l
 
 **[policy]** What a system should do today, as a restriction the drivers impose rather than a design preference: treat
 the camera as **single-owner and single-acquisition**. One blocking acquisition at a time, on the task that called it;
-**no cancellation**; no configuration change while an acquisition is in flight; and after every acquisition,
-successful or not, ask the driver's `camera_ok` whether the camera is known to be stopped with its buffers released,
-as far as the driver reports. When it is not, or when the stop after a failure threw, mark the camera unknown
-(`mc-acquire`'s one mark: every function in these skills that calls a camera does so through `with_camera`, which
-refuses a marked camera first and cannot be told not to, or, in a `stop_camera!` method only, through `with_stop`,
+**no cancellation**; no configuration change while an acquisition is in flight; and after every acquisition, successful
+or not, ask the driver's `camera_ok` whether the camera is known to be stopped with its buffers released, as far as the
+driver reports. When it is not, or when the stop after a failure threw, mark the camera unknown (`mc-acquire`'s mark:
+every function in these skills that calls a camera does so through `with_camera`, which refuses a camera marked unknown,
+or reserved by a live view, first and cannot be told not to, or, in a `stop_camera!` method only, through `with_stop`,
 which lets a stop through; the one other exception is the `getlastframe` in `read_frames!`, the reader loop
-`start_reader!` launches; and the suite checks the rule on the code)
-and **restart the process** (or reconstruct the camera and the system) rather than attempt in-place recovery, since no
-lifecycle call can verify that the driver's task is gone or that `initialize` did more than return. A camera with no
-`read_sequence` method is refused before anything touches it; `ThorcamDCXCamera` and `ThorCamCSCCamera` have none, for
-the reasons `mc-acquire` gives. An `InterruptException` is never logged and dropped by the example: one that lands in
-the caller's own task unwinds it, one that lands in a task the example joins is rethrown at the join, and `release!`
-first finishes shutting down the other devices. The DCAM4 driver can lose one: in the sequence poller nobody joins, in
-the `catch` in the cleanup of `getdata` and `capture`, and, with its SDK tracing enabled, in `trace_line`
-(`mc-acquire`'s limitations).
+`start_reader!` launches; and the suite checks the rule on the code) and **restart the process** (or reconstruct the
+camera and the system) rather than attempt in-place recovery, since no lifecycle call can verify that the driver's task
+is gone or that `initialize` did more than return. A camera with no `read_sequence` method is refused before anything
+touches it; `ThorcamDCXCamera` and `ThorCamCSCCamera` have none, for the reasons `mc-acquire` gives. An
+`InterruptException` is never logged and dropped by the example: one that lands in the caller's own task unwinds it, one
+that lands in a task the example joins is rethrown at the join, and `release!` first finishes shutting down the other
+devices. The DCAM4 driver can lose one: in the sequence poller nobody joins, in the `catch` in the cleanup of `getdata`
+and `capture`, and, with its SDK tracing enabled, in `trace_line` (`mc-acquire`'s limitations).
 
 **[policy]** The upstream fix is concrete: the camera interface should require `sequence` (and `live`) to **return
 the task it spawns**, or expose a join, and report a failed stop or release as a failure, so a system can establish
