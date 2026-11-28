@@ -868,7 +868,7 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 74, prelude = FAKE_DCAM_PRELUDE * """
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 79, prelude = FAKE_DCAM_PRELUDE * """
 cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 latest = Ref{Any}(nothing)
 fps = 100
@@ -1440,7 +1440,7 @@ using InteractiveUtils
 
 # Statements about the generated API map, the SLM stubs, the exports and `save_h5` that no example block runs.
 # The floor is one under the count: one check runs on Linux only (Triggerscope4 refusing a port name not on the host).
-SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 135, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 137, prelude = "", checks = raw"""
 @testset "statements: every function in the examples calls a camera only inside a wrapper" begin
     fenced = Main.skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))
     offenders = Tuple{String,Int,Symbol,Symbol}[]
