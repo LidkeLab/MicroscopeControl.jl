@@ -280,7 +280,9 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
     `read_sequence`, `stop_camera!` and `camera_ok` functions cover the simulated and Hamamatsu cameras; the DCx
     and CSC cameras have none, for reasons stated there. Every function in the examples that calls a camera does so
     through one wrapper, `with_camera`, which refuses a camera marked unknown and marks it after any throw or a
-    failed postcondition; the suite checks that rule on the examples' code. A throw from a light's level setter,
+    failed postcondition; the suite checks that rule on the examples' code, with two named exceptions: the
+    `getlastframe` of the reader loop `start_reader!` launches, and the `refuse = false` that lets a stop through on a
+    marked camera, accepted only in `stop_camera!`. A throw from a light's level setter,
     `light_on` or `light_off` does not mean the light is off.
   - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to the
     tag in the skills' `Installed from` line (for a `-DEV` install, the commit the instrument was tested with,

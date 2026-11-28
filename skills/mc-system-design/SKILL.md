@@ -360,14 +360,16 @@ the camera as **single-owner and single-acquisition**. One blocking acquisition 
 successful or not, ask the driver's `camera_ok` whether the camera is known to be stopped with its buffers released,
 as far as the driver reports. When it is not, or when the stop after a failure threw, mark the camera unknown
 (`mc-acquire`'s one mark: every function in these skills that calls a camera does so through `with_camera`, which
-refuses a marked camera first, and the suite checks that rule on the code) and **restart the process** (or reconstruct
-the camera and the system) rather than attempt in-place recovery, since no lifecycle call can verify that the driver's
-task is gone or that `initialize` did more than return. A camera with no `read_sequence` method is refused before
-anything touches it; `ThorcamDCXCamera` and `ThorCamCSCCamera` have none, for the reasons `mc-acquire` gives. An
-`InterruptException` is never logged and dropped by the example: one that lands in the caller's own task unwinds it,
-one that lands in a task the example joins is rethrown at the join, and `release!` first finishes shutting down the
-other devices. The driver can lose one in two places on DCAM4: the sequence poller nobody joins, and the `catch` in
-the cleanup of `getdata` and `capture` (`mc-acquire`'s limitations).
+refuses a marked camera first, with two exceptions the suite names, the `getlastframe` of the reader loop
+`start_reader!` launches and the `refuse = false` that lets a stop through, and the suite checks the rule on the code)
+and **restart the process** (or reconstruct the camera and the system) rather than attempt in-place recovery, since no
+lifecycle call can verify that the driver's task is gone or that `initialize` did more than return. A camera with no
+`read_sequence` method is refused before anything touches it; `ThorcamDCXCamera` and `ThorCamCSCCamera` have none, for
+the reasons `mc-acquire` gives. An `InterruptException` is never logged and dropped by the example: one that lands in
+the caller's own task unwinds it, one that lands in a task the example joins is rethrown at the join, and `release!`
+first finishes shutting down the other devices. The DCAM4 driver can lose one: in the sequence poller nobody joins, in
+the `catch` in the cleanup of `getdata` and `capture`, and, with its SDK tracing enabled, in `trace_line`
+(`mc-acquire`'s limitations).
 
 **[policy]** The upstream fix is concrete: the camera interface should require `sequence` (and `live`) to **return
 the task it spawns**, or expose a join, and report a failed stop or release as a failure, so a system can establish
@@ -389,8 +391,8 @@ configuration is a value, `get_state` hands back the retained record, and only a
 against the fake DCAM SDK); any other camera, `ThorcamDCXCamera` and `ThorCamCSCCamera` included, is refused by
 `acquire!`, and for DCAM4 `camera_ok` reports only what the driver reports (`mc-acquire`'s limitation on `getdata`'s
 cleanup), and a Ctrl-C reaches the caller directly in its own task or through a join, and can be lost in the driver's
-two places (`mc-acquire`'s limitations on the sequence poller and on the cleanup). Lights and stages: those whose
-`initialize` and `shutdown` throw when they fail. The shutdown rule is a floor, not knowledge of the drivers:
+places (`mc-acquire`'s limitations on the sequence poller, the cleanup and SDK tracing). Lights and stages: those
+whose `initialize` and `shutdown` throw when they fail. The shutdown rule is a floor, not knowledge of the drivers:
 `release!` treats a `shutdown` that returns as a close that worked, and some drivers report a failed close through a
 return value instead (`shutdown(::ThorCamCSCCamera)` returns the two SDK status codes; `shutdown(::DCAM4Camera)`
 returns the `dcamapi_uninit` code, and closes the device whether or not its stop worked, recording that in
@@ -701,7 +703,13 @@ stop; each is false at 0.2.7-DEV.
 - `gui(dev)` is one generic that dispatches to the interface panel or a driver
   override (`N472`); a system menu is a list of `gui(sys.<field>)` calls. Each
   opens a GLMakie window (see `mc-testing` for `xvfb-run`). See the caveats
-  file for which devices' panels open today.
+  file for which devices' panels open today. **[limitation, 0.2.7-DEV]** the
+  camera panel's Start Live, Start Capture and Start Sequence buttons call
+  `live`, `capture` and `sequence` directly, not through `mc-acquire`'s
+  `with_camera`, so they start a camera marked unknown (traced from
+  `camera_interface/gui.jl`). On an instrument whose
+  acquisitions use the mark, offer the camera's panel only while the camera is
+  not marked.
 - **[limitation, 0.2.7-DEV]** `using MicroscopeControl` plus a blanket `using GLMakie`
   makes the name `Camera` ambiguous, so a struct field declared `::Camera`
   fails with `UndefVarError: Camera not defined`. MicroscopeControl loads
