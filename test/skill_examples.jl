@@ -93,8 +93,13 @@ const REFERENCES = Dict(:with_stop => (:stop_camera!,),
                         :CAMERA_UNKNOWN => (:mark_unknown!, :refuse_unknown, :in_service),
                         :CAMERA_LIVE => (:refuse_unknown, :in_service, :start_reader!, :stop_reader!),
                         :start_reader! => (:live_view!,),
-                        :stop_reader! => (:live_view!,))
-const TASK_MACROS = (Symbol("@async"), Symbol("@spawn"), Symbol("@threads"))
+                        :stop_reader! => (:live_view!,),
+                        :read_frames! => (:start_reader!,))
+const TASK_MACROS = (Symbol("@async"), Symbol("@spawn"), Symbol("@task"), Symbol("@threads"))
+# Defined once across all the fences: the two sets (each in its guarded form, so a second evaluation keeps it) and
+# the functions that own them, with `live_view!` and the reader loop.
+const DEFINED_ONCE = (:CAMERA_UNKNOWN, :CAMERA_LIVE, :mark_unknown!, :refuse_unknown, :in_service, :start_reader!,
+                      :stop_reader!, :live_view!, :read_frames!)
 
 last_name(f) = f isa Symbol ? f : f isa Expr && f.head === :. && f.args[end] isa QuoteNode ? f.args[end].value : nothing
 callee_name(ex) = ex isa Expr && ex.head === :call ? last_name(ex.args[1]) : nothing
@@ -184,9 +189,37 @@ function walk_camera_calls!(found, inside, fname, ex, seen, guards; guarded = fa
     foreach(a -> walk(a; t = task), ex.args)
 end
 
-# The reference rule: every occurrence of a name in `REFERENCES` (bare, qualified, or quoted) outside the bodies of the
-# functions listed for it, as (enclosing function or :toplevel, name). The innermost named function counts; a
-# function's own name in its signature and a `const NAME = ...` definition are not references.
+# A signature without the function's own name: its parameters (types and defaults included), return type and
+# `where` clause.
+function signature_rest(sig, out = Any[])
+    if sig isa Expr && sig.head in (:where, :(::))
+        signature_rest(sig.args[1], out)
+        append!(out, sig.args[2:end])
+    elseif sig isa Expr && sig.head === :call
+        append!(out, sig.args[2:end])
+    end
+    return out
+end
+is_definition(ex) = ex isa Expr && ex.head in (:function, :(=)) && length(ex.args) == 2 && signature_name(ex.args[1]) !== nothing
+
+# The guarded definition `if !@isdefined(NAME) const NAME = value end`, as (NAME, value), or `nothing`.
+function guarded_definition(ex)
+    ex isa Expr && ex.head === :if && length(ex.args) == 2 || return nothing
+    cond, body = ex.args
+    cond isa Expr && cond.head === :call && cond.args[1] === :! && length(cond.args) == 2 || return nothing
+    m = cond.args[2]
+    m isa Expr && m.head === :macrocall && m.args[1] === Symbol("@isdefined") && m.args[end] isa Symbol || return nothing
+    stmts = filter(a -> !(a isa LineNumberNode), body.args)
+    length(stmts) == 1 && stmts[1] isa Expr && stmts[1].head === :const || return nothing
+    d = stmts[1].args[1]
+    d isa Expr && d.head === :(=) && d.args[1] === m.args[end] || return nothing
+    return (d.args[1], d.args[2])
+end
+
+# The reference rule: every occurrence of a name in `REFERENCES` (bare, qualified, or quoted) outside the bodies and
+# signatures of the functions listed for it, as (enclosing function or :toplevel, name). The innermost named function
+# counts. A function's own name in its signature, and the guarded definition of a set, are not references; any other
+# definition of one (a plain `const`) is.
 function misplaced_references!(out, ex, fname = :toplevel)
     name = ex isa Symbol ? ex : ex isa QuoteNode && ex.value isa Symbol ? ex.value : nothing
     if name !== nothing
@@ -194,16 +227,33 @@ function misplaced_references!(out, ex, fname = :toplevel)
         return out
     end
     ex isa Expr || return out
-    if ex.head in (:function, :(=)) && length(ex.args) == 2 && signature_name(ex.args[1]) !== nothing
+    if is_definition(ex)
         inner = signature_name(ex.args[1])
-        foreach(d -> misplaced_references!(out, d, inner), signature_defaults(ex.args[1]))
+        foreach(d -> misplaced_references!(out, d, inner), signature_rest(ex.args[1]))
         return misplaced_references!(out, ex.args[2], inner)
-    elseif ex.head === :const && ex.args[1] isa Expr && ex.args[1].head === :(=) && ex.args[1].args[1] isa Symbol
-        return misplaced_references!(out, ex.args[1].args[2], fname)
     end
+    g = guarded_definition(ex)
+    g === nothing || return misplaced_references!(out, g[2], fname)
     foreach(a -> misplaced_references!(out, a, fname), ex.args)
     return out
 end
+
+# Every name `code` defines: each method (by its function's name, nested ones included), each guarded definition and
+# each plain `const`. `DEFINED_ONCE` names must appear once across all the fences.
+function defined_names!(out, ex)
+    ex isa Expr || return out
+    if is_definition(ex)
+        push!(out, signature_name(ex.args[1]))
+    elseif guarded_definition(ex) !== nothing
+        push!(out, guarded_definition(ex)[1])
+        return out
+    elseif ex.head === :const && ex.args[1] isa Expr && ex.args[1].head === :(=) && ex.args[1].args[1] isa Symbol
+        push!(out, ex.args[1].args[1])
+    end
+    foreach(a -> defined_names!(out, a), ex.args)
+    return out
+end
+defined_names(code::AbstractString) = defined_names!(Symbol[], Meta.parseall(code))
 
 # Every function defined in `code` (long or short form, at any depth, documented or not), as
 # `(offenders, wrapped)`: `offenders` holds (function, call) for each camera call that runs outside a wrapper (in the
@@ -819,7 +869,7 @@ end
 end
 """)
 
-SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 67, prelude = FAKE_DCAM_PRELUDE * """
+SKILL_EXAMPLE_GROUPS["acquire-reader"] = (min_passes = 74, prelude = FAKE_DCAM_PRELUDE * """
 cam = SimCamera(exposure_time = 0.01, roi = CameraROI(1, 1, 64, 32))
 latest = Ref{Any}(nothing)
 fps = 100
@@ -879,11 +929,15 @@ r = run_live(during; body = h -> (push!(seen, during in CAMERA_LIVE);
 @test seen[1] && seen[2] isa ErrorException && startswith(seen[2].msg, "camera unavailable: a live view holds it")
 @test r.err === nothing && in_service(during) && during.is_running == false   # after the confirmed stop: in service
 
-# A reader that throws: still joined, the camera still stopped, and the outcome carries the reader's error.
-r = run_live(RecLiveCam(frame_fails = true))
+# A reader that throws: still joined, the camera still stopped, the outcome carries the reader's error, and the camera
+# is marked unknown, as for any acquisition that threw.
+failread = RecLiveCam(frame_fails = true)
+r = run_live(failread)
 @test r.err === nothing && r.outcome.reader_error isa TaskFailedException
 @test occursin("reader: SDK read failed", sprint(showerror, r.outcome.reader_error))
-@test r.outcome.stop_error === nothing && r.outcome.camera_ok && r.h.cam.calls[end-1:end] == [:abort, :camera_ok]
+@test r.outcome.stop_error === nothing && failread.calls[end-1:end] == [:abort, :camera_ok]   # stopped, confirmed
+@test r.outcome.camera_ok == false && failread in CAMERA_UNKNOWN && !(failread in CAMERA_LIVE)
+@test_throws r"^camera unavailable: it is marked unknown" with_camera(() -> push!(failread.calls, :read), failread)
 # A stop that throws an ordinary error: in the outcome, logged, and the camera marked unknown.
 r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(RecLiveCam(abort_mode = :throws))
 @test r.err === nothing && r.outcome.stop_error isa ErrorException && r.outcome.camera_ok == false
@@ -891,7 +945,7 @@ r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(RecLive
 # After a confirmed start, a stop that returns unconfirmed: logged, marked unknown, and a guarded read refused.
 declined = RecLiveCam(stopped = false)
 r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(declined)
-@test r.err === nothing && r.outcome.camera_ok == false && declined in CAMERA_UNKNOWN
+@test r.err === nothing && r.outcome.camera_ok == false && declined in CAMERA_UNKNOWN && declined in CAMERA_LIVE
 @test_throws r"^camera unavailable: it is marked unknown" with_camera(() -> push!(declined.calls, :read), declined)
 @test !(:read in declined.calls)
 # A stop that throws an interrupt: marked unknown, the interrupt rethrown, nothing logged at warning or above.
@@ -933,6 +987,7 @@ notlive = RecLiveCam(started = false)                           # live returns, 
 r = @test_logs min_level = Base.CoreLogging.Warn run_live(notlive)   # a stop the driver confirms is not logged
 @test r.err isa ErrorException && occursin("did not start", r.err.msg) && occursin("attempts the stop", r.err.msg)
 @test notlive.calls == [:live, :live_started, :abort, :camera_ok] && notlive in CAMERA_UNKNOWN && r.h.reader === nothing
+@test !(notlive in CAMERA_LIVE)                                 # the confirmed stop ended the reservation
 unconfirmed = RecLiveCam(started = false, stopped = false)      # the same, and the stop returns unconfirmed
 r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(unconfirmed)
 @test occursin("did not start", r.err.msg) && unconfirmed in CAMERA_UNKNOWN && r.h.reader === nothing
@@ -1013,7 +1068,7 @@ r = @test_logs (:error, r"not known stopped") match_mode = :any run_live(failing
 
 # The wait itself ends with an exception while the reader still runs (a Ctrl-C, or anything else).
 for thrown in (InterruptException(), ErrorException("the wait timed out"))
-    slow = RecLiveCam(frame_wait = 3.0)                         # a reader inside a long SDK call
+    slow = RecLiveCam(frame_wait = 1.0)                         # a reader inside a long SDK call
     h3 = ReaderHandle(slow)
     start_reader!(h3, Ref{Any}(nothing), 100)
     sleep(0.05)
@@ -1024,6 +1079,9 @@ for thrown in (InterruptException(), ErrorException("the wait timed out"))
     @test thrown isa InterruptException ? e isa InterruptException : (e isa TaskFailedException && e.task.exception === thrown)
     @test !istaskdone(h3.reader) && !(:abort in slow.calls)     # the camera was left alone
     @test slow in CAMERA_LIVE && !(slow in CAMERA_UNKNOWN) && h3.state === :live   # reserved; its stop still owed
+    local again = try live_view!(h -> nothing, h3, Ref{Any}(nothing), 100); nothing catch err err end
+    @test refused_new(again) && h3.state === :done && istaskdone(h3.reader)   # refused, and its finally made the stop
+    @test :abort in slow.calls && in_service(slow)              # owed: joined, stopped, confirmed
 end
 """)
 
@@ -1069,7 +1127,7 @@ SKILL_EXAMPLE_GROUPS["acquire-exposure"] = (min_passes = 6, prelude = "using Mic
 @test fieldtype(DCAM4Camera, :exposure_time) == Float64 && fieldtype(ThorcamDCXCamera, :exposure_time) == Float64
 @test ThorcamDCXCamera().exposure_time == 0.01                                  # the constructor is pure
 """)
-SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 76, prelude = FAKE_DCAM_PRELUDE, checks = raw"""
+SKILL_EXAMPLE_GROUPS["camera"] = (min_passes = 79, prelude = FAKE_DCAM_PRELUDE, checks = raw"""
 cam = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)
 t = @elapsed stack = read_sequence(cam, 5)
 @test size(stack) == (32, 64, 5) && eltype(stack) == UInt16
@@ -1139,14 +1197,35 @@ function Base.CoreLogging.handle_message(l::InterruptOnceLogger, level, msg, arg
 end
 lg = InterruptOnceLogger(false, Any[])
 nok3 = NotOkCam(Symbol[])
-r = Base.CoreLogging.with_logger(() -> attempt_stop!(nok3, "here"), lg)         # the limitation: Julia's logging
-@test lg.thrown && r == (stop_error = nothing, stopped = false) && nok3 in CAMERA_UNKNOWN   # swallowed the interrupt
-@test any(m -> occursin("Exception while generating log record", string(m)), lg.messages)
+r = try Base.CoreLogging.with_logger(() -> attempt_stop!(nok3, "here"), lg) catch err err end
+# The limitation, per Julia version, from each version's base/logging/logging.jl: from 1.12 a log macro calls the
+# logger through `handle_message_nothrow`, which catches what it throws and, since this logger's `catch_exceptions` is
+# true, reports it as a logging error; Julia 1.11 has no `handle_message_nothrow` and calls `handle_message` directly,
+# so the interrupt reaches the caller. The 1.11 branch is reasoned from that source, not run here.
+if isdefined(Base.CoreLogging, :handle_message_nothrow)
+    @test lg.thrown && r == (stop_error = nothing, stopped = false) && nok3 in CAMERA_UNKNOWN   # the interrupt was lost
+    @test any(m -> occursin("Exception while generating log record", string(m)), lg.messages)
+else
+    @test lg.thrown && r isa InterruptException && nok3 in CAMERA_UNKNOWN         # it reached the caller
+    @test isempty(lg.messages)
+end
 reserved = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)       # a camera a live view holds
 push!(CAMERA_LIVE, reserved)
 @test_throws r"^camera unavailable: a live view holds it" read_sequence(reserved, 1)
 @test reserved.capture_mode == MC.HardwareImplementations.SimulatedCamera.LIVE && !in_service(reserved)
 delete!(CAMERA_LIVE, reserved)
+again = SimCamera(roi = CameraROI(1, 1, 64, 32), exposure_time = 0.01)          # evaluating the fence again keeps the marks
+mark_unknown!(again)
+timers = SIM_TIMER
+camera_fence = only(Main.skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))["camera"])
+Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do                  # quiet: it replaces the docstrings
+    for ex in Meta.parseall(camera_fence.code).args
+        ex isa LineNumberNode || Core.eval(@__MODULE__, ex)
+    end
+end
+@test again in CAMERA_UNKNOWN && SIM_TIMER === timers
+@test_throws r"^camera unavailable: it is marked unknown" read_sequence(again, 1)
+@test again.capture_mode == MC.HardwareImplementations.SimulatedCamera.LIVE      # refused: not started
 struct EarlyStopCam <: Camera end                                               # interrupted before with_stop is reached
 stop_camera!(::EarlyStopCam) = throw(InterruptException())
 esc = EarlyStopCam()
@@ -1339,7 +1418,7 @@ using InteractiveUtils
 
 # Statements about the generated API map, the SLM stubs, the exports and `save_h5` that no example block runs.
 # The floor is one under the count: one check runs on Linux only (Triggerscope4 refusing a port name not on the host).
-SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 125, prelude = "", checks = raw"""
+SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 133, prelude = "", checks = raw"""
 @testset "statements: every function in the examples calls a camera only inside a wrapper" begin
     fenced = Main.skill_example_blocks(joinpath(pkgdir(MicroscopeControl), "skills"))
     offenders = Tuple{String,Int,Symbol,Symbol}[]
@@ -1352,6 +1431,13 @@ SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 125, prelude = "", checks = r
     isempty(offenders) || @error "camera calls outside a wrapper, as (skill, fence line, function, call)" offenders
     @test isempty(offenders)
     @test wrapped == Set([:snap, :read_sequence, :stop_camera!, :start_reader!, :read_frames!])   # the skills' entries
+    defs = reduce(vcat, [Main.defined_names(b.code) for blocks in values(fenced) for b in blocks])
+    once = Dict(n => count(==(n), defs) for n in Main.DEFINED_ONCE)
+    all(==(1), values(once)) || @error "names the fences must define once, with their counts" once
+    @test all(==(1), values(once))                                                   # one definition across all fences
+    @test count(==(:CAMERA_UNKNOWN), Main.defined_names("if !@isdefined(CAMERA_UNKNOWN)\n    const CAMERA_UNKNOWN = 1\nend\n" *
+                                                         "const CAMERA_UNKNOWN = 2")) == 2   # what it counts
+    @test count(==(:refuse_unknown), Main.defined_names("refuse_unknown(cam) = 1\nrefuse_unknown(cam, forgive::Bool) = 2")) == 2
     # what the rule sees
     rule(code) = Main.camera_calls_outside_wrapper(code)
     @test rule("f(cam) = capture(cam)") == [(:f, :capture)]
@@ -1416,7 +1502,14 @@ SKILL_EXAMPLE_GROUPS["statements"] = (min_passes = 125, prelude = "", checks = r
     @test rule("start_reader!(h, Ref{Any}(), 10)") == [(:toplevel, :start_reader!)]              # outside live_view!
     @test rule("function g(h)\n    try\n        start_reader!(h, Ref{Any}(), 10)\n    finally\n        stop_reader!(h)\n" *
                "    end\nend") == [(:g, :start_reader!), (:g, :stop_reader!)]
-    @test isempty(rule("const CAMERA_UNKNOWN = Base.IdSet{Camera}()\nmark_unknown!(cam) = push!(CAMERA_UNKNOWN, cam)"))
+    @test isempty(rule("if !@isdefined(CAMERA_UNKNOWN)\n    const CAMERA_UNKNOWN = Base.IdSet{Camera}()\nend\n" *
+                       "mark_unknown!(cam) = push!(CAMERA_UNKNOWN, cam)"))                     # the guarded definition
+    @test rule("const CAMERA_UNKNOWN = Base.IdSet{Camera}()") == [(:toplevel, :CAMERA_UNKNOWN)]  # a plain one is not
+    @test rule("f(::typeof(empty!(CAMERA_UNKNOWN))) = nothing") == [(:f, :CAMERA_UNKNOWN)]       # in a parameter type
+    @test rule("g(x::T) where {T <: typeof(CAMERA_LIVE)} = x") == [(:g, :CAMERA_LIVE)]           # in a where clause
+    @test rule("function f(h)\n    loop = read_frames!\n    @async loop(h, Ref{Any}(), 10)\nend") == [(:f, :read_frames!)]
+    @test rule("function read_frames!(h, latest, fps)\n    t = @task getlastframe(h.cam)\n    yield(t)\nend") ==
+          [(:read_frames!, :task)]
     @test isempty(rule("stop_reader!(h) = delete!(CAMERA_LIVE, h.cam)\nlive_view!(h) = (start_reader!(h); stop_reader!(h))"))
     @test isempty(rule("f(cam) = with_camera(cam) do\n    capture(cam)\nend"))
     @test isempty(rule("f(cam) = with_camera(() -> capture(cam), cam)"))
