@@ -387,6 +387,8 @@ include("skill_examples.jl")
     @testset "every marked group has a harness entry, and every entry but the fenceless ones a fence" begin
         @test sort(collect(keys(groups))) == sort(setdiff(collect(keys(SKILL_EXAMPLE_GROUPS)), SKILL_FENCELESS_GROUPS))
         @test all(g -> !haskey(groups, g), SKILL_FENCELESS_GROUPS)
+        @test all(u -> haskey(groups, u), reduce(vcat, values(SKILL_GROUP_USES)))
+        @test first(skill_group_fences(groups, "bench")).file == joinpath(pkgdir(MicroscopeControl), "skills", "mc-acquire", "SKILL.md")
     end
     @testset "markers are read only outside other fences, and a dangling one is an error" begin
         mktempdir() do dir
@@ -402,7 +404,7 @@ include("skill_examples.jl")
                 ```
                 """)
             g = skill_example_blocks(dir)
-            @test collect(keys(g)) == ["outside"] && g["outside"] == ["y = 2  # -> 2"]
+            @test collect(keys(g)) == ["outside"] && only(g["outside"]) == (file = joinpath(dir, "a.md"), line = 8, code = "y = 2  # -> 2")
             write(joinpath(dir, "b.md"), "text\n<!-- mc-test: last -->")
             @test_throws r"on the last line" skill_example_blocks(dir)
             write(joinpath(dir, "b.md"), "<!-- mc-test: open -->\n```julia\nz = 3\n")
@@ -422,7 +424,7 @@ end
 # `Installed from` line). Returns the problems found and the number of labels read.
 function skill_label_problems(text::AbstractString; groups, version::VersionNumber, legend::UnitRange{Int} = 1:0)
     release = VersionNumber(version.major, version.minor, version.patch)
-    token = r"(since |fixed in )?v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?)"
+    token = r"(since |fixed in )?v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)"
     problems = String[]
     labels = 0
     for m in eachmatch(r"\[(?:guarantee|limitation)([^\]\n]*)\]", text)
@@ -435,9 +437,11 @@ function skill_label_problems(text::AbstractString; groups, version::VersionNumb
                 push!(problems, "$(m.match): a suite label is exactly [guarantee|limitation, suite: GROUP], GROUP a harness group")
             continue
         end
-        versions = [(t.captures[1], VersionNumber(t.captures[2])) for t in eachmatch(token, body)]
-        isempty(versions) && push!(problems, "$(m.match): names no version")
-        for (prefix, v) in versions
+        tokens = [(t.captures[1], rstrip(t.captures[2], ['.', '-', '+'])) for t in eachmatch(token, body)]
+        isempty(tokens) && push!(problems, "$(m.match): names no version")
+        for (prefix, s) in tokens             # the whole token, prerelease and all, parsed by VersionNumber
+            v = tryparse(VersionNumber, s)
+            v === nothing && (push!(problems, "$(m.match): $s is not a version"); continue)
             v <= (prefix === nothing ? version : release) || push!(problems, "$(m.match): $v is later than $version")
         end
         occursin("0.2.0", body) && !occursin("historical", body) && push!(problems, "$(m.match): 0.2.0 outside history")
@@ -487,6 +491,10 @@ end
         @test bad("prose (suite: no-such-group)")
         @test bad("[guarantee, 0.2.7]")                              # later than 0.2.7-DEV
         @test bad("[guarantee, 0.2.7-rc1]")                          # the prerelease is read: rc1 sorts after DEV
+        @test bad("[guarantee, 0.2.7-DEV-next]")                     # read whole, not cut at the first identifier
+        @test bad("[guarantee, 0.2.7-DEV.1]")
+        @test !bad("[guarantee, 0.2.7-BETA]")                        # sorts before DEV: a parser that drops it would refuse
+        @test !bad("[guarantee, 0.2.5.]") && !bad("[limitation, checked at 0.2.6, traced]")   # end punctuation is not read
         @test bad("[guarantee, since 0.2.8]")
         @test bad("[guarantee, 0.2.0]")
         @test bad("[guarantee, traced]")
@@ -496,16 +504,47 @@ end
     end
 end
 
+# The child must finish in bounded time and must have run the examples: a zero exit alone is not enough, since a
+# broken script guard or an empty loop also exits 0. The floor is below the current count (about 430) by a margin.
+const SKILL_EXAMPLES_DEADLINE_S = 900.0
+const SKILL_EXAMPLES_MIN_PASSES = 350
+
+# Ends a child in bounded time: SIGTERM, a grace period, then SIGKILL (as test/gui.jl's `terminate_process!`).
+function stop_child!(proc; grace = 5.0, final = 10.0)
+    process_running(proc) && kill(proc, Base.SIGTERM)
+    timedwait(() -> !process_running(proc), grace; pollint = 0.05) === :ok && return true
+    process_running(proc) && kill(proc, Base.SIGKILL)
+    return timedwait(() -> !process_running(proc), final; pollint = 0.05) === :ok
+end
+
+# The pass count on the child's "Skill examples | ..." summary line, or `nothing` when there is none.
+function skill_examples_passes(out::AbstractString)
+    m = match(r"^Skill examples\s*\|\s*(\d+)"m, out)
+    return m === nothing ? nothing : parse(Int, m.captures[1])
+end
+
 @testset "Skill examples, in their own process" begin
     runner = joinpath(@__DIR__, "skill_examples.jl")
     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $(runner)`
     log = tempname()
-    ok = open(log, "w") do io
-        success(pipeline(cmd; stdout = io, stderr = io))
-    end
+    io = open(log, "w")                       # one handle for both streams, so neither overwrites the other
+    proc = run(pipeline(ignorestatus(cmd); stdout = io, stderr = io); wait = false)
+    in_time = timedwait(() -> !process_running(proc), SKILL_EXAMPLES_DEADLINE_S; pollint = 0.5) === :ok
+    in_time || stop_child!(proc)
+    close(io)
     out = read(log, String)
+    rm(log; force = true)
+    passes = skill_examples_passes(out)
+    ok = in_time && success(proc) && passes !== nothing && passes >= SKILL_EXAMPLES_MIN_PASSES
     ok || println(out)
     i = findlast("Test Summary:", out)
     ok && i !== nothing && println(out[first(i):end])
+    @test in_time
+    @test passes !== nothing && passes >= SKILL_EXAMPLES_MIN_PASSES
     @test ok
+    @testset "the pass count is read from the summary line only" begin
+        @test skill_examples_passes("Test Summary:  | Pass  Total\nSkill examples |  373    373  40.9s\n") == 373
+        @test skill_examples_passes("Test Summary: | Pass  Fail  Total\nSkill examples |  370     3    373\n") == 370
+        @test skill_examples_passes("functions defined, nothing run\n") === nothing
+    end
 end

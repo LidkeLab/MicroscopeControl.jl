@@ -100,7 +100,7 @@ not necessarily the one you are about to call. The case that exposed this was
 `TCubeLaser`: up to v0.2.2 its only `export_state` was `export_state(::TCubeLaser,
 sth)`, the map listed that and nothing else, and the 1-arg `export_state(laser)` every
 lifecycle loop calls fell through to the throwing `AbstractInstrument` stub.
-**[fixed in v0.2.3]** — `export_state(::TCubeLaser)` exists and
+**[limitation, fixed in v0.2.3]** — `export_state(::TCubeLaser)` exists and
 `which(export_state, Tuple{TCubeLaser})` lands on it. v0.2.3 kept the 2-arg method
 as a deprecated forwarder; **[guarantee, 0.2.7-DEV]** 0.2.5 keeps it (deprecated, removed
 at the next breaking release), so `hasmethod(export_state, Tuple{TCubeLaser,Any})`

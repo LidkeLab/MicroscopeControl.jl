@@ -49,11 +49,14 @@ marks the one fact that group checks.
 ## Before anything: depending on MicroscopeControl
 
 **[limitation, reported on an instrument PC before 0.2.4; not checked in an empty depot]** Pinning
-MicroscopeControl is not enough. It depends on the unregistered `DAQmx.jl`, and Pkg reads `[sources]` only in
-the root project, never in a dependency's (CHANGELOG 0.2.4), so on an environment that has never resolved
-`DAQmx` a `Pkg.instantiate` can fail with `DAQmx has no known versions`. Add `DAQmx` by URL **before**
-MicroscopeControl, with the instrument's own project active (`julia --project` in its repo, or
-`Pkg.activate` on it):
+MicroscopeControl is not enough. It depends on the unregistered `DAQmx.jl`. On Julia 1.11 and 1.12, Pkg reads
+`[sources]` only in the active project, never in a dependency's (CHANGELOG 0.2.4), so on an environment that has
+never resolved `DAQmx` a `Pkg.instantiate` can fail with `DAQmx has no known versions`. On 1.13, adding a package by
+URL or path also collects its dependencies' `[sources]` (traced from Pkg's `collect_fixed!` in 1.13.0, and its
+`toml-files` documentation), so MicroscopeControl's own entry would be used, and that entry follows `DAQmx`'s
+`main`; a source in the active project wins over it. Either way, add `DAQmx` by URL, pinned, **before**
+MicroscopeControl, with the instrument's own project active (`julia --project` in its repo, or `Pkg.activate` on
+it):
 
 ```julia
 using Pkg
@@ -67,11 +70,17 @@ MicroscopeControl's pin comes from the `Installed from` line at the end of this
 file:
 
 - `vX.Y.Z`: pin that tag, `rev="vX.Y.Z"`.
-- `vX.Y.Z-DEV`: these skills came from `main` between releases, and no tag
-  carries what they describe. Find `main`'s current commit with
-  `git ls-remote https://github.com/LidkeLab/MicroscopeControl.jl.git main`,
-  test the instrument against that commit, and pin it,
-  `rev="<the 40-character commit>"`.
+- `vX.Y.Z-DEV`: these skills came from a commit between releases (on `main`,
+  a branch or a local checkout), and no tag carries what they describe. Pin the
+  commit the instrument was tested with, `rev="<the 40-character commit>"`:
+  - from a checkout it ran (`Pkg.develop`, or a path in `[sources]`): `git rev-parse HEAD` there, with
+    `git status` clean;
+  - from its `Manifest.toml`, for a package added by URL: the entry's `repo-rev` when that is a commit; when it
+    names a branch, the entry's `git-tree-sha1` is the tree, and `git log --all --format='%H %T' | grep <that sha>`
+    in a clone of the repository names the commits that have it.
+
+  To choose a new commit to test, `git ls-remote https://github.com/LidkeLab/MicroscopeControl.jl.git main` gives
+  `main`'s current head; test the instrument against it before pinning it.
 
 Without a `rev`, `Pkg.add` follows the default branch, and the next
 `Pkg.update` moves the instrument to whatever was pushed since.
@@ -115,12 +124,12 @@ gives the assembled instrument its meaning. Neither can do the other's job.
 |---|---|---|
 | **Physical connection** | which object holds the handle, and whether the constructor or `initialize` opens it. **[limitation, 0.2.7-DEV]** this differs per driver: DCAM4 and ThorCam CSC open in the constructor; PI, MCL, N472, SmarAct, DCx, TCube and the Sims open in `initialize` (their constructors are pure); see `references/driver-caveats.md`. | one owner per physical port or SDK session; every other holder borrows. Construct the shared object once and pass it in. |
 | **Readiness** | **[guarantee, 0.2.7-DEV]** (since 0.2.7) a DAQ voltage light writes its off output before recording off, and throws on missing channels or failed writes (`references/driver-caveats.md`, "DAQ voltage-light state"). **[limitation, 0.2.7-DEV]** a normal return does not establish general readiness: `initialize(::DCAM4Camera)` is a no-op because its constructor did the work. | **[policy]** verify after `initialize`: read a position, check `connectionstatus`, inspect channel lists, or take one frame. Decide what "ready" means for each device and check it. |
-| **Background tasks** | **[limitation, 0.2.7-DEV]** a driver may start a task the caller never receives: `sequence(::DCAM4Camera)` spawns a poller on the camera handle and discards it with an explicit `return` (traced); `sequence(::SimCamera)` and `sequence(::ThorcamDCXCamera)` return theirs only because the `@async` is the last expression, and the interface promises `nothing`. Those tasks read mutable device state as they run: the Sim's timer rereads `camera.exposure_time` every iteration and writes `is_running`; DCAM4's and DCx's pollers reread `camera.camera_handle` through the SDK every iteration. DCAM4's poller also reads the camera's capture generation and closing state under the camera's lock, stops a capture still running at its deadline, and clears `is_running` only while its sequence is still the current one; DCx's stops live video at the end; neither reads `is_running`. (since 0.2.7) A DCAM4 stop that fails returns normally, records `last_error` and leaves `is_running` set (traced). | **[policy]** treat the camera as single-owner and single-acquisition: one blocking acquisition at a time on one task, no cancellation, no configuration change in flight, and a process restart rather than recovery when an abort throws or leaves `is_running` set. This is a restriction the drivers impose, not a design preference (worked example, Decision 3). |
+| **Background tasks** | **[limitation, 0.2.7-DEV]** a driver may start a task the caller never receives, or receives only by accident (the interface promises `nothing`), and those tasks read mutable device state as they run. What each camera driver's `sequence` returns, what its `getdata` waits for and what its `abort` does, including how a failed stop is reported, is in `mc-acquire`'s table ("Finite ordered sequence"), the one statement of those facts. | **[policy]** treat the camera as single-owner and single-acquisition: one blocking acquisition at a time on one task, no cancellation, no configuration change in flight, and a process restart rather than recovery when the driver's `camera_ok` (`mc-acquire`) does not say the camera stopped. This is a restriction the drivers impose, not a design preference (worked example, Decision 3). |
 | **State** | the device's own fields (`exposure_time`, `roi`, `targ_x`, `level_requested` on a DAQ light) are the configuration the driver pushes to hardware; **[guarantee, 0.2.7-DEV]** shared code reads those fields by name (see Principle 2). | the instrument-level configuration (`AbstractSystemState`), when it is captured, and which fields are requested values versus measured ones (see "Three kinds of state"). |
 | **Failure recovery** | **[guarantee, 0.2.7-DEV]** since v0.1.0 the stubs of the five `AbstractInstrument` interfaces (`Camera`, `Stage`, `LightSource`, `DAQ`, `Attenuator`) and the `AbstractInstrument` lifecycle stubs throw `ErrorException("... not implemented for T")` instead of returning `nothing`. **[limitation, 0.2.7-DEV]** `SLM`'s `displayimage(::SLM)` has an empty body and returns `nothing`, and `SLM`/`TRIG` devices get `MethodError`, not the stub, for lifecycle calls (`references/driver-caveats.md`). Drivers mostly `@warn`/`@error` and return on hardware errors. **[limitation, 0.2.7-DEV]** the `AbstractSystem` fallbacks still `@error` and return `nothing`. | **[policy]** rollback on partial initialization, a shutdown that reports what it could not close, and a saved record that says what is missing. All three are in the worked example below; none is provided by MC. |
 | **Units, axes, conventions** | its own: PI in millimeters, MCL in micrometers, Sim stages unitless (0..100); cameras return `(H, W)` / `(H, W, N)` arrays, `[y, x]` with `[1, 1]` top left (lab decision 0040, `docs/src/conventions.md`) **[guarantee, 0.2.7-DEV]** for Sim, DCAM4, DCx and CSC (executed, through fakes for the drivers). | **[policy]** one normalization layer in the system (a function per device, not a conversion at every call site). |
 | **Optical power at the sample** | **[guarantee, 0.2.7-DEV]** (since 0.2.5, traced) a `DiodeLaser` in `ConstantPhotocurrent` mode commands and reports mW **at the laser output**, the plane its `wa_calibration` was measured at (`setoutputpower!`, `indicated_output_power`); no driver holds a field describing splitters, attenuators, fibers or objectives. In `ConstantCurrent` mode the driver has no optical number at all. | **[policy]** the path transmission from laser output to sample, its measurement and its drift belong to the system; convert in one place, and label saved values with the plane they refer to (the TCube export already writes `power_reference = "laser output"`). |
-| **Persistence** | a one-argument `export_state` returning `(attributes, data, children)`: **[guarantee, suite: statements]** for every device whose constructor touches no hardware (the Sims, the four hardware stages, the DCx camera and `MLSLM`: each is exported and written with `save_attributes_and_data`); **[guarantee, 0.2.7-DEV]** traced for the other drivers, whose methods `test/contract.jl` checks exist on each type without calling them; **[limitation, 0.2.7-DEV]** missing for the devices in the caveats file. | assembling the tree, choosing the child names, deciding when to snapshot, and recording incomplete exports (see Principle 5 and the worked example). |
+| **Persistence** | a one-argument `export_state` returning `(attributes, data, children)`: **[guarantee, suite: statements]** for these devices, each built without touching hardware, exported, and written with `save_attributes_and_data`: the Sims, `PIStage`, `MCLStage`, `MCS2Stage`, `N472`, `ThorcamDCXCamera`, `MLSLM`, `NIdaq`, `TCubeLaser(serial)`, and `CrystaLaser`, `DaqTrLight` and `VortranLaser` with named outputs; **[guarantee, 0.2.7-DEV]** traced for the other drivers (the cameras that open in their constructor), whose methods `test/contract.jl` checks exist on each type without calling them; **[limitation, 0.2.7-DEV]** missing for the devices in the caveats file. | assembling the tree, choosing the child names, deciding when to snapshot, and recording incomplete exports (see Principle 5 and the worked example). |
 
 ## The boundary test: upstream or downstream?
 
@@ -314,99 +323,66 @@ cam = DCAM4Camera(0)   # throws (since 0.2.1) on either SDK failure path; catch 
 # If anything below fails before the system is built, shutdown(cam) is owed NOW.
 ```
 
-Forced decision: construction is part of the lifecycle for this driver, so
-ownership acquired in the constructor must survive into the system's rollback.
-The executed `Bench` below keeps an `owned` list of every device known to hold
-hardware; a constructor-claimed device is passed in as
-`claimed_at_construction=(cam,)` so it is owned before `initialize` runs, is
-skipped by `initialize`, and is closed by the same `release!` that closes
-everything else. What the constructor does on failure, how the DCAM API is
-reference-counted across cameras in one process (since 0.2.7), and what an
-installed copy older than 0.2.1 needs instead, are in
-`references/driver-caveats.md`, the `DCAM4Camera` row, and only there.
+Forced decision: construction is part of the lifecycle for this driver, so ownership acquired in the constructor must
+survive into the system's rollback. The executed `Bench` below keeps an `owned` list of every device known to hold
+hardware; a constructor-claimed device is passed in as `claimed_at_construction=(cam,)` so it is owned before
+`initialize` runs, is skipped by `initialize`, and is closed by the same `release!` that closes everything else. It is
+also kept in `claimed`: once a rollback or `shutdown(sys)` has closed it, `initialize(sys)` refuses, because its no-op
+`initialize` cannot open it again; reconstruct it and the system. What the constructor does on failure, how the DCAM
+API is reference-counted across cameras in one process (since 0.2.7), and what an installed copy older than 0.2.1
+needs instead, are in `references/driver-caveats.md`, the `DCAM4Camera` row, and only there.
 
 ### Decisions 3 and 4, executed: manual control versus acquisition, and a failed export
 
-**[guarantee, suite: bench]** The suite runs the example below, and the fixtures after it, under
-`xvfb-run -a`, and asserts the table that follows. `BrokenLight` stands in for a device whose lifecycle or export throws;
+**[guarantee, suite: bench]** The suite runs the example below, and the fixtures after it, under `xvfb-run -a`, and
+asserts the table that follows. The example reads the camera through `read_sequence`, stops it with `stop_camera!` and
+judges it with `camera_ok`, the per-driver functions in `mc-acquire`, "Finite ordered sequence", which the suite runs
+first in the same group. `BrokenLight` stands in for a device whose lifecycle or export throws;
 `ClaimedAtConstruction` for `DCAM4Camera`; `FlakyLight` for a device whose `shutdown` fails once; `FailingCam` for a
-camera whose read fails, with an `abort` that works, throws, or returns with the capture still running. The laser in
-the requested-versus-measured rows is the real `CrystaLaser` driver over `LineDAQ`, a `DAQ` that records each write
-instead of driving a line.
+camera whose read or cleanup fails, reporting the way `DCAM4Camera` does (`last_error` and `is_running`). The laser in
+the requested-versus-measured and failed-initialize rows is the real `CrystaLaser` driver over `LineDAQ`, a `DAQ` that
+records each write instead of driving a line and can be told to fail some.
 
-**[limitation, 0.2.7-DEV]** The camera drivers spawn background tasks that the caller
-never receives, and those tasks read mutable device fields as they run. Per
-driver: `sequence(::DCAM4Camera)` spawns a poller on the camera handle and
-**discards** it with an explicit `return` (traced); `sequence(::SimCamera)` and
-`sequence(::ThorcamDCXCamera)` return their poller only because the `@async` is
-the function's last expression (Sim executed, DCX traced; DCx returns `nothing`
-when the capture fails to start), while the interface docstring promises
-`nothing`, so a test that joins the Sim's task passes where `DCAM4Camera` never
-can; `ThorCamCSCCamera` spawns none. Each task reads mutable device state as it
-runs, and which state differs per driver: the Sim's timer rereads
-`camera.exposure_time` on every iteration and writes `is_running` at the end
-(suite: bench; with 20 frames at 0.01 s, raising `exposure_time` to 0.05 s
-after about five frames, while the task runs, makes it run for more than 0.5 s,
-where a timer that read the exposure once would end at about 0.2 s);
-DCAM4's poller rereads `camera.camera_handle` through `dcamcap_status` every
-iteration (with the capture generation and the closing state, under the
-camera's lock), stops a capture that is still running at its deadline, and
-clears `is_running` when the SDK reports idle, but only while its sequence is
-still the current one; DCx's poller rereads `camera.camera_handle` through
-`is_CameraStatus` and stops live video at the end; neither hardware poller reads
-`is_running` (traced). The exposure measurement is Sim-only; the general point
-is not. Consequently a
-system **cannot prove that a previous acquisition has stopped**, and **no wait
-computed at the caller fixes it**: any deadline derived when the acquisition
-started depends on state the driver's task may read again later. Two reproduced consequences of earlier versions of this example that
-tried a caller-side quiescence deadline: a caller admitted during `shutdown`'s
-wait had its driver task alive when the camera closed, about 0.7 s before the
-deadline recorded for it, in five of five runs; and a `set_state` lengthening
-the exposure after a cancel extended the old task past its deadline, so
-`shutdown` waited the full deadline and still closed the camera under a live
-task. Earlier still, without any wait, a canceled acquisition's driver task
-cleared the next acquisition's `is_running`: a nominal 2.0 s acquisition
-returned in 0.167 s.
+**[limitation, 0.2.7-DEV]** The camera drivers spawn background tasks that the caller never receives, or
+receives only by accident, and those tasks read mutable device fields as they run. What each driver's `sequence`
+returns, what its `getdata` waits for and what its `abort` does is in `mc-acquire`'s table ("Finite ordered
+sequence"), the one statement of those facts. The Sim's timer is the executed evidence (suite: bench): with 20 frames
+at 0.01 s, raising `exposure_time` to 0.05 s after about five frames, while the timer runs, makes it run for more than
+0.5 s, where a timer that read the exposure once would end at about 0.2 s. Consequently a system **cannot prove that a
+previous acquisition has stopped** from timing, and **no wait computed at the caller fixes it**: any deadline derived
+when the acquisition started depends on state the driver's task may read again later.
 
-**[policy]** What a system should do today, as a restriction the drivers
-impose rather than a design preference: treat the camera as **single-owner
-and single-acquisition**. One blocking acquisition at a time, on the task that
-called it; **no cancellation**; no configuration change while an acquisition is
-in flight; and when a failed acquisition cannot be shown to have stopped (its
-`abort` throws, or returns with `is_running` still set, which is how `DCAM4Camera`
-reports a failed stop since 0.2.7: in `last_error`, keeping `is_running`), mark
-the camera unavailable and **restart the process** (or reconstruct the camera
-and the system) rather than attempt in-place recovery, since no lifecycle call
-can verify that the driver's task is gone or that `initialize` did more than
-return. **[limitation, 0.2.7-DEV]** the check sees only what a driver reports:
-`abort(::ThorcamDCXCamera)` clears `is_running` whatever its SDK calls return,
-and `abort(::ThorCamCSCCamera)` is its `shutdown`, which closes the camera and
-leaves `is_running` set, so the system then treats a CSC camera as unavailable
-(traced).
+**[policy]** What a system should do today, as a restriction the drivers impose rather than a design preference:
+treat the camera as **single-owner and single-acquisition**. One blocking acquisition at a time, on the task that
+called it; **no cancellation**; no configuration change while an acquisition is in flight; and after every
+acquisition, successful or not, ask the driver's `camera_ok` whether the camera is known to be stopped with its
+buffers released. When it is not, mark the camera unavailable and **restart the process** (or reconstruct the camera
+and the system) rather than attempt in-place recovery, since no lifecycle call can verify that the driver's task is
+gone or that `initialize` did more than return. A camera with no `read_sequence` method is refused before anything
+touches it; `ThorCamCSCCamera` has none, for the reasons `mc-acquire` gives.
 
-**[policy]** The upstream fix is concrete: the camera interface should require
-`sequence` (and `live`) to **return the task it spawns**, or expose a join, so a
-system can establish quiescence instead of guessing at it. `SimCamera` and
-`ThorcamDCXCamera` already return one by accident; `DCAM4Camera` discards its
-poller; `ThorCamCSCCamera` spawns none. Until then, the restriction above stands.
+**[policy]** The upstream fix is concrete: the camera interface should require `sequence` (and `live`) to **return
+the task it spawns**, or expose a join, and report a failed stop or release as a failure, so a system can establish
+quiescence instead of guessing at it.
 
-The example is therefore modest on purpose: `acquire!` runs start to finish on
-the calling task and waits for the stack the way `mc-acquire` ("Finite ordered
-sequence") describes for each driver, with no loop on `is_running`; an
-`in_flight` flag guards `set_state`, `acquire!` and `shutdown` against misuse
-from another task; a failed acquisition aborts the camera before returning it,
-and if the camera cannot be shown to have stopped it is unavailable until the
-system is rebuilt. A device whose `shutdown` throws moves from `owned` to
-`stuck`: its state is unknown, every later `release!` retries it, and
-`initialize` refuses until a `shutdown(sys)` succeeds or the system is rebuilt.
-`BenchState` is an **immutable** struct: a requested configuration is a value,
-`get_state` hands back the retained record, and only another `set_state` can
-change it.
+The example is therefore modest on purpose: `acquire!` runs start to finish on the calling task, reads through
+`read_sequence`, and asks `camera_ok` afterwards, with no loop on `is_running`; an `in_flight` flag guards
+`set_state`, `acquire!` and `shutdown` against misuse from another task; a failed acquisition aborts the camera before
+returning it. Three lists track the devices: `claimed` holds those passed as `claimed_at_construction`; `owned` holds
+the devices known to hold hardware; `stuck` holds each device whose `initialize` or `shutdown` threw, with its error,
+because its state is unknown. Every `release!` retries the stuck devices, newest first, and `initialize` refuses while
+any device is stuck, or while a claimed device is no longer owned: that one was closed and must be reconstructed.
+`BenchState` is an **immutable** struct: a requested configuration is a value, `get_state` hands back the retained
+record, and only another `set_state` can change it.
 
-**[limitation, 0.2.7-DEV]** That shutdown rule is a floor, not knowledge of the drivers. Some
-report a failed close through a return value instead of a throw (`shutdown(::ThorCamCSCCamera)` returns the two
-SDK status codes; `shutdown(::DCAM4Camera)` returns the `dcamapi_uninit` code), and a driver's `shutdown` can
-close its handle even when it throws (`TCubeLaser` without a modulator: a failed disable throws after the
+**[limitation, 0.2.7-DEV]** What the example covers. Cameras: `SimCamera` (run), `DCAM4Camera` and
+`ThorcamDCXCamera` (their `read_sequence` and `camera_ok` methods, traced); any other camera, `ThorCamCSCCamera`
+included, is refused by `acquire!`. Lights and stages: those whose `initialize` and `shutdown` throw when they fail.
+The shutdown rule is a floor, not knowledge of the drivers: `release!` treats a `shutdown` that returns as a close
+that worked, and some drivers report a failed close through a return value instead (`shutdown(::ThorCamCSCCamera)`
+returns the two SDK status codes; `shutdown(::DCAM4Camera)` returns the `dcamapi_uninit` code, and closes the device
+whether or not its stop worked, recording that in `last_error`), which `release!` discards. A driver's `shutdown` can
+also close its handle even when it throws (`TCubeLaser` without a modulator: a failed disable throws after the
 connection is closed, and the driver's docstring has the caller reconnect with `initialize` to retry the disable,
 which this example refuses while the laser is stuck, so rebuild instead) (traced). Check the drivers you hold, and
 record what their `shutdown` reports.
@@ -428,10 +404,15 @@ MC.shutdown(c::ClaimedAtConstruction) = (c.open = false; nothing)
 # A DAQ that records each write instead of driving a line, so the example runs the real CrystaLaser driver.
 mutable struct LineDAQ <: DAQ
     writes::Vector{Pair{String,Float64}}
+    failures::Int                                 # how many of the next writes fail, after reaching the line
 end
-LineDAQ() = LineDAQ(Pair{String,Float64}[])
+LineDAQ(; failures = 0) = LineDAQ(Pair{String,Float64}[], failures)
 MC.createtask(::LineDAQ, kind::String, channel::String; kw...) = channel   # the driver opens one task per command
-MC.setvoltage(d::LineDAQ, channel::String, v::Float64) = (push!(d.writes, channel => v); 1)
+function MC.setvoltage(d::LineDAQ, channel::String, v::Float64)
+    push!(d.writes, channel => v)
+    d.failures > 0 && (d.failures -= 1; error("LineDAQ: write failed"))
+    return 1
+end
 MC.deletetask(::LineDAQ, channel::String) = nothing
 MC.export_state(::LineDAQ) = (Dict{String,Any}("unique_id" => "LineDAQ"), nothing, Dict{String,Any}())
 
@@ -446,32 +427,38 @@ mutable struct Bench <: AbstractSystem
     cam::Camera                                   # interface-typed: Sim in tests, hardware on the instrument
     stage::Stage
     laser::LightSource
+    claimed::Vector{AbstractInstrument}           # devices that held hardware from their constructor
     owned::Vector{AbstractInstrument}             # devices known to hold hardware, in acquisition order
-    stuck::Vector{AbstractInstrument}             # devices whose shutdown threw: state unknown, retried by release!
-    stuck_errors::IdDict{Any,Any}                 # each stuck device's last shutdown error
+    stuck::Vector{Pair{AbstractInstrument,Any}}   # device => error: its initialize or shutdown threw, state unknown
     requested::Union{Nothing,BenchState}          # the last configuration asked for; the drivers do not all keep it
     in_flight::Bool                               # an acquisition is running on the calling task; nothing else may touch the camera
-    cam_unavailable::Bool                         # a failed acquisition could not be shown to have stopped the camera
+    cam_unavailable::Bool                         # camera_ok said no after an acquisition
 end
 Bench(cam, stage, laser; claimed_at_construction=()) =
-    Bench(cam, stage, laser, AbstractInstrument[claimed_at_construction...], AbstractInstrument[], IdDict{Any,Any}(),
-          nothing, false, false)
+    Bench(cam, stage, laser, AbstractInstrument[claimed_at_construction...], AbstractInstrument[claimed_at_construction...],
+          Pair{AbstractInstrument,Any}[], nothing, false, false)
 
-stuck_report(sys::Bench) = join(("$(nameof(typeof(d))): $(sprint(showerror, sys.stuck_errors[d]))" for d in sys.stuck), "; ")
+holds(list, dev) = any(d -> d === dev, list)
+stuck_report(sys::Bench) = join(("$(nameof(typeof(d))): $(sprint(showerror, e))" for (d, e) in sys.stuck), "; ")
 
 function MC.initialize(sys::Bench)                # MC. prefix: extend the generic, do not shadow it
-    isempty(sys.stuck) || error("devices whose shutdown failed are in an unknown state ($(stuck_report(sys))); " *
+    isempty(sys.stuck) || error("devices in an unknown state ($(stuck_report(sys))); " *
                                 "call shutdown(sys) until it succeeds, or rebuild the system")
+    for dev in sys.claimed
+        holds(sys.owned, dev) || error("$(nameof(typeof(dev))) was claimed at construction and has been shut down; " *
+                                       "reconstruct it and rebuild the system")
+    end
     for dev in (sys.laser, sys.stage, sys.cam)   # cheapest-to-abort first
-        any(d -> d === dev, sys.owned) && continue   # known to hold hardware: claimed at construction, or initialized
+        holds(sys.owned, dev) && continue        # known to hold hardware: claimed at construction, or initialized
         try
             initialize(dev)
             push!(sys.owned, dev)
         catch e
+            push!(sys.stuck, dev => e)           # state unknown: a DAQ light whose 0 V write failed records is_on = true
             @warn "initialize failed; releasing everything held" device=typeof(dev) exception=e
             try
-                release!(sys)                     # closes what was opened, INCLUDING constructor-claimed devices
-            catch release_error                   # what it could not close is in sys.stuck, and initialize refuses
+                release!(sys)                     # retries dev too, and closes constructor-claimed devices
+            catch release_error                   # what it could not close stays in sys.stuck, and initialize refuses
                 @error "the rollback left devices in an unknown state" exception=release_error
             end
             rethrow()                             # the caller sees why initialize failed, not the rollback's error
@@ -480,19 +467,22 @@ function MC.initialize(sys::Bench)                # MC. prefix: extend the gener
     return sys
 end
 
-function release!(sys::Bench)                     # shut down everything owned or stuck, newest first
-    for dev in [reverse(sys.owned); reverse(sys.stuck)]
+# Shut down everything stuck or owned, newest first. A stuck device is newer than every owned one: initialize stops
+# at the device that failed, and refuses to run while any device is stuck.
+function release!(sys::Bench)
+    todo = [reverse(first.(sys.stuck)); reverse(sys.owned)]
+    failed = Pair{AbstractInstrument,Any}[]
+    for dev in todo
         try
             shutdown(dev)
-            filter!(d -> d !== dev, sys.stuck)    # a retry that worked: its state is known again
-            delete!(sys.stuck_errors, dev)
         catch e                                   # keep going: one stuck device must not leave the rest open
-            any(d -> d === dev, sys.stuck) || push!(sys.stuck, dev)
-            sys.stuck_errors[dev] = e
+            pushfirst!(failed, dev => e)          # so `stuck` stays in acquisition order
         end
     end
-    empty!(sys.owned)                             # each owned device is now shut down or stuck
-    isempty(sys.stuck) || error("shutdown failed, state unknown: " * stuck_report(sys))
+    empty!(sys.owned)                             # each device is now shut down or stuck
+    sys.stuck = failed
+    any(p -> p.second isa InterruptException, failed) && throw(InterruptException())   # a Ctrl-C stays one
+    isempty(failed) || error("shutdown failed, state unknown: " * stuck_report(sys))
     return nothing
 end
 
@@ -549,33 +539,26 @@ function MC.export_state(sys::Bench)
 end
 
 # --- Acquisition: ONE call, on the calling task, start to finish. No cancellation, no concurrent callers. ---
-# [limitation, 0.2.7-DEV] the camera drivers spawn tasks the caller never receives (DCAM4 discards its poller; Sim and
-# DCX return theirs only by accident; the interface promises `nothing`), and those tasks read mutable device
-# state as they run (Sim: `exposure_time` each iteration; DCAM4/DCx: `camera_handle` via the SDK). So this system cannot prove a previous
-# acquisition has stopped, and no wait computed here could. It therefore does not try: one acquisition at
-# a time, blocking, and a camera that could not be shown to stop is unavailable until the process is rebuilt.
+# The driver-specific parts are read_sequence, stop_camera! and camera_ok (mc-acquire). A camera with only the
+# fallback read_sequence is refused before anything touches it: its abort could be anything (CSC's is its shutdown).
+has_reader(cam::Camera) = which(read_sequence, Tuple{typeof(cam),Int}).sig.parameters[2] !== Camera
+
 function acquire!(sys::Bench, n::Int)
     sys.in_flight && error("acquisition already in flight")
-    sys.cam_unavailable && error("camera unavailable: a failed acquisition could not be shown to stop; shut down and reconstruct")
+    sys.cam_unavailable && error("camera unavailable: it was not known to be stopped after an acquisition; shut down and reconstruct")
+    has_reader(sys.cam) || error("no sequence reader for $(nameof(typeof(sys.cam))); write one (see mc-acquire)")
     sys.in_flight = true
     try
-        sys.cam.sequence_length = n
-        t = sequence(sys.cam)                     # SimCamera and DCx return their task; DCAM4 and CSC return nothing
-        t isa Task && wait(t)                     # join it where there is one
-        stack = getdata(sys.cam)                  # DCAM4 polls until the sequence ends; CSC reads the frames as they come
-        stack === nothing && error("the camera returned no stack")   # DCAM4: a timeout or lost frame, in last_error
-        return stack                              # (H, W, N)
-    catch e
-        stopped = try                             # failure: abort BEFORE giving the camera back
-            abort(sys.cam)
-            sys.cam.is_running != 1               # DCAM4 reports a failed stop by keeping is_running (and last_error)
+        return read_sequence(sys.cam, n)          # the (H, W, N) stack, or a throw
+    catch
+        try
+            stop_camera!(sys.cam)                 # failure: stop the camera BEFORE giving it back
         catch abort_error
             @error "abort failed after a failed acquisition" exception=abort_error
-            false
         end
-        stopped || (sys.cam_unavailable = true)  # refuse further acquisitions until rebuilt
         rethrow()
     finally
+        camera_ok(sys.cam) || (sys.cam_unavailable = true)   # after every acquisition, failed or not
         sys.in_flight = false
     end
 end
@@ -585,8 +568,9 @@ The failure paths below also use these fixtures. They are part of the same run:
 
 <!-- mc-test: bench -->
 ```julia
-struct BrokenCam <: Camera end                   # initialize throws: it is the third device to come up
+struct BrokenCam <: Camera end                   # initialize throws; shutdown works
 MC.initialize(::BrokenCam) = error("BrokenCam: no device")
+MC.shutdown(::BrokenCam) = nothing
 
 mutable struct FlakyLight <: LightSource         # shutdown fails once (a transient write error), then works
     failures_left::Int
@@ -595,21 +579,32 @@ FlakyLight() = FlakyLight(1)
 MC.initialize(::FlakyLight) = nothing
 MC.shutdown(l::FlakyLight) = l.failures_left > 0 ? (l.failures_left -= 1; error("FlakyLight: write timed out")) : nothing
 
-mutable struct FailingCam <: Camera              # a sequence starts, then the read fails; abort as chosen
-    sequence_length::Int
-    is_running::Bool
-    abort_mode::Symbol                           # :works, :throws, or :keeps_running (returns with the capture still
-    aborts::Int                                  #   running: how DCAM4 reports a failed stop, in last_error)
+Base.@kwdef mutable struct FailingCam <: Camera  # its read or cleanup fails as chosen; it reports the way DCAM4 does
+    read_fails::Bool = true                      # read_sequence throws after the sequence started
+    cleanup_fails::Bool = false                  # a read that works still records an error: its buffer release failed
+    abort_mode::Symbol = :works                  # :works; :throws; :keeps_running (returns, still running, error
+                                                 # recorded); :clears_flag (returns, is_running cleared, error recorded,
+                                                 # as after DCAM4's poller ran out its deadline on a stop that failed)
+    is_running::Bool = false
+    last_error::Int = 0                          # 0 is success
+    aborts::Int = 0
 end
-FailingCam(abort_mode = :works) = FailingCam(1, false, abort_mode, 0)
 MC.initialize(::FailingCam) = nothing
 MC.shutdown(::FailingCam) = nothing
-MC.CameraInterface.sequence(c::FailingCam) = (c.is_running = true; nothing)
-MC.CameraInterface.getdata(::FailingCam) = error("SDK: read failed")
+function read_sequence(c::FailingCam, n::Int)
+    c.last_error = 0                             # as the DCAM4 method does: judged from here
+    c.is_running = true
+    c.read_fails && error("SDK: read failed")
+    c.is_running = false
+    c.cleanup_fails && (c.last_error = 1)
+    return zeros(UInt16, 2, 3, n)
+end
+camera_ok(c::FailingCam) = c.last_error == 0 && !c.is_running
 function MC.CameraInterface.abort(c::FailingCam)
     c.aborts += 1
     c.abort_mode === :throws && error("SDK: abort refused")
-    c.abort_mode === :works && (c.is_running = false)
+    c.abort_mode === :works || (c.last_error = 1)
+    c.abort_mode === :keeps_running || (c.is_running = false)
     return nothing
 end
 ```
@@ -621,19 +616,25 @@ change to the package that makes a row false fails the package's suite. The two 
 
 | Path | Result |
 |---|---|
-| **Rollback, first device fails**, camera claimed at construction | threw `initialize not implemented for BrokenLight`; `cam.open == false` afterwards, `owned` and `stuck` empty. |
-| **Rollback, last device fails** (`BrokenCam` third) | threw `BrokenCam: no device`; stage back to `connectionstatus == false`, laser back to `is_on == false`, `owned` and `stuck` empty. |
-| **Rollback whose own shutdown fails** (`FlakyLight` first, `BrokenCam` third) | threw `BrokenCam: no device`, the cause, not the rollback's error; `stuck` held the light; the next `initialize(sys)` refused, naming `FlakyLight: write timed out`; `shutdown(sys)` then retried the light, which shut down, and `stuck` was empty. |
-| **Requested versus measured**, `CrystaLaser(daq = LineDAQ(), channel = "Dev1/ao0")`: `initialize(sys)`, then `set_state(sys, BenchState(exposure_time=0.02, z=1.0, laser_power=2.5))` | `initialize` wrote 0 V; `get_state(sys).laser_power == 2.5`, `laser.level_requested == 2.5`, `laser.level_staged`, and nothing written while off; `isnan(measured_power(sys))`; export attributes `laser_power_requested == 2.5`, `laser_power_unit == "V"`; `light_on(laser)` then wrote the staged 2.5 V. |
+| **Rollback, first device fails**, camera claimed at construction | threw `initialize not implemented for BrokenLight`; `cam.open == false` afterwards, `owned` empty, and `stuck` held the `BrokenLight` (its `shutdown` throws too). |
+| **Rollback, last device fails** (`BrokenCam` third) | threw `BrokenCam: no device`; stage back to `connectionstatus == false`, laser back to `is_on == false`; the rollback shut `BrokenCam` down as well, so `owned` and `stuck` were empty. |
+| **Rollback whose own shutdown fails** (`FlakyLight` first, `BrokenCam` third) | threw `BrokenCam: no device`, the cause, not the rollback's error; `stuck` held only the light; the next `initialize(sys)` refused, naming `FlakyLight: write timed out`; `shutdown(sys)` then retried the light, which shut down, and `stuck` was empty. |
+| **A light whose `initialize` fails** (`CrystaLaser` over `LineDAQ(failures = 2)`) | threw `LineDAQ: write failed`; the light went to `stuck` with `is_on == true`, the rollback retried its 0 V write, which failed too; `shutdown(sys)` then wrote 0 V, recorded `is_on == false` and left `stuck` empty: three 0 V writes in all. |
+| **A claimed device that was shut down** | after `initialize(sys)` and `shutdown(sys)`, the next `initialize(sys)` refused (`ClaimedAtConstruction was claimed at construction and has been shut down; reconstruct it and rebuild the system`), and the camera stayed closed. |
+| **Retry order** (two stuck and two owned devices, set by hand; then two owned devices whose shutdowns both fail once) | the next `shutdown(sys)` shut the stuck devices down newest first, then the owned ones newest first; the two that failed stayed in `stuck` in acquisition order, so their retry was newest first too. |
+| **Requested versus measured**, `CrystaLaser(daq = LineDAQ(), channel = "Dev1/ao0")`: `initialize(sys)`, then `set_state(sys, BenchState(exposure_time=0.02, z=1.0, laser_power=2.5))` | `initialize` wrote 0 V; `get_state(sys).laser_power == 2.5`, `laser.level_requested == 2.5`, `laser.level_staged`, and nothing written while off; the camera's `exposure_time` was the requested 0.02 s; `isnan(measured_power(sys))`; export attributes `laser_power_requested == 2.5`, `laser_power_unit == "V"`; `light_on(laser)` then wrote the staged 2.5 V. |
 | **Immutable requested state**: `get_state(sys).laser_power = 4.5` | refused: `setfield!: immutable struct of type BenchState cannot be changed`. |
-| **Sequential acquisitions**: `acquire!(sys, 5)` then `acquire!(sys, 3)` | `(32, 64, 5)`, taking at least five exposure times of the 0.02 s `set_state` asked for, `in_flight == false` after; then `(32, 64, 3)`. |
+| **Sequential acquisitions**: `acquire!(sys, 5)` then `acquire!(sys, 3)` | `(32, 64, 5)`, taking at least five of the requested 0.02 s exposures, `in_flight == false` and the camera still available after; then `(32, 64, 3)`. |
 | **In-flight guards** (flag set by hand; the example never runs two tasks) | `set_state`, `acquire!` and `shutdown` each refused with a message naming the in-flight acquisition. |
-| **Failing acquisition** (`FailingCam()`: the read fails, `abort` works) | rethrew `SDK: read failed`; `abort` had run once (`aborts == 1`, `is_running == false`), `in_flight == false`, camera still available: the next `acquire!` reached the camera again. |
-| **Failing acquisition whose `abort` throws** (`FailingCam(:throws)`) | rethrew `SDK: read failed`; the next `acquire!` refused `camera unavailable ...`; `shutdown(sys); initialize(sys)` still refused; **reconstruction** (new `Bench`, new camera, stage and laser reused) acquired `(32, 64, 3)`. |
-| **Failing acquisition whose `abort` returns with the capture running** (`FailingCam(:keeps_running)`) | rethrew `SDK: read failed`; `abort` had run, `is_running` was still set, and the camera was marked unavailable. |
+| **A camera with no reader** (`ClaimedAtConstruction` as the camera) | `acquire!` refused (`no sequence reader for ClaimedAtConstruction; write one (see mc-acquire)`) before touching it: no `abort`, the camera still open and still available. |
+| **Failing acquisition** (`FailingCam()`: the read fails, `abort` works) | rethrew `SDK: read failed`; `abort` had run once, `camera_ok` said yes, `in_flight == false`, camera still available: the next `acquire!` reached the camera again. |
+| **Failing acquisition whose `abort` throws** (`FailingCam(abort_mode = :throws)`) | rethrew `SDK: read failed`; the next `acquire!` refused `camera unavailable ...`; `shutdown(sys); initialize(sys)` still refused; **reconstruction** (new `Bench`, new camera, stage and laser reused) acquired `(32, 64, 3)`. |
+| **`abort` returns with the capture running** (`:keeps_running`), or **returns with `is_running` cleared and an error recorded** (`:clears_flag`) | rethrew `SDK: read failed`; in both cases `camera_ok` said no and the camera was marked unavailable, the second although `is_running` was clear. |
+| **A read that works with a cleanup that fails** (`FailingCam(read_fails = false, cleanup_fails = true)`) | returned the stack, and the camera was marked unavailable. |
 | **Export with a failed child** | `complete == false`, `missing_children == "laser"`; through `save_h5` and back: groups `camera, laser, stage` (the Bench's `data` is `nothing`, so there is no `data` dataset), attr `missing_children == "laser"`. |
 | **Observable shutdown failure** (a `BrokenLight`, whose `shutdown` throws, put in `owned`) | threw `shutdown failed, state unknown: BrokenLight: shutdown not implemented for BrokenLight` after finishing the loop; the stage was already disconnected; `owned` was empty and `stuck` held the `BrokenLight`; `initialize(sys)` then refused (`... call shutdown(sys) until it succeeds, or rebuild the system`) without touching a device, and the next `shutdown(sys)` retried it and threw the same message. |
 | **A shutdown that fails once** (`FlakyLight` as the laser) | the first `shutdown(sys)` threw `shutdown failed, state unknown: FlakyLight: FlakyLight: write timed out`; the second returned normally and left `stuck` empty; `initialize(sys)` then brought all three devices up again. |
+| **An interrupt during shutdown** (a light whose `shutdown` throws `InterruptException`) | `shutdown(sys)` threw an `InterruptException`, not an `ErrorException`, after finishing the loop, and the light was in `stuck`. |
 | **Evidence for the limitation** | `sequence(SimCamera)` returned a `Task`; with 20 frames at 0.01 s, raising `exposure_time` to 0.05 s after about five frames, while the task ran, made it run for more than 0.5 s instead of about 0.2 s. |
 | **`DiodeLaser` in the `laser` field**, `SimDiodeLaser()` (`ConstantCurrent`) | `set_state` with `laser_power = 0.5` set the level through `setlevel!` (`laser.drive_current` the middle of `min_current .. max_current`); `isnan(measured_power(sys))`; `laser_power_unit == "fraction of the declared range"`. |
 | **`DiodeLaser`, `ConstantPhotocurrent`** (`SimDiodeLaser(mode = ConstantPhotocurrent(), ...)`, with synthetic calibration values) | once the laser is on, `measured_power(sys)` is `indicated_output_power`: the requested half of the power range, in mW, to 0.1 %. |

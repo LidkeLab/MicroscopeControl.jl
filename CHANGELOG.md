@@ -275,14 +275,17 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
   devices and asserts the results the skills state; `test/skills.jl` runs it in its own Julia process and checks every
   label. Among the corrections:
   - `mc-acquire`: `getdata` on a `DCAM4Camera` in live mode returns the newest frame and leaves the live view running
-    (since 0.2.6); it no longer ends the live view. A finished sequence is read with
-    `t = sequence(cam); t isa Task && wait(t); getdata(cam)` on every camera driver. A throw from a light's level
-    setter or `light_off` does not mean the light is off.
+    (since 0.2.6); it no longer ends the live view. No one way reads a finished sequence on every driver: one table
+    says, per camera driver, what `sequence` returns, what `getdata` waits for and what `abort` does, and per-driver
+    `read_sequence`, `stop_camera!` and `camera_ok` functions cover the simulated, Hamamatsu and DCx cameras; the
+    CSC camera has none, for reasons stated there. A throw from a light's level setter, `light_on` or `light_off`
+    does not mean the light is off.
   - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to the
-    tag in the skills' `Installed from` line (for a `-DEV` install, the main commit the instrument was tested
-    against). The example system moves a device whose `shutdown` threw to a `stuck` list, retries it at the next
-    shutdown, and refuses `initialize` until it has shut down; it treats the camera as unavailable when `abort`
-    leaves it running; its settings type is built by keyword.
+    tag in the skills' `Installed from` line (for a `-DEV` install, the commit the instrument was tested with,
+    from its Manifest or its checkout). The example system moves a device whose `initialize` or `shutdown` threw to
+    a `stuck` list, retries it at the next shutdown, and refuses `initialize` until it has shut down, or while a
+    device claimed at construction has been closed; after every acquisition it asks the camera's `camera_ok`, and
+    takes the camera out of service when it does not say the camera stopped; its settings type is built by keyword.
 
 ### Removed
 

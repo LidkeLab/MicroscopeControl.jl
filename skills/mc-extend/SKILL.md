@@ -217,11 +217,12 @@ carry:
   `hasfield`). **[limitation, suite: testing]** the Sim stages carry `label`, so
   `gui(SimStage3d())` throws; `N472` lacks the position fields and
   ships its own `gui(::N472)` override, which is the alternative route (suite: testing).
-- **Camera**: `unique_id`, `exposure_time::Float64`, `roi::CameraROI`,
+- **Camera**: `unique_id`, `exposure_time`, `roi::CameraROI`,
   `capture_mode` and `trigger_mode` as `Enum`s (the menus call `instances`),
   `sequence_length`, `is_running` (compared `== 1`). The panel uses the return
   value of `capture` as the frame. All four upstream cameras carry every field
-  (suite: testing).
+  name (suite: testing), but not every type the panel needs: the types are in
+  `mc-api-map`'s `references/gui-fields.md`, section `gui(::Camera)`.
 - **LightSource / Attenuator**: `unique_id` and `properties`
   (`LightSourceProperties` / `AttenuatorProperties`). **Fixed in 0.2.1:** the
   light panel used to call `setpower(light, 0.5)` the moment it opened (the
@@ -328,7 +329,7 @@ shows the failure mode as a **[limitation, 0.2.7-DEV]** (traced unless marked).
 | Partial-failure cleanup | if `initialize` opens A then fails on B, close A before rethrowing | nothing upstream does this for you |
 | Failure visibility | throw, or set `last_error` and return `nothing`, and document which | **[guarantee, 0.2.7-DEV]** (since 0.2.7) DAQ voltage lights throw on missing outputs or failed commands, and record state only after a successful write and cleanup; `shutdown(::ThorCamCSCCamera)` instead returns its two SDK status codes, so a failed close does not throw |
 | Buffer lifetime | copy out of SDK buffers before releasing them | DCAM4's and DCx's `getdata` copy every frame out before they release the buffers; `getdata` after `capture` on a `DCAM4Camera` reads from a buffer `capture` already released (`mc-acquire`, capture contract) |
-| Acquisition completion | return the task `sequence` spawns, or make `getdata` block until the sequence ends, and document which | no two drivers agree (`mc-acquire`, "Finite ordered sequence"): Sim and DCx return their task, DCAM4's `getdata` polls until the end, CSC's blocks per frame, and `is_running` is no completion signal (CSC never clears it; a failed DCAM4 stop keeps it) |
+| Acquisition completion | return the task `sequence` spawns, or make `getdata` block until the sequence ends, and document which; report a failed start or stop as a failure | no two drivers agree, and `is_running` is no completion signal: the per-driver table in `mc-acquire`, "Finite ordered sequence", is the one statement; add your driver's `read_sequence`, `stop_camera!` and `camera_ok` methods there |
 | Units | a `units`/`power_unit` field and the docstring; convert at the SDK boundary | PI millimeters, MCL micrometers, Sims unitless 0..100 |
 | Calibration | table in the device (`AttenuatorProperties.cal_*`); values measured on the instrument | `LCC1620.settransmission` `@error`s and returns when uncalibrated |
 | Cached versus measured | name it (`power_requested`); update `real_*` only from a readback | Sim stages copy `targ_*` into `real_*`; `getposition(::SimStage3d)` returns a scalar, not the documented tuple (suite: testing) |

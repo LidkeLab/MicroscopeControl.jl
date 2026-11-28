@@ -1,6 +1,6 @@
 ---
 name: mc-testing
-description: Validate a composed MicroscopeControl.jl instrument's behavior and failure handling without hardware -- what a system test must establish, which simulator or fake serves each claim, matching dimensionality and adapting where semantics differ, running headless under xvfb, and stating what hardware acceptance must still establish; activates for "test", "simulate", "no hardware", "headless", "CI", "acceptance", or "does it work on the rig".
+description: Validate a composed MicroscopeControl.jl instrument's behavior and failure handling without hardware -- what a system test must establish, which simulator or fake serves each claim, matching dimensionality and adapting where semantics differ, running headless under xvfb, and stating what hardware acceptance must still establish; activates for "test", "simulate", "no hardware", "headless", "CI", "acceptance", or "does it work on the instrument".
 ---
 
 # mc-testing
@@ -23,7 +23,7 @@ the `testing` group.
 |---|---|---|
 | every device the system holds has its **own** `initialize`/`shutdown`/`export_state` method, so no lifecycle call lands on the throwing `AbstractInstrument` stub | the dispatch check below, on the *hardware* types too (it needs no hardware) | that the method works: dispatch establishes method selection only. A concrete method can throw on the hardware path (`initialize(::Triggerscope4)` opens the serial port with `LibSerialPort.open`, which throws on a missing port; traced), log and return (`initialize(::PIStage)` `@error`s and leaves `connectionstatus == false`), or do nothing useful (`stopmotion(::MCLStage)` logs `STOP MOTION NOT IMPLEMENTED` and returns `nothing`; executed). The check does catch the fourth case, a missing method: `ThorCamCSCCamera` has no `initialize`, so dispatch reaches the throwing stub |
 | `initialize` rolls back what it opened when a later device fails, including devices claimed at construction | Sim devices plus a bare `struct Broken <: LightSource end` whose stubs throw, and a fake that is "open" from its constructor (`mc-system-design`, worked example) | that a real SDK's failure surfaces as an exception rather than an `@error` and a normal return, which most drivers do (`mc-extend`, section 1) |
-| the camera is used single-owner and single-acquisition: one blocking acquisition at a time, `set_state` refused in flight, an abort that throws or leaves `is_running` set makes it unavailable until rebuilt | `SimCamera`, and a fake camera whose read fails and whose `abort` works, throws, or returns with the capture still running (`mc-system-design`'s `FailingCam`) | frame timing, trigger behavior, buffer lifetime; and nothing about stopping early, because the drivers' own tasks cannot be joined (`mc-system-design`, Decision 3) |
+| the camera is used single-owner and single-acquisition: one blocking acquisition at a time, `set_state` refused in flight, and a camera whose `camera_ok` does not say it stopped is unavailable until rebuilt | `SimCamera`, and a fake camera whose read or cleanup fails and whose `abort` works, throws, returns with the capture still running, or returns with an error recorded (`mc-system-design`'s `FailingCam`) | frame timing, trigger behavior, buffer lifetime; the `DCAM4Camera` and `ThorcamDCXCamera` methods of `read_sequence` and `camera_ok`, which are traced, not run (`mc-acquire`, "Finite ordered sequence"); and nothing about stopping early, because the drivers' own tasks are not all returned (`mc-system-design`, Decision 3) |
 | the saved record names what is missing | a child whose `export_state` throws, through `save_h5`, read back | that hardware attributes are readbacks rather than cached requests |
 | array shapes and the `(H, W, N)` convention survive to the file | `SimCamera` with a non-square `roi` (`CameraROI(1, 1, 64, 32)` gives `(32, 64)`) | that the vendor buffer was converted correctly: test `CameraInterface.rowmajor_to_yx` on a non-square array whose values encode row and column, with and without a stride wider than the width (`mc-acquire`); `SimCamera` returns random pixels, so its shape is all it can show |
 | ordering and units of a z-stack | `SimStage3d` (`move` writes `targ_*`, `getposition` copies to `real_*`) | motion time, settling, range limits, direction sign |
@@ -68,8 +68,9 @@ Honestly, per device (executed):
 - **SimCamera.** Every frame is `rand(UInt16, roi.height, roi.width)`: no image
   content, no exposure scaling, no trigger behavior, no `camera_format`
   coupling (the ROI may exceed the sensor). `getlastframe` sleeps
-  `exposure_time`; `getdata` does not. `sequence` sets `is_running` and an
-  `@async` task clears it after `sequence_length * exposure_time`; `getdata`
+  `exposure_time`; `getdata` has no `sleep` in its body. `sequence` sets
+  `is_running` and returns an `@async` task that clears it after
+  `sequence_length` exposures, reading `exposure_time` for each; `getdata`
   returns `(H, W, N)` immediately regardless. **`capture` returns the enum it
   set (`SINGLE_FRAME`), not a frame.** `setexposuretime!`/`setroi!`/
   `settriggermode!` throw. The live-view buffer race in `mc-acquire` cannot
@@ -100,6 +101,12 @@ Honestly, per device (executed):
   `ao_channel`, `controller_max_current`, `max_setcurrent`, `max_setpoint` and
   0.2.4's `min_current`, `max_current`, `power`, `power_unit`, `min_power` and
   `max_power`, so a record check written against the Sim misses them.
+  **[guarantee, suite: testing]** In power mode the TCube's constructor also refuses
+  a `tia_range` that is not one of the TLD001's DIP-switch ranges, and a calibration
+  reference whose indicated power is above `properties.max_power`; the Sim's makes
+  neither check, so a configuration the Sim accepts can still throw an
+  `ArgumentError` on the instrument. Build the `TCubeLaser` from the same keywords
+  in the system test too: its constructor touches no hardware.
   **[guarantee, 0.2.7-DEV]** every command and read throws before `initialize` and
   after `shutdown` (traced; the suite checks a command and a read before, and
   `light_on` after); power-mode `initialize` refuses on a missing key or interlock
@@ -237,8 +244,7 @@ Behavioral tests on top, executed:
     rig = Rig(simulate=true); initialize(rig)
     @test size(snap(rig.cam)) == (32, 64)                 # (H, W): roi height 32, width 64
     rig.cam.sequence_length = 5
-    t = sequence(rig.cam)
-    t isa Task && wait(t)                                  # join the Sim's task before reading (mc-acquire)
+    wait(sequence(rig.cam))                                # the Sim's timer Task; other drivers differ (mc-acquire's table)
     @test size(getdata(rig.cam)) == (32, 64, 5)
     shutdown(rig)                                          # MC.shutdown(::Rig), defined above
 end
@@ -275,9 +281,9 @@ if it bothers CI; it is not an error.
 ## GUI smoke tests: possible for cameras and lights, not for Sim stages
 
 **[limitation, suite: testing]**: `gui(SimStage1d())`, `gui(SimStage2d())` and
-`gui(SimStage3d())` all throw on the missing field: on Julia 1.12 and later
-`FieldError: type SimStage3d has no field stagelabel`, on 1.11 an `ErrorException`
-whose message is `type SimStage3d has no field stagelabel`. The shared stage panel
+`gui(SimStage3d())` all throw on the missing field `stagelabel`: a `FieldError` on
+Julia 1.12 and later, an `ErrorException` on 1.11 (the suite checks the type and
+the field, not the message text). The shared stage panel
 reads `stage.stagelabel` unguarded for its window title and the Sim stages carry
 `label`. So an "every panel opens" smoke test cannot be written against the
 simulated stages; `gui(SimCamera())` and `gui(SimLight())` open a window (each
