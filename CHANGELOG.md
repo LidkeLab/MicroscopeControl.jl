@@ -282,9 +282,11 @@ Answers to the camera and laser items in 0.2.6's "Known issues" are marked "Answ
     through `with_camera`, which refuses a camera marked unknown and marks it after any throw or a failed
     postcondition, and has no switch to turn the refusal off; the suite checks that rule on the examples' code, with
     two exceptions confined by name: `with_stop`, which lets a stop through on a marked camera, accepted only in
-    `stop_camera!`, and the `getlastframe` in `read_frames!`, the reader loop `start_reader!` launches. The live
-    view's handle is made before `live` is called, so its stop runs from any point after that. A throw from a
-    light's level setter, `light_on` or `light_off` does not mean the light is off.
+    `stop_camera!`, and the `getlastframe` in `read_frames!`, the reader loop `start_reader!` launches. A live view
+    marks its camera before `live` and removes the mark only on its own confirmed stop, so a Ctrl-C at any instant
+    leaves the camera unstarted, marked or confirmed stopped; a stop whose wait for the reader is interrupted while
+    the reader still runs leaves the reader and the camera alone, marked. A throw from a light's level setter,
+    `light_on` or `light_off` does not mean the light is off.
   - `mc-system-design`: the install recipe pins `DAQmx.jl` to a commit (it has no tags) and MicroscopeControl to the
     tag in the skills' `Installed from` line (for a `-DEV` install, the commit the instrument was tested with,
     from its Manifest or its checkout). The example system moves a device whose `initialize` or `shutdown` threw to

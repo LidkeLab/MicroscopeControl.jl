@@ -381,14 +381,14 @@ The example is therefore modest on purpose: `acquire!` runs start to finish on t
 `read_sequence`, and asks `camera_ok` afterwards, through `with_camera`, with no loop on `is_running`; an `in_flight`
 flag guards `set_state`, `acquire!` and `shutdown` against misuse from another task; `acquire!` refuses a camera the
 system does not hold, or any camera while a device is stuck, and runs through `with_camera`, which refuses a camera
-marked unknown and marks the camera after any throw or when it is not known stopped; a failed acquisition stops the
-camera before returning it, logs a stop the driver does not confirm, and leaves the camera marked. Three lists track the
-devices: `claimed` holds those passed as `claimed_at_construction`; `owned` holds the devices known to hold hardware;
-`stuck` holds each device whose `initialize` or `shutdown` threw, with its error, because its state is unknown. Every
-`release!` retries the stuck devices, newest first, and `initialize` refuses while any device is stuck, or while a
-claimed device is no longer owned: that one was closed and must be reconstructed. `BenchState` is an **immutable**
-struct: a requested configuration is a value, `get_state` hands back the retained record, and only another `set_state`
-can change it.
+marked unknown and marks the camera after any throw or when it is not known stopped; a failed acquisition attempts a
+stop before returning the camera, logs and marks a stop the driver does not confirm, and leaves the camera marked either
+way, since the read threw. Three lists track the devices: `claimed` holds those passed as `claimed_at_construction`;
+`owned` holds the devices known to hold hardware; `stuck` holds each device whose `initialize` or `shutdown` threw, with
+its error, because its state is unknown. Every `release!` retries the stuck devices, newest first, and `initialize`
+refuses while any device is stuck, or while a claimed device is no longer owned: that one was closed and must be
+reconstructed. `BenchState` is an **immutable** struct: a requested configuration is a value, `get_state` hands back the
+retained record, and only another `set_state` can change it.
 
 **[limitation, 0.2.7-DEV]** What the example covers. Cameras: `SimCamera` (run) and `DCAM4Camera` (its methods run
 against the fake DCAM SDK); any other camera, `ThorcamDCXCamera` and `ThorCamCSCCamera` included, is refused by
@@ -574,8 +574,8 @@ function acquire!(sys::Bench, n::Integer)
             try                                   # the camera on any throw or when it is not known stopped afterwards
                 read_sequence(sys.cam, n)         # the (H, W, N) stack, or a throw
             catch
-                attempt_stop!(sys.cam, "the stop after a failed acquisition")   # stop the camera BEFORE giving it
-                rethrow()                         # back; then the read's error (a Ctrl-C in the read, too)
+                attempt_stop!(sys.cam, "the stop after a failed acquisition")   # attempt the stop BEFORE giving
+                rethrow()                         # the camera back; then the read's error (a Ctrl-C in the read, too)
             end
         end
     finally
